@@ -244,8 +244,6 @@ S.total++;
 best.direction==='CALL' ? S.calls++ : S.puts++;
 await sendSignal(best, session);
   }
-}
-
 // ── Send signal ────────────────────────────────────────────────
 async function sendSignal(sig, session) {
   const de   = sig.direction==='CALL' ? '🟢⬆️' : '🔴⬇️';
