@@ -190,7 +190,7 @@ async function runScan(cat) {
   const newsWarn = news.on ? `\n⚠️ <b>NEWS ALERT:</b> ${news.reason} — trade carefully\n` : '';
 
   const pairs = getPairs(cat).sort((a,b)=>a.priority-b.priority||b.payout-a.payout);
-  await send(`🔍 <b>Scanning ${pairs.length} ${cat} pairs...</b>\n📡 Fetching real-time data...\n🕐 Session: ${session.name}`);
+  await send(`🔍 <b>Scanning ${pairs.length} ${cat} pairs...</b>\n📡 Fetching real-time data...\n🕐 Session: ${session.name}`);await send(`🔍 <b>Scanning ${pairs.length} ${cat} pairs...</b>\n📡 Fetching real-time data...${newsWarn}`);
 
   const fetcher  = getFetcher();
   const analyzer = getAnalyzer();
