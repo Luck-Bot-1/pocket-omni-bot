@@ -1,0 +1,9 @@
+{
+  "name": "pocket-omni-bot",
+  "version": "6.0.0",
+  "description": "Omni Bulls Eye Protocol v6.0 — 4.6/5 Production Signal Bot",
+  "main": "bot.js",
+  "scripts": { "start": "node bot.js" },
+  "dependencies": { "node-telegram-bot-api": "^0.64.0" },
+  "engines": { "node": ">=16.0.0" }
+}
