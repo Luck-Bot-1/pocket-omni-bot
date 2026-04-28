@@ -1,3 +1,11 @@
+// SIMPLE TEST - Put this at line 1
+console.log('=== SIMPLE TEST ===');
+console.log('Node version:', process.version);
+console.log('Has TOKEN?', process.env.TELEGRAM_BOT_TOKEN ? 'YES' : 'NO');
+console.log('Has CHAT_ID?', process.env.TELEGRAM_CHAT_ID ? 'YES' : 'NO');
+
+// Exit immediately for testing
+process.exit(0);
 // ═══════════════════════════════════════════════════════════════
 // OMNI BULLS EYE PROTOCOL v6.0 — FINAL PRODUCTION
 // Target Rating: 4.6 / 5
