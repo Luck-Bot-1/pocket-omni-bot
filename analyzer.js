@@ -481,3 +481,5 @@ function backtest(priceData, pair, periods = 80) {
 
 module.exports = { analyzeSignal, backtest };
 
+
+
