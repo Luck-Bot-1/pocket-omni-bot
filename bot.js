@@ -182,15 +182,12 @@ async function runScan(cat) {
   const session = getSession();
   const news = newsBlackout();
 
-  if (!session.active) {
-    return send(`⏰ <b>Outside Trading Hours</b>\n\nCurrent session: ${session.name}\n\n<b>Next prime session:</b>\n🔴 19:00 – 21:30 GMT+6\n\n📅 Follow your weekly schedule.`);
-  }
   if (isCB()) {
     return send(`🛑 <b>CIRCUIT BREAKER ACTIVE</b>\n3 consecutive losses — paused 2hrs.\n\nClose Pocket Option. Rest.\n\nTap /reset_breaker to override.`);
   }
-  if (news.on) {
-    return send(`🚫 <b>NEWS BLACKOUT</b>\n<b>${news.reason}</b>\n\nSignals paused ±30min around news.\nResume after window clears.`);
-  }
+
+  // News = warning only, never blocks
+  const newsWarn = news.on ? `\n⚠️ <b>NEWS ALERT:</b> ${news.reason} — trade carefully\n` : '';
 
   const pairs = getPairs(cat).sort((a,b)=>a.priority-b.priority||b.payout-a.payout);
   await send(`🔍 <b>Scanning ${pairs.length} ${cat} pairs...</b>\n📡 Fetching real-time data...\n🕐 Session: ${session.name}`);
