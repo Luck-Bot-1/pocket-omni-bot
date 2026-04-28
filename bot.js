@@ -1,13 +1,9 @@
-// ═══════════════════════════════════════════════════════════════
-// OMNI BULLS EYE v6.1 — CRASH-PROOF PRODUCTION BUILD
-// ═══════════════════════════════════════════════════════════════
-
-process.on('uncaughtException', err => console.error('Uncaught:', err.message));
-process.on('unhandledRejection', err => console.error('Unhandled:', err?.message));
-
+// OMNI BULLS EYE v6.1 - CRASH-PROOF PRODUCTION BUILD
 const TelegramBot = require('node-telegram-bot-api');
+const { fetchPriceData, fetchHistoricalData, isNewsBlackout } = require('./pricefetcher');
+const { analyzeSignal, backtest } = require('./analyzer');
 
-const TOKEN   = process.env.TELEGRAM_BOT_TOKEN;
+const TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 
 console.log('=== OMNI BOT v6.1 STARTING ===');
@@ -15,8 +11,8 @@ console.log('Token exists:', !!TOKEN);
 console.log('ChatID exists:', !!CHAT_ID);
 
 if (!TOKEN || !CHAT_ID) {
-  console.error('FATAL: Missing TOKEN or CHAT_ID');
-  process.exit(1);
+    console.error('FATAL: Missing TOKEN or CHAT_ID');
+    process.exit(1);
 }
 
 const bot = new TelegramBot(TOKEN, { polling: true });
