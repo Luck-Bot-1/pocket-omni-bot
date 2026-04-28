@@ -31,7 +31,7 @@ function getAnalyzer() {
 
 function getFetcher() {
   if (!_fetcher) {
-    try { _fetcher = require('./priceFetcher'); }
+    try { _fetcher = require('./pricefetcher'); }
     catch(e) { console.error('Fetcher load error:', e.message); return null; }
   }
   return _fetcher;
