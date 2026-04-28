@@ -1,11 +1,13 @@
 {
-  "name": "pocket-omni-bot",
+  "name": "pock-et-omni-bot",
   "version": "6.0.0",
-  "description": "Omni Bulls Eye Protocol v6.0 — 4.6/5 Production Signal Bot",
+  "description": "Omni Bulls Eye Protocol v6.0 - 4.6/5 Production Signal Bot",
   "main": "bot.js",
-  "scripts": { "start": "node bot.js" },
- { "dependencies": {
-    "node-telegram-bot-api": "...",
-    "node-fetch": "2.7.0"
+  "scripts": {
+    "start": "node bot.js"
+  },
+  "dependencies": {
+    "node-telegram-bot-api": "^0.64.0",
+    "node-fetch": "^2.7.0"
   }
 }
