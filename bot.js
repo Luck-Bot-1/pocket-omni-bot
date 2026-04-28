@@ -8,14 +8,24 @@
 const TelegramBot = require('node-telegram-bot-api');
 const { fetchPriceData, fetchHistoricalData, isNewsBlackout } = require('./pricefetcher');
 const { analyzeSignal, backtest } = require('./analyzer');
-
-const token   = process.env.TELEGRAM_BOT_TOKEN;
+const token = process.env.TELEGRAM_BOT_TOKEN;
 const CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 
+// DEBUG: Check if variables are being read
+console.log('=== STARTING BOT ===');
+console.log('Token exists:', token ? 'YES' : 'NO');
+console.log('Chat ID exists:', CHAT_ID ? 'YES' : 'NO');
+console.log('All environment variables:', Object.keys(process.env));
+
 if (!token || !CHAT_ID) {
-  console.error('❌ TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID must be set');
-  process.exit(1);
+    console.error('TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID must be set');
+    console.log('Token value:', token);
+    console.log('Chat ID value:', CHAT_ID);
+    console.log('Check TELEGRAM_BOT_TOKEN:', !!process.env.TELEGRAM_BOT_TOKEN);
+    console.log('Check TELEGRAM_CHAT_ID:', !!process.env.TELEGRAM_CHAT_ID);
+    process.exit(1);
 }
+
 
 const bot = new TelegramBot(token, { polling: true });
 
