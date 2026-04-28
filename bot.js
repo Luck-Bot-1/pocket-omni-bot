@@ -236,15 +236,13 @@ async function runScan(cat) {
     );
   }
 
-  const top = signals.slice(0, 3);
-  await send(`✅ <b>${signals.length} signals found — top ${top.length} firing now</b>`);
+  const best = signals[0]; // Only the #1 ranked signal
+await send(`✅ <b>${signals.length} setups found — firing best signal</b>`);
 
-  for (const sig of top) {
-    cooldowns[sig.symbol] = Date.now(); // Set cooldown immediately
-    S.total++;
-    sig.direction==='CALL' ? S.calls++ : S.puts++;
-    await sendSignal(sig, session);
-    await delay(800);
+cooldowns[best.symbol] = Date.now();
+S.total++;
+best.direction==='CALL' ? S.calls++ : S.puts++;
+await sendSignal(best, session);
   }
 }
 
