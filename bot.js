@@ -6,7 +6,7 @@
 // ═══════════════════════════════════════════════════════════════
 
 const TelegramBot = require('node-telegram-bot-api');
-const { fetchPriceData, fetchHistoricalData, isNewsBlackout } = require('./pricefetcher');
+const { fetchPriceData, fetchHistoricalData, isNewsBlackout } = require('./priceFetcher');
 const { analyzeSignal, backtest } = require('./analyzer');
 
 const token   = process.env.TELEGRAM_BOT_TOKEN;
