@@ -1,7 +1,7 @@
 // ═══════════════════════════════════════════════════════════════
 // OMNI PRICE FETCHER v2.0 — Twelve Data API
 // ═══════════════════════════════════════════════════════════════
-
+const fetch = require('node-fetch');
 const API_KEY = process.env.API_KEY;
 const BASE_URL = 'https://api.twelvedata.com';
 
