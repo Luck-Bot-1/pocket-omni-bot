@@ -488,3 +488,5 @@ setTimeout(()=> send(
   `⭐ Live pairs prioritized\n\n` +
   `Tap <b>🔍 Scan All</b> to begin`, KB
 ), 2000);
+
+
