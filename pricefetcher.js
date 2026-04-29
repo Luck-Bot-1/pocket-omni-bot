@@ -1,17 +1,17 @@
 // ═══════════════════════════════════════════════════════════════
-// OMNI PRICE FETCHER v2.0 — Twelve Data API
+// OMNI PRICE FETCHER v2.1 — Twelve Data API (Rate-Limited Fix)
+// Max 6 calls/min — safe under free tier limit of 8/min
+// OTC pairs skip HTF fetch (saves 50% of API credits)
 // ═══════════════════════════════════════════════════════════════
 const fetch = require('node-fetch');
 const API_KEY = process.env.API_KEY;
 const BASE_URL = 'https://api.twelvedata.com';
 
-// Twelve Data symbol map (their format differs from display names)
 const SYMBOL_MAP = {
   'EUR/USD': 'EUR/USD', 'GBP/USD': 'GBP/USD', 'USD/JPY': 'USD/JPY',
   'USD/CHF': 'USD/CHF', 'USD/CAD': 'USD/CAD', 'EUR/GBP': 'EUR/GBP',
   'AUD/CAD': 'AUD/CAD', 'AUD/CHF': 'AUD/CHF', 'CHF/JPY': 'CHF/JPY',
   'EUR/JPY': 'EUR/JPY', 'GBP/JPY': 'GBP/JPY', 'GBP/CAD': 'GBP/CAD',
-  // OTC — mapped to their real market equivalent
   'EUR/USD OTC': 'EUR/USD', 'GBP/USD OTC': 'GBP/USD',
   'AUD/USD OTC': 'AUD/USD', 'AUD/CHF OTC': 'AUD/CHF',
   'EUR/GBP OTC': 'EUR/GBP', 'EUR/JPY OTC': 'EUR/JPY',
@@ -27,21 +27,19 @@ const SYMBOL_MAP = {
   'QAR/CNY OTC': 'USD/CNY', 'SAR/CNY OTC': 'USD/CNY',
   'AED/CNY OTC': 'USD/CNY', 'TND/USD OTC': 'USD/TND',
   'BHD/CNY OTC': 'USD/BHD', 'KES/USD OTC': 'USD/KES',
-  // Crypto
   'BTC/USD OTC': 'BTC/USD', 'ETH/USD OTC': 'ETH/USD',
   'LTC/USD OTC': 'LTC/USD', 'XRP/USD OTC': 'XRP/USD',
   'BNB/USD OTC': 'BNB/USD', 'SOL/USD OTC': 'SOL/USD',
-  // Commodity
   'XAU/USD OTC': 'XAU/USD', 'XAG/USD OTC': 'XAG/USD',
   'WTI/USD OTC': 'WTI/USD',
 };
 
-// Interval map
 const INTERVAL_MAP = {
   '1min': '1min', '5min': '5min', '15min': '15min', '30min': '30min',
 };
 
-// Rate limiter — free plan = 8 calls/min
+// ── Strict Rate Limiter ────────────────────────────────────────
+// 10s between calls = max 6 calls/min (free tier limit = 8/min)
 const queue = [];
 let processing = false;
 
@@ -61,11 +59,22 @@ async function processQueue() {
     try {
       const res = await fetch(url);
       const data = await res.json();
+
+      // Detect rate limit hit and wait out the minute
+      if (data && data.status === 'error' && data.message && data.message.includes('run out of API credits')) {
+        console.log('⚠️ Rate limit hit — waiting 65 seconds before retrying...');
+        await sleep(65000);
+        // Re-queue this request
+        queue.unshift({ url, resolve, reject });
+        continue;
+      }
+
       resolve(data);
     } catch (e) {
       reject(e);
     }
-    if (queue.length > 0) await sleep(8000); // 8s gap = safe under 8/min
+    // Always wait 10s between calls
+    if (queue.length > 0) await sleep(10000);
   }
   processing = false;
 }
@@ -76,38 +85,39 @@ async function fetchPriceData(displaySymbol, interval = '15min') {
     const symbol = SYMBOL_MAP[displaySymbol];
     if (!symbol) return null;
 
+    const isOTC = displaySymbol.includes('OTC');
     const tf = INTERVAL_MAP[interval] || '15min';
     const url = `${BASE_URL}/time_series?symbol=${symbol}&interval=${tf}&outputsize=60&apikey=${API_KEY}`;
 
     const data = await rateLimitedFetch(url);
 
     if (!data || data.status === 'error' || !data.values || data.values.length < 30) {
-      console.log(`No data for ${symbol}:`, data?.message || 'empty');
+      console.log(`No data for ${displaySymbol}:`, data?.message || 'empty');
       return null;
     }
 
-    // Twelve Data returns newest first — reverse to oldest first
     const candles = data.values.reverse();
-
     const opens   = candles.map(c => parseFloat(c.open));
     const highs   = candles.map(c => parseFloat(c.high));
     const lows    = candles.map(c => parseFloat(c.low));
     const closes  = candles.map(c => parseFloat(c.close));
     const volumes = candles.map(c => parseFloat(c.volume || 0));
 
-    const ltf = { opens, highs, lows, closes, volumes, isSynthetic: displaySymbol.includes('OTC') };
+    const ltf = { opens, highs, lows, closes, volumes, isSynthetic: isOTC };
 
-    // HTF: fetch 1H data for bias
+    // ── HTF: ONLY fetch for LIVE pairs (saves 50% API credits on OTC scans)
     let htf = null;
-    try {
-      const htfUrl = `${BASE_URL}/time_series?symbol=${symbol}&interval=1h&outputsize=30&apikey=${API_KEY}`;
-      const htfData = await rateLimitedFetch(htfUrl);
-      if (htfData && htfData.values && htfData.values.length >= 26) {
-        const hc = htfData.values.reverse();
-        htf = { closes: hc.map(c => parseFloat(c.close)) };
+    if (!isOTC) {
+      try {
+        const htfUrl = `${BASE_URL}/time_series?symbol=${symbol}&interval=1h&outputsize=30&apikey=${API_KEY}`;
+        const htfData = await rateLimitedFetch(htfUrl);
+        if (htfData && htfData.values && htfData.values.length >= 26) {
+          const hc = htfData.values.reverse();
+          htf = { closes: hc.map(c => parseFloat(c.close)) };
+        }
+      } catch (e) {
+        // HTF optional — continue without it
       }
-    } catch (e) {
-      // HTF optional — continue without it
     }
 
     return { ltf, htf };
@@ -144,7 +154,7 @@ async function fetchHistoricalData(displaySymbol, interval = '15min', outputsize
   }
 }
 
-// ── News blackout (kept for compatibility) ────────────────────
+// ── News blackout ─────────────────────────────────────────────
 function isNewsBlackout() {
   const now = new Date();
   const h = now.getUTCHours(), m = now.getUTCMinutes(), d = now.getUTCDay();
