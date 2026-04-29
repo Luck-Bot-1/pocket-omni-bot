@@ -192,7 +192,7 @@ async function runScan(cat) {
       withData++;
 
       const sig = analyzer.analyzeSignal(data.ltf, pair, data.htf);
-      if (sig && sig.confidence >= 68) {
+      if (sig && sig.confidence >= 60) {
         signals.push({ ...sig, isSyn: data.ltf.isSynthetic || false });
       }
       scanned++;
