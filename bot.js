@@ -1,237 +1,241 @@
-// OMNI BULLS EYE v6.1 - CRASH-PROOF PRODUCTION BUILD
+// ═══════════════════════════════════════════════════════════════
+// OMNI BULLS EYE v7.0 — 4.6 PRODUCTION BUILD
+// Single-pair scan, Claude-grade analysis, zero rate limit issues
+// ═══════════════════════════════════════════════════════════════
+
 const TelegramBot = require('node-telegram-bot-api');
-const { fetchPriceData, fetchHistoricalData, isNewsBlackout } = require('./pricefetcher');
+const { fetchPriceData, fetchHistoricalData } = require('./pricefetcher');
 const { analyzeSignal, backtest } = require('./analyzer');
 
-const TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+const TOKEN   = process.env.TELEGRAM_BOT_TOKEN;
 const CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 
-console.log('=== OMNI BOT v6.1 STARTING ===');
+console.log('=== OMNI BOT v7.0 STARTING ===');
 console.log('Token exists:', !!TOKEN);
 console.log('ChatID exists:', !!CHAT_ID);
 
-if (!TOKEN || !CHAT_ID) {
-    console.error('FATAL: Missing TOKEN or CHAT_ID');
-    process.exit(1);
-}
+if (!TOKEN || !CHAT_ID) { console.error('FATAL: Missing TOKEN or CHAT_ID'); process.exit(1); }
 
 const bot = new TelegramBot(TOKEN, { polling: true });
 console.log('Bot polling started');
 
-// ── Lazy-load heavy modules (prevent startup crash) ────────────
-let _analyzer = null, _fetcher = null;
-
-function getAnalyzer() {
-  if (!_analyzer) {
-    try { _analyzer = require('./analyzer'); }
-    catch(e) { console.error('Analyzer load error:', e.message); return null; }
-  }
-  return _analyzer;
-}
-
-function getFetcher() {
-  if (!_fetcher) {
-    try { _fetcher = require('./pricefetcher'); }
-    catch(e) { console.error('Fetcher load error:', e.message); return null; }
-  }
-  return _fetcher;
-}
-
 // ── State ──────────────────────────────────────────────────────
 let autoMode = false, autoTimer = null;
 let expiry = 15, tfInterval = '15min', stake = 5;
-const cooldowns = {};
-const COOL_MS = 15 * 60 * 1000;
 
-// Stats
-let S = { total:0, wins:0, losses:0, skipped:0, calls:0, puts:0, pnl:0, consLoss:0, pairW:{}, pairL:{} };
-function resetStats() { S = { total:0,wins:0,losses:0,skipped:0,calls:0,puts:0,pnl:0,consLoss:0,pairW:{},pairL:{} }; }
-
-// Circuit breaker
-let cbOn = false, cbAt = null;
-function isCB() { return cbOn && Date.now()-cbAt < 2*60*60*1000; }
-function setCB() { cbOn=true; cbAt=Date.now(); }
-function resetCB() { cbOn=false; cbAt=null; S.consLoss=0; }
-
-// ── Session gate GMT+6 ─────────────────────────────────────────
-const SESSIONS = [
-  { name:'🔴 PRIME: London/NY',  s:19*60,   e:21*60+30, d:[1,2,3,4,5], prime:true  },
-  { name:'🟢 London Open',       s:14*60,   e:16*60,    d:[1,2,3,4,5], prime:false },
-  { name:'🟡 Late NY/OTC',       s:22*60+30,e:24*60,    d:[1,2,3,4,5], prime:false },
-  { name:'🟡 Asian OTC',         s:5*60,    e:7*60,     d:[2,3,4,5],   prime:false },
-  { name:'🟡 Morning OTC',       s:9*60,    e:11*60,    d:[3,4,5,6],   prime:false },
-  { name:'🟡 Weekend OTC',       s:11*60,   e:13*60,    d:[0,6],       prime:false },
-  { name:'🟡 Weekend OTC PM',    s:17*60,   e:19*60,    d:[6],         prime:false },
-];
-
-function getSession() {
-  const t = new Date(Date.now()+6*3600*1000);
-  const d = t.getUTCDay(), m = t.getUTCHours()*60+t.getUTCMinutes();
-  for (const s of SESSIONS) {
-    if (s.d.includes(d) && m >= s.s && m < s.e) return { active:true, ...s };
-  }
-  return { active:false, name:'⏰ Outside Hours', prime:false };
+// Per-pair performance tracking
+const pairStats = {};
+function getPairStat(symbol) {
+  if (!pairStats[symbol]) pairStats[symbol] = { wins:0, losses:0, skipped:0 };
+  return pairStats[symbol];
 }
 
+// Session stats
+let S = { total:0, wins:0, losses:0, skipped:0, calls:0, puts:0, pnl:0 };
+function resetStats() {
+  S = { total:0, wins:0, losses:0, skipped:0, calls:0, puts:0, pnl:0 };
+  Object.keys(pairStats).forEach(k => delete pairStats[k]);
+}
+
+// Circuit breaker
+let cbOn = false, cbAt = null, consLoss = 0;
+function isCB() {
+  if (!cbOn) return false;
+  if (Date.now() - cbAt >= 2*60*60*1000) { resetCB(); return false; } // auto reset after 2hrs
+  return true;
+}
+function setCB()   { cbOn=true; cbAt=Date.now(); }
+function resetCB() { cbOn=false; cbAt=null; consLoss=0; }
+
 // ── Pairs ──────────────────────────────────────────────────────
-const LIVE_PAIRS = [
-  { symbol:'EUR/USD', payout:86, cat:'LIVE', priority:1 },
-  { symbol:'GBP/USD', payout:87, cat:'LIVE', priority:1 },
-  { symbol:'USD/JPY', payout:85, cat:'LIVE', priority:1 },
-  { symbol:'USD/CHF', payout:85, cat:'LIVE', priority:1 },
-  { symbol:'USD/CAD', payout:85, cat:'LIVE', priority:1 },
-  { symbol:'EUR/GBP', payout:87, cat:'LIVE', priority:1 },
-  { symbol:'AUD/CAD', payout:87, cat:'LIVE', priority:1 },
-  { symbol:'AUD/CHF', payout:87, cat:'LIVE', priority:1 },
-  { symbol:'CHF/JPY', payout:87, cat:'LIVE', priority:1 },
-  { symbol:'EUR/JPY', payout:85, cat:'LIVE', priority:1 },
-  { symbol:'GBP/JPY', payout:85, cat:'LIVE', priority:1 },
-  { symbol:'GBP/CAD', payout:85, cat:'LIVE', priority:1 },
+const OTC_PAIRS = [
+  { symbol:'EUR/USD OTC', payout:92, cat:'OTC' },
+  { symbol:'GBP/USD OTC', payout:92, cat:'OTC' },
+  { symbol:'AUD/USD OTC', payout:92, cat:'OTC' },
+  { symbol:'AUD/CHF OTC', payout:92, cat:'OTC' },
+  { symbol:'EUR/GBP OTC', payout:92, cat:'OTC' },
+  { symbol:'EUR/JPY OTC', payout:92, cat:'OTC' },
+  { symbol:'GBP/JPY OTC', payout:92, cat:'OTC' },
+  { symbol:'AED/CNY OTC', payout:92, cat:'OTC' },
+  { symbol:'GBP/AUD OTC', payout:92, cat:'OTC' },
+  { symbol:'NZD/USD OTC', payout:90, cat:'OTC' },
+  { symbol:'USD/JPY OTC', payout:90, cat:'OTC' },
+  { symbol:'AUD/JPY OTC', payout:87, cat:'OTC' },
 ];
 
-const OTC_PAIRS = [
-  { symbol:'EUR/USD OTC', payout:92, cat:'OTC', priority:2 },
-  { symbol:'GBP/USD OTC', payout:92, cat:'OTC', priority:2 },
-  { symbol:'AUD/USD OTC', payout:92, cat:'OTC', priority:2 },
-  { symbol:'AUD/CHF OTC', payout:92, cat:'OTC', priority:2 },
-  { symbol:'EUR/GBP OTC', payout:92, cat:'OTC', priority:2 },
-  { symbol:'EUR/JPY OTC', payout:92, cat:'OTC', priority:2 },
-  { symbol:'GBP/JPY OTC', payout:92, cat:'OTC', priority:2 },
-  { symbol:'AED/CNY OTC', payout:92, cat:'OTC', priority:2 },
+const LIVE_PAIRS = [
+  { symbol:'EUR/USD', payout:86, cat:'LIVE' },
+  { symbol:'GBP/USD', payout:87, cat:'LIVE' },
+  { symbol:'USD/JPY', payout:85, cat:'LIVE' },
+  { symbol:'EUR/GBP', payout:87, cat:'LIVE' },
+  { symbol:'GBP/JPY', payout:85, cat:'LIVE' },
+  { symbol:'EUR/JPY', payout:85, cat:'LIVE' },
+  { symbol:'AUD/USD', payout:85, cat:'LIVE' },
+  { symbol:'USD/CHF', payout:85, cat:'LIVE' },
 ];
 
 const CRYPTO_PAIRS = [
-  { symbol:'BTC/USD OTC', payout:90, cat:'CRYPTO', priority:2 },
-  { symbol:'ETH/USD OTC', payout:90, cat:'CRYPTO', priority:2 },
-  { symbol:'LTC/USD OTC', payout:88, cat:'CRYPTO', priority:2 },
-  { symbol:'XRP/USD OTC', payout:88, cat:'CRYPTO', priority:2 },
-  { symbol:'BNB/USD OTC', payout:85, cat:'CRYPTO', priority:3 },
-  { symbol:'SOL/USD OTC', payout:85, cat:'CRYPTO', priority:3 },
+  { symbol:'BTC/USD OTC', payout:90, cat:'CRYPTO' },
+  { symbol:'ETH/USD OTC', payout:90, cat:'CRYPTO' },
+  { symbol:'XRP/USD OTC', payout:88, cat:'CRYPTO' },
+  { symbol:'LTC/USD OTC', payout:88, cat:'CRYPTO' },
 ];
 
 const COMM_PAIRS = [
-  { symbol:'XAU/USD OTC', payout:90, cat:'COMMODITY', priority:2 },
-  { symbol:'XAG/USD OTC', payout:88, cat:'COMMODITY', priority:2 },
-  { symbol:'WTI/USD OTC', payout:87, cat:'COMMODITY', priority:3 },
+  { symbol:'XAU/USD OTC', payout:90, cat:'COMMODITY' },
+  { symbol:'XAG/USD OTC', payout:88, cat:'COMMODITY' },
 ];
 
-const ALL_PAIRS = [...LIVE_PAIRS, ...OTC_PAIRS, ...CRYPTO_PAIRS, ...COMM_PAIRS];
+const ALL_PAIRS = [...OTC_PAIRS, ...LIVE_PAIRS, ...CRYPTO_PAIRS, ...COMM_PAIRS];
 
-function getPairs(cat) {
-  const map = { LIVE:LIVE_PAIRS, OTC:OTC_PAIRS, CRYPTO:CRYPTO_PAIRS, COMMODITY:COMM_PAIRS };
-  return map[cat] || ALL_PAIRS.filter(p=>p.payout>=85);
+function findPair(symbol) {
+  return ALL_PAIRS.find(p => p.symbol === symbol);
 }
 
-// ── Helpers ────────────────────────────────────────────────────
-const auth  = m => m.chat.id.toString() === CHAT_ID.toString();
-const send  = (t, x={}) => bot.sendMessage(CHAT_ID, t, { parse_mode:'HTML', ...x }).catch(e => console.error('Send error:', e.message));
-const delay = ms => new Promise(r=>setTimeout(r,ms));
-const gmt6  = () => new Date(Date.now()+6*3600000).toISOString().slice(11,16);
-const confBar = p => '█'.repeat(Math.round(p/10))+'░'.repeat(10-Math.round(p/10));
+// ── Session info GMT+6 ─────────────────────────────────────────
+const SESSIONS = [
+  { name:'🔴 London/NY Overlap', s:19*60,    e:21*60+30, d:[1,2,3,4,5] },
+  { name:'🟢 London Open',       s:14*60,    e:16*60,    d:[1,2,3,4,5] },
+  { name:'🟡 Late NY/OTC',       s:22*60+30, e:24*60,    d:[1,2,3,4,5] },
+  { name:'🟡 Asian OTC',         s:5*60,     e:7*60,     d:[2,3,4,5]   },
+  { name:'🟡 Morning OTC',       s:9*60,     e:11*60,    d:[3,4,5,6]   },
+  { name:'🟡 Weekend OTC',       s:11*60,    e:13*60,    d:[0,6]       },
+];
 
-// ── Keyboard ───────────────────────────────────────────────────
-const KB = { reply_markup:{ keyboard:[
-  [{text:'🔍 Scan All'},{text:'⚠️ OTC'},      {text:'🌐 Live'}],
-  [{text:'₿ Crypto'},  {text:'🛢 Commodity'}, {text:'📊 Stats'}],
-  [{text:'🟢 Auto ON'},{text:'🔴 Auto OFF'},  {text:'⚡ Status'}],
-  [{text:'🔬 Backtest'},{text:'⏱ Expiry'},   {text:'💵 Stake'}],
-  [{text:'🔁 Reset'},  {text:'📋 Pairs'},     {text:'❓ Help'}],
-], resize_keyboard:true }};
+function getSession() {
+  const t = new Date(Date.now() + 6*3600*1000);
+  const d = t.getUTCDay(), m = t.getUTCHours()*60 + t.getUTCMinutes();
+  for (const s of SESSIONS) {
+    if (s.d.includes(d) && m >= s.s && m < s.e) return { active:true, ...s };
+  }
+  return { active:false, name:'⏰ Outside Prime Hours' };
+}
 
-// ── News blackout check ────────────────────────────────────────
-function newsBlackout() {
+// ── News check ─────────────────────────────────────────────────
+function newsCheck() {
   const now = new Date();
   const h = now.getUTCHours(), m = now.getUTCMinutes(), d = now.getUTCDay();
-  const min = h*60+m;
+  const min = h*60 + m;
   const windows = [
-    { s:8*60+15,  e:9*60+15,  desc:'European Open News' },
-    { s:13*60+15, e:14*60+15, desc:'US Market Open News' },
+    { s:8*60+15,  e:9*60+15,  desc:'European Open' },
+    { s:13*60+15, e:14*60+15, desc:'US Market Open' },
     { s:15*60+45, e:16*60+30, desc:'US Data Release' },
-    { s:18*60+45, e:19*60+30, desc:'US Close News' },
+    { s:18*60+45, e:19*60+30, desc:'US Close' },
     ...(d===5 ? [{ s:13*60+15, e:14*60+30, desc:'NFP Friday' }] : []),
-    ...(d===3 ? [{ s:18*60+45, e:20*60,    desc:'FOMC Wednesday' }] : []),
+    ...(d===3 ? [{ s:18*60+45, e:20*60,    desc:'FOMC'        }] : []),
   ];
   for (const w of windows) {
-    if (min >= w.s-15 && min <= w.e) return { on:true, reason:w.desc };
+    if (min >= w.s-15 && min <= w.e) return { on:true, desc:w.desc };
   }
   return { on:false };
 }
 
-// ── Core scan ──────────────────────────────────────────────────
-async function runScan(cat) {
-  const session = getSession();
-  const news = newsBlackout();
+// ── Helpers ────────────────────────────────────────────────────
+const auth    = m => m.chat.id.toString() === CHAT_ID.toString();
+const send    = (t, x={}) => bot.sendMessage(CHAT_ID, t, { parse_mode:'HTML', ...x }).catch(e => console.error('Send error:', e.message));
+const delay   = ms => new Promise(r => setTimeout(r, ms));
+const gmt6    = () => new Date(Date.now()+6*3600000).toISOString().slice(11,16);
+const confBar = p => '█'.repeat(Math.round(p/10)) + '░'.repeat(10-Math.round(p/10));
+const pct     = (w, l) => w+l > 0 ? Math.round(w/(w+l)*100) : 0;
 
+// ── Main Keyboard ──────────────────────────────────────────────
+const KB = { reply_markup:{ keyboard:[
+  [{text:'📋 OTC Pairs'}, {text:'🌐 Live Pairs'}, {text:'₿ Crypto'}],
+  [{text:'🛢 Commodity'}, {text:'📊 Stats'},       {text:'⚡ Status'}],
+  [{text:'🟢 Auto ON'},  {text:'🔴 Auto OFF'},     {text:'🔬 Backtest'}],
+  [{text:'⏱ Expiry'},   {text:'💵 Stake'},         {text:'🏆 Best Pairs'}],
+  [{text:'🔁 Reset'},    {text:'❓ Help'},          {text:'🛡 Breaker'}],
+], resize_keyboard:true }};
+
+// ── Pair picker keyboard ───────────────────────────────────────
+function pairKeyboard(pairs) {
+  const rows = [];
+  for (let i = 0; i < pairs.length; i += 3) {
+    rows.push(pairs.slice(i, i+3).map(p => ({
+      text: p.symbol,
+      callback_data: `SCAN_${p.symbol}`
+    })));
+  }
+  rows.push([{ text:'🔙 Back', callback_data:'BACK' }]);
+  return { reply_markup:{ inline_keyboard: rows }};
+}
+
+// ── Core single-pair scan ──────────────────────────────────────
+async function scanPair(pair) {
   if (isCB()) {
-    return send(`🛑 <b>CIRCUIT BREAKER ACTIVE</b>\n3 consecutive losses — paused 2hrs.\n\nClose Pocket Option. Rest.\n\nTap /reset_breaker to override.`);
+    const remaining = Math.ceil((2*60*60*1000 - (Date.now()-cbAt)) / 60000);
+    return send(`🛑 <b>CIRCUIT BREAKER ACTIVE</b>\n3 consecutive losses — paused.\nAuto-resets in <b>${remaining} min</b>.\n\nTap 🛡 Breaker to override.`);
   }
 
-  // News = warning only, never blocks
-  const newsWarn = news.on ? `\n⚠️ <b>NEWS ALERT:</b> ${news.reason} — trade carefully\n` : '';
+  const session = getSession();
+  const news    = newsCheck();
 
-  const pairs = getPairs(cat).sort((a,b)=>a.priority-b.priority||b.payout-a.payout);
-  await send(`🔍 <b>Scanning ${pairs.length} ${cat} pairs...</b>\n📡 Fetching real-time data...\n🕐 Session: ${session.name}`);await send(`🔍 <b>Scanning ${pairs.length} ${cat} pairs...</b>\n📡 Fetching real-time data...${newsWarn}`);
+  // News warning — never blocks
+  const newsWarn = news.on ? `\n⚠️ <b>NEWS ALERT: ${news.desc}</b> — trade carefully` : '';
+  // Session context — never blocks
+  const sessInfo = session.active
+    ? `📅 ${session.name}`
+    : `📅 Outside prime hours — OTC pairs recommended`;
 
-  const fetcher  = getFetcher();
-  const analyzer = getAnalyzer();
+  await send(`🔍 <b>Scanning ${pair.symbol}...</b>\n${sessInfo}${newsWarn}`);
 
-  if (!fetcher || !analyzer) {
-    return send(`⚠️ <b>Module load error.</b>\nTry again in 30 seconds.`);
-  }
-
-  const signals = [];
-  let scanned = 0, withData = 0;
-
-  for (const pair of pairs) {
-    // Cooldown check — prevents same pair repeating
-    if (Date.now() - (cooldowns[pair.symbol]||0) < COOL_MS) continue;
-
+  // Fetch with retry
+  let data = null;
+  for (let attempt = 1; attempt <= 2; attempt++) {
     try {
-      const data = await fetcher.fetchPriceData(pair.symbol, tfInterval);
-      if (!data || !data.ltf) { scanned++; continue; }
-      withData++;
-
-      const sig = analyzer.analyzeSignal(data.ltf, pair, data.htf);
-      if (sig && sig.confidence >= 60) {
-        signals.push({ ...sig, isSyn: data.ltf.isSynthetic || false });
-      }
-      scanned++;
+      data = await fetchPriceData(pair.symbol, tfInterval);
+      if (data) break;
+      if (attempt === 1) { await delay(3000); }
     } catch(e) {
-      console.error(`Scan error ${pair.symbol}:`, e.message);
-      scanned++;
+      console.error(`Fetch attempt ${attempt} failed:`, e.message);
+      if (attempt === 1) await delay(3000);
     }
-    await delay(300);
   }
 
-  // Sort by composite score: confidence × payout
-  signals.sort((a,b) => (b.confidence*b.payout) - (a.confidence*a.payout));
-
-  if (!signals.length) {
+  if (!data || !data.ltf) {
     return send(
-      `📭 <b>NO VALID SIGNALS</b>\n\n` +
-      `Scanned: ${scanned} pairs (${withData} with data)\n` +
-      `Session: ${session.name}\n\n` +
-      `No setups pass Quad-Lock criteria.\n` +
-      `⏳ Retry in 10–15 min or try a different category.`
+      `📡 <b>No data for ${pair.symbol}</b>\n\n` +
+      `Possible reasons:\n` +
+      `• API rate limit (wait 60 seconds)\n` +
+      `• Pair not available on Twelve Data\n` +
+      `• Network issue\n\n` +
+      `Try another pair or wait 1 minute.`
     );
   }
 
-  const best = signals[0]; // Only the #1 ranked signal
-await send(`✅ <b>${signals.length} setups found — firing best signal</b>`);
-
-cooldowns[best.symbol] = Date.now();
-S.total++;
-best.direction==='CALL' ? S.calls++ : S.puts++;
-await sendSignal(best, session);
+  let sig = null;
+  try {
+    sig = analyzeSignal(data.ltf, pair, data.htf);
+  } catch(e) {
+    console.error('Analyzer error:', e.message);
+    return send(`⚠️ Analysis error for ${pair.symbol}. Try again.`);
   }
-// ── Send signal ────────────────────────────────────────────────
-async function sendSignal(sig, session) {
+
+  if (!sig || sig.confidence < 60) {
+    const ps = getPairStat(pair.symbol);
+    return send(
+      `📭 <b>NO SETUP — ${pair.symbol}</b>\n\n` +
+      `${sessInfo}\n` +
+      `Payout: ${pair.payout}% | TF: ${tfInterval}\n\n` +
+      `Indicators not aligned for a clean entry.\n` +
+      `⏳ Try again in 10–15 min or pick another pair.\n\n` +
+      `Your record on this pair: ${ps.wins}W / ${ps.losses}L`
+    );
+  }
+
+  S.total++;
+  sig.direction === 'CALL' ? S.calls++ : S.puts++;
+  await sendSignal(sig, session, newsWarn);
+}
+
+// ── Send signal card ───────────────────────────────────────────
+async function sendSignal(sig, session, newsWarn='') {
   const de   = sig.direction==='CALL' ? '🟢⬆️' : '🔴⬇️';
   const tier = sig.payout>=92 ? '💎' : sig.payout>=88 ? '🥇' : '🥈';
   const live = sig.cat==='LIVE' ? ' ⭐ LIVE' : '';
   const div  = sig.divergence && sig.divergence!=='NONE' ? `\n🔥 <b>DIVERGENCE:</b> ${sig.divergence}` : '';
-  const vol  = sig.volume && sig.volume!=='UNKNOWN' ? `\n📦 Volume: ${sig.volume}` : '';
-  const src  = sig.isSyn ? `\n⚠️ <i>Synthetic — verify chart</i>` : `\n✅ <i>Real market data</i>`;
+  const ps   = getPairStat(sig.symbol);
+  const wr   = pct(ps.wins, ps.losses);
 
   const msg =
     `${de} <b>${sig.direction}${live}</b> ${tier}\n` +
@@ -242,60 +246,56 @@ async function sendSignal(sig, session) {
     `[${confBar(sig.confidence)}]\n\n` +
     `📈 RSI:${sig.rsi||'?'}  Stoch:${sig.stochK||'?'}\n` +
     `MACD:${sig.macd||'?'}  ADX:${sig.adx||'?'}\n` +
-    `HTF:${sig.htfBias||'?'}${div}${vol}${src}\n\n` +
+    `HTF Bias: ${sig.htfBias||'?'}${div}\n\n` +
     `✅ <b>Confluence (${sig.indicators||'?'}):</b>\n` +
     (sig.reasons||[]).slice(0,5).map(r=>`  • ${r}`).join('\n') +
     ((sig.warnings||[]).length ? `\n\n⚠️ <b>Caution:</b>\n`+(sig.warnings||[]).slice(0,2).map(w=>`  • ${w}`).join('\n') : '') +
-    `\n\n🕐 ${session.name}\n` +
-    `💵 Stake:$${stake} → +$${(stake*(sig.payout||85)/100).toFixed(2)}\n\n` +
-    `⚠️ <i>Check payout ≥85% on platform before entering</i>`;
+    `\n\n📅 ${session.name||'OTC Session'}` +
+    `${newsWarn}\n` +
+    `💵 Stake: $${stake} → Win: +$${(stake*sig.payout/100).toFixed(2)} | Loss: -$${stake}\n` +
+    `📌 Your record: ${ps.wins}W/${ps.losses}L${ps.wins+ps.losses>0?` (${wr}% WR)`:''}\n\n` +
+    `⚠️ <i>Verify payout on Pocket Option before entering</i>`;
 
   await bot.sendMessage(CHAT_ID, msg, {
     parse_mode:'HTML',
     reply_markup:{ inline_keyboard:[[
       { text:'✅ WIN',  callback_data:`W_${sig.symbol}` },
       { text:'❌ LOSS', callback_data:`L_${sig.symbol}` },
-      { text:'⏭ SKIP', callback_data:`K_${sig.symbol}` }
+      { text:'⏭ SKIP', callback_data:`K_${sig.symbol}` },
     ]]}
   }).catch(e => console.error('Signal send error:', e.message));
 }
 
 // ── Backtest ───────────────────────────────────────────────────
 async function runBacktest() {
-  const analyzer = getAnalyzer();
-  const fetcher  = getFetcher();
-  if (!analyzer || !fetcher) return send(`⚠️ Module error. Try again.`);
-
-  await send(`🔬 <b>BACKTESTING top 5 LIVE pairs...</b>\n⏳ Fetching 200-candle history (30s)`);
-
-  const testPairs = LIVE_PAIRS.slice(0, 5);
+  await send(`🔬 <b>BACKTESTING top OTC pairs...</b>\n⏳ This takes ~30 seconds`);
+  const testPairs = OTC_PAIRS.slice(0, 4);
   const results = [];
 
   for (const pair of testPairs) {
     try {
-      const d = await fetcher.fetchHistoricalData(pair.symbol, tfInterval, 200);
-      if (!d || d.closes.length < 60) continue;
-      const r = analyzer.backtest(d, pair, 100);
+      const d = await fetchHistoricalData(pair.symbol, tfInterval, 150);
+      if (!d || d.closes.length < 50) { await delay(8000); continue; }
+      const r = backtest(d, pair, 80);
       if (r) results.push(r);
-      await delay(500);
+      await delay(8000); // respect rate limit between pairs
     } catch(e) { console.error('Backtest error:', e.message); }
   }
 
   if (!results.length) {
-    return send(`📭 No backtest data available.\nAPI limit may have been reached.\nTry again in 60 seconds.`);
+    return send(`📭 No backtest data available.\nAPI limit reached. Try again in 2 minutes.`);
   }
 
-  results.sort((a,b)=>b.winRate-a.winRate);
-
-  let msg = `🔬 <b>BACKTEST RESULTS</b>\n━━━━━━━━━━━━━━━━━━━━\n`;
+  results.sort((a,b) => b.winRate - a.winRate);
+  let msg = `🔬 <b>BACKTEST RESULTS (${tfInterval})</b>\n━━━━━━━━━━━━━━━━━━━━\n`;
   for (const r of results) {
     const g = r.winRate>=70?'🟢':r.winRate>=58?'🟡':'🔴';
-    msg += `${g} <b>${r.pair}</b> [Grade:${r.grade||'?'}]\n`;
-    msg += `  ${r.total} signals | W:${r.wins} L:${r.losses} | <b>WR:${r.winRate}%</b>\n`;
-    msg += `  P&L:${r.pnl>=0?'+':''}$${r.pnl} | Conf:${r.avgConf}%\n\n`;
+    msg += `${g} <b>${r.pair}</b> [Grade: ${r.grade}]\n`;
+    msg += `  ${r.total} signals | W:${r.wins} L:${r.losses} | WR:<b>${r.winRate}%</b>\n`;
+    msg += `  P&L: ${r.pnl>=0?'+':''}$${r.pnl} | Avg Conf: ${r.avgConf}%\n\n`;
   }
   const best = results[0];
-  msg += `🏆 <b>Best: ${best.pair}</b> (${best.winRate}% WR)\n<i>Focus on Grade A pairs this week</i>`;
+  msg += `🏆 <b>Best pair: ${best.pair}</b> (${best.winRate}% WR)\n<i>Focus on this pair this session</i>`;
   return send(msg);
 }
 
@@ -306,27 +306,30 @@ bot.on('message', async msg => {
   console.log('Message received:', t);
 
   try {
-    if (t==='/start' || t==='❓ Help') return sendHelp();
-    if (t==='🔍 Scan All')    return runScan('ALL');
-    if (t==='⚠️ OTC')         return runScan('OTC');
-    if (t==='🌐 Live')        return runScan('LIVE');
-    if (t==='₿ Crypto')       return runScan('CRYPTO');
-    if (t==='🛢 Commodity')   return runScan('COMMODITY');
-    if (t==='🔬 Backtest')    return runBacktest();
-    if (t==='📊 Stats')       return sendStats();
-    if (t==='⚡ Status')      return sendStatus();
-    if (t==='📋 Pairs')       return sendPairs();
-    if (t==='🔁 Reset')       { resetStats(); return send('🔁 Stats reset for new session.'); }
-    if (t==='/reset_breaker') { resetCB(); return send('✅ Circuit breaker reset. Trading resumed.'); }
+    // Show pair pickers
+    if (t==='📋 OTC Pairs')  return bot.sendMessage(CHAT_ID, '⚠️ <b>Select OTC pair to scan:</b>', { parse_mode:'HTML', ...pairKeyboard(OTC_PAIRS) });
+    if (t==='🌐 Live Pairs') return bot.sendMessage(CHAT_ID, '🌐 <b>Select LIVE pair to scan:</b>', { parse_mode:'HTML', ...pairKeyboard(LIVE_PAIRS) });
+    if (t==='₿ Crypto')      return bot.sendMessage(CHAT_ID, '₿ <b>Select CRYPTO pair to scan:</b>', { parse_mode:'HTML', ...pairKeyboard(CRYPTO_PAIRS) });
+    if (t==='🛢 Commodity')  return bot.sendMessage(CHAT_ID, '🛢 <b>Select COMMODITY pair to scan:</b>', { parse_mode:'HTML', ...pairKeyboard(COMM_PAIRS) });
+
+    if (t==='📊 Stats')    return sendStats();
+    if (t==='⚡ Status')   return sendStatus();
+    if (t==='🔬 Backtest') return runBacktest();
+    if (t==='🏆 Best Pairs') return sendBestPairs();
+    if (t==='🛡 Breaker')  return sendBreaker();
+    if (t==='❓ Help' || t==='/start') return sendHelp();
+    if (t==='🔁 Reset') {
+      resetStats();
+      return send(`🔁 <b>Session reset.</b>\nAll stats and pair history cleared.`, KB);
+    }
 
     if (t==='🟢 Auto ON') {
-      if (autoMode) { send('⚡ Auto mode already running.'); return; }
+      if (autoMode) return send(`⚡ Auto mode already running. Scanning every 15 min.`);
       autoMode = true;
-      send(`🟢 <b>AUTO MODE ON</b>\nScanning every 15 min.\nOnly during active sessions.\nNews blackout respected.`);
-      runScan('ALL');
-      autoTimer = setInterval(()=>{
-        if (getSession().active && !isCB() && !newsBlackout().on) runScan('ALL');
-      }, 15*60*1000);
+      // Auto scans best OTC pair
+      send(`🟢 <b>AUTO MODE ON</b>\nScanning top OTC pairs every 15 min.\nCircuit breaker respected.\n\nBot will pick the best available setup.`);
+      autoScan();
+      autoTimer = setInterval(autoScan, 15*60*1000);
       return;
     }
 
@@ -338,105 +341,113 @@ bot.on('message', async msg => {
 
     if (t==='⏱ Expiry') {
       return bot.sendMessage(CHAT_ID, '⏱ Select expiry:', { reply_markup:{ inline_keyboard:[[
-        {text:'1 MIN',  callback_data:'TF_1min_1'},
-        {text:'5 MIN',  callback_data:'TF_5min_5'},
-        {text:'15 MIN ⭐',callback_data:'TF_15min_15'},
-        {text:'30 MIN', callback_data:'TF_30min_30'},
+        {text:'1 MIN',     callback_data:'TF_1min_1'},
+        {text:'5 MIN',     callback_data:'TF_5min_5'},
+        {text:'15 MIN ⭐', callback_data:'TF_15min_15'},
+        {text:'30 MIN',    callback_data:'TF_30min_30'},
       ]]}});
     }
 
     if (t==='💵 Stake') {
-      return bot.sendMessage(CHAT_ID, '💵 Select stake:', { reply_markup:{ inline_keyboard:[
-        [{text:'$1',callback_data:'ST_1'},{text:'$5',callback_data:'ST_5'},{text:'$8',callback_data:'ST_8'},{text:'$10',callback_data:'ST_10'}],
-        [{text:'$15',callback_data:'ST_15'},{text:'$20',callback_data:'ST_20'},{text:'$25',callback_data:'ST_25'},{text:'$30',callback_data:'ST_30'}],
+      return bot.sendMessage(CHAT_ID, '💵 Select stake amount:', { reply_markup:{ inline_keyboard:[
+        [{text:'$1',callback_data:'ST_1'},{text:'$5',callback_data:'ST_5'},{text:'$10',callback_data:'ST_10'},{text:'$15',callback_data:'ST_15'}],
+        [{text:'$20',callback_data:'ST_20'},{text:'$25',callback_data:'ST_25'},{text:'$30',callback_data:'ST_30'},{text:'$50',callback_data:'ST_50'}],
       ]}});
     }
+
   } catch(e) {
     console.error('Handler error:', e.message);
     send(`⚠️ Error processing command. Please try again.`);
   }
 });
 
-// ── Callbacks ──────────────────────────────────────────────────
+// ── Callback handler ───────────────────────────────────────────
 bot.on('callback_query', async q => {
-  if (q.message.chat.id.toString()!==CHAT_ID.toString()) return;
+  if (q.message.chat.id.toString() !== CHAT_ID.toString()) return;
   const d = q.data || '';
 
   try {
+    await bot.answerCallbackQuery(q.id).catch(()=>{});
+
+    if (d === 'BACK') {
+      return bot.sendMessage(CHAT_ID, '🏠 Main menu', KB);
+    }
+
+    if (d.startsWith('SCAN_')) {
+      const symbol = d.slice(5);
+      const pair   = findPair(symbol);
+      if (!pair) return send(`⚠️ Pair not found: ${symbol}`);
+      return scanPair(pair);
+    }
+
     if (d.startsWith('TF_')) {
       const parts = d.split('_');
       tfInterval = parts[1]; expiry = parseInt(parts[2]);
-      await bot.answerCallbackQuery(q.id, {text:`Expiry: ${expiry} MIN`});
-      return send(`⏱ Expiry set to <b>${expiry} MIN</b>`);
+      return send(`⏱ Expiry set to <b>${expiry} MIN</b> (${tfInterval} candles)`);
     }
 
     if (d.startsWith('ST_')) {
       stake = parseFloat(d.split('_')[1]);
-      await bot.answerCallbackQuery(q.id, {text:`Stake: $${stake}`});
-      return send(`💵 Stake set to <b>$${stake}</b>`);
+      return send(`💵 Stake set to <b>$${stake}</b>\nPotential win: +$${(stake*0.92).toFixed(2)} at 92% payout`);
     }
 
+    // WIN / LOSS / SKIP
     const act = d.slice(0,1);
     const sym = d.slice(2);
+    const ps  = getPairStat(sym);
 
     if (act==='W') {
-      S.wins++; S.consLoss=0;
+      S.wins++; consLoss=0;
       S.pnl += stake * 0.92;
-      S.pairW[sym] = (S.pairW[sym]||0)+1;
-      await bot.answerCallbackQuery(q.id, {text:'✅ WIN recorded!'});
-      const wr = S.wins+S.losses>0 ? Math.round(S.wins/(S.wins+S.losses)*100) : 0;
-      send(`✅ <b>WIN</b> — ${sym}\n📊 ${S.wins}W / ${S.losses}L | WR: ${wr}% | P&L: +$${S.pnl.toFixed(2)}`);
+      ps.wins++;
+      const wr = pct(S.wins, S.losses);
+      send(`✅ <b>WIN</b> — ${sym}\n📊 Session: ${S.wins}W/${S.losses}L (${wr}% WR)\n💰 P&L: +$${S.pnl.toFixed(2)}\n📌 ${sym}: ${ps.wins}W/${ps.losses}L`);
     } else if (act==='L') {
-      S.losses++; S.consLoss++;
+      S.losses++; consLoss++;
       S.pnl -= stake;
-      S.pairL[sym] = (S.pairL[sym]||0)+1;
-      await bot.answerCallbackQuery(q.id, {text:'❌ LOSS recorded'});
-      send(`❌ <b>LOSS</b> — ${sym}\nStreak: ${S.consLoss} losses | P&L: $${S.pnl.toFixed(2)}`);
-      if (S.consLoss >= 3) {
+      ps.losses++;
+      const wr = pct(S.wins, S.losses);
+      send(`❌ <b>LOSS</b> — ${sym}\n📊 Session: ${S.wins}W/${S.losses}L (${wr}% WR)\n💰 P&L: $${S.pnl.toFixed(2)}\n🔴 Consecutive losses: ${consLoss}`);
+      if (consLoss >= 3) {
         setCB();
-        send(`🛑 <b>CIRCUIT BREAKER</b>\n3 consecutive losses.\nTrading paused 2 hours.\n\n<b>Close Pocket Option now. Protect capital.</b>`);
+        send(`🛑 <b>CIRCUIT BREAKER TRIGGERED</b>\n3 consecutive losses.\n\n<b>STOP TRADING NOW.</b>\nProtect your capital.\n\nAuto-resets in 2 hours.\nTap 🛡 Breaker to override.`);
       }
     } else if (act==='K') {
-      S.skipped++;
-      await bot.answerCallbackQuery(q.id, {text:'Skipped ✓'});
+      S.skipped++; ps.skipped++;
     }
+
   } catch(e) {
     console.error('Callback error:', e.message);
   }
 });
 
-// ── Response functions ─────────────────────────────────────────
-function sendHelp() {
-  return send(
-    `🎯 <b>OMNI BULLS EYE v6.1 — ONLINE</b>\n` +
-    `━━━━━━━━━━━━━━━━━━━━\n\n` +
-    `<b>📡 54 Pairs Coverage:</b>\n` +
-    `⭐ 12 Live Forex (highest accuracy)\n` +
-    `⚠️ 28 OTC Pairs (all tiers)\n` +
-    `₿ 6 Crypto OTC\n` +
-    `🛢 3 Commodity OTC\n\n` +
-    `<b>🔬 7-Layer Analysis Engine:</b>\n` +
-    `✅ RSI Divergence (bull/bear/hidden)\n` +
-    `✅ Volume + OBV analysis\n` +
-    `✅ Multi-timeframe alignment\n` +
-    `✅ ADX trend strength filter\n` +
-    `✅ Bollinger Bands + EMA cross\n` +
-    `✅ Support & Resistance levels\n` +
-    `✅ 13 candle pattern types\n\n` +
-    `<b>🛡 5 Protections:</b>\n` +
-    `✅ News blackout (auto)\n` +
-    `✅ GMT+6 session gate\n` +
-    `✅ 15-min pair cooldown\n` +
-    `✅ Circuit breaker (3-loss)\n` +
-    `✅ 85%+ payout floor\n\n` +
-    `⭐ <b>Live pairs always scanned first</b>`,
-    KB
-  );
+// ── Auto scan (picks first available OTC pair) ─────────────────
+async function autoScan() {
+  if (isCB()) return;
+  for (const pair of OTC_PAIRS.slice(0, 4)) {
+    try {
+      const data = await fetchPriceData(pair.symbol, tfInterval);
+      if (!data || !data.ltf) { await delay(3000); continue; }
+      const sig = analyzeSignal(data.ltf, pair, data.htf);
+      if (sig && sig.confidence >= 60) {
+        const session = getSession();
+        const news    = newsCheck();
+        const nw      = news.on ? `\n⚠️ NEWS: ${news.desc}` : '';
+        S.total++;
+        sig.direction==='CALL' ? S.calls++ : S.puts++;
+        await sendSignal(sig, session, nw);
+        return; // fire only 1 signal per auto cycle
+      }
+      await delay(8000);
+    } catch(e) { console.error('Auto scan error:', e.message); }
+  }
+  send(`📭 <b>Auto scan complete</b> — No clean setups found.\nRetrying in 15 min.`);
 }
 
+// ── Info functions ─────────────────────────────────────────────
 function sendStats() {
-  const t = S.wins+S.losses;
-  const wr = t>0 ? Math.round(S.wins/t*100) : 0;
+  const t  = S.wins + S.losses;
+  const wr = pct(S.wins, S.losses);
   const grade = wr>=70?'🟢 A':wr>=60?'🟡 B':wr>=50?'🟠 C':'🔴 D';
   return send(
     `📊 <b>SESSION STATISTICS</b>\n━━━━━━━━━━━━━━━━━━━━\n` +
@@ -444,51 +455,106 @@ function sendStats() {
     `✅ Wins: ${S.wins} | ❌ Losses: ${S.losses} | ⏭ Skip: ${S.skipped}\n` +
     `🏆 Win Rate: ${wr}% ${grade}\n` +
     `💰 P&L: ${S.pnl>=0?'+':''}$${S.pnl.toFixed(2)}\n` +
-    `🔄 Consecutive losses: ${S.consLoss}\n` +
-    `🛡 Circuit Breaker: ${isCB()?'🛑 TRIGGERED':'✅ Clear'}`
+    `🔴 Consecutive losses: ${consLoss}\n` +
+    `🛡 Circuit Breaker: ${isCB()?'🛑 ACTIVE':'✅ Clear'}\n` +
+    `⏱ Expiry: ${expiry} MIN | 💵 Stake: $${stake}`
   );
 }
 
 function sendStatus() {
   const s = getSession();
-  const n = newsBlackout();
+  const n = newsCheck();
   return send(
-    `⚡ <b>BOT STATUS</b>\n━━━━━━━━━━━━━━━━━━━━\n` +
+    `⚡ <b>BOT STATUS v7.0</b>\n━━━━━━━━━━━━━━━━━━━━\n` +
     `🤖 Online: ✅\n` +
     `🔄 Auto Mode: ${autoMode?'🟢 ON':'🔴 OFF'}\n` +
-    `⏱ Expiry: ${expiry} MIN\n` +
+    `⏱ Expiry: ${expiry} MIN | TF: ${tfInterval}\n` +
     `💵 Stake: $${stake}\n` +
-    `📅 Session: ${s.name} ${s.active?'✅':'❌'}\n` +
-    `🚫 News: ${n.on?`🛑 ${n.reason}`:'✅ Clear'}\n` +
-    `🛡 Breaker: ${isCB()?'🛑 ON':'✅ Clear'}\n` +
+    `📅 Session: ${s.name} ${s.active?'✅':'⚠️'}\n` +
+    `🚫 News: ${n.on?`⚠️ ${n.desc}`:'✅ Clear'}\n` +
+    `🛡 Breaker: ${isCB()?'🛑 ACTIVE':'✅ Clear'}\n` +
     `⏰ GMT+6: ${gmt6()}`
   );
 }
 
-function sendPairs() {
-  const t1 = ALL_PAIRS.filter(p=>p.payout>=92).map(p=>`${p.cat==='LIVE'?'⭐ ':''} ${p.symbol}`).join('\n');
-  return send(`📋 <b>TIER 1 PAIRS (92%+)</b>\n${t1}\n\n<i>Always verify actual payout on Pocket Option before entering.</i>`);
+function sendBestPairs() {
+  const entries = Object.entries(pairStats)
+    .filter(([,v]) => v.wins+v.losses > 0)
+    .map(([sym,v]) => ({ sym, wr:pct(v.wins,v.losses), ...v }))
+    .sort((a,b) => b.wr-a.wr);
+
+  if (!entries.length) return send(`🏆 <b>No pair history yet.</b>\nStart trading to build your pair stats.`);
+
+  let msg = `🏆 <b>YOUR BEST PAIRS THIS SESSION</b>\n━━━━━━━━━━━━━━━━━━━━\n`;
+  for (const e of entries.slice(0,8)) {
+    const g = e.wr>=70?'🟢':e.wr>=55?'🟡':'🔴';
+    msg += `${g} <b>${e.sym}</b>: ${e.wins}W/${e.losses}L — ${e.wr}% WR\n`;
+  }
+  return send(msg);
 }
 
-// ── Boot message ───────────────────────────────────────────────
+function sendBreaker() {
+  if (!isCB()) return send(`🛡 <b>Circuit Breaker: CLEAR</b>\nTrading is active. No losses streak.`);
+  const remaining = Math.ceil((2*60*60*1000-(Date.now()-cbAt))/60000);
+  return bot.sendMessage(CHAT_ID,
+    `🛑 <b>CIRCUIT BREAKER ACTIVE</b>\nAuto-resets in ${remaining} min.\n\nOverride and resume trading?`,
+    { parse_mode:'HTML', reply_markup:{ inline_keyboard:[[
+      { text:'✅ Yes, resume trading', callback_data:'CB_RESET' },
+      { text:'❌ No, keep paused',     callback_data:'CB_KEEP'  },
+    ]]}}
+  );
+}
+
+// Add CB_RESET to callback handler
+const _origCB = bot.listeners('callback_query')[0];
+bot.on('callback_query', async q => {
+  const d = q.data||'';
+  if (d==='CB_RESET') { resetCB(); await bot.answerCallbackQuery(q.id,{text:'Trading resumed'}); send(`✅ <b>Circuit breaker reset.</b> Trade carefully.`); }
+  if (d==='CB_KEEP')  { await bot.answerCallbackQuery(q.id,{text:'Staying paused'}); }
+});
+
+function sendHelp() {
+  return send(
+    `🎯 <b>OMNI BULLS EYE v7.0</b>\n` +
+    `━━━━━━━━━━━━━━━━━━━━\n\n` +
+    `<b>How to use:</b>\n` +
+    `1. Tap a category (OTC/Live/Crypto/Commodity)\n` +
+    `2. Select your pair from the list\n` +
+    `3. Bot scans and returns CALL/PUT/NO SETUP\n` +
+    `4. Verify payout on Pocket Option\n` +
+    `5. Enter trade, then tap WIN/LOSS/SKIP\n\n` +
+    `<b>🛡 Protections:</b>\n` +
+    `✅ Circuit breaker — stops after 3 losses\n` +
+    `✅ News alerts — warns but never blocks\n` +
+    `✅ Per-pair tracking — know your best pairs\n` +
+    `✅ Auto reset — breaker clears after 2hrs\n` +
+    `✅ Retry logic — retries on API failure\n\n` +
+    `<b>📊 Pairs coverage:</b>\n` +
+    `⚠️ 12 OTC pairs (92%+ payout priority)\n` +
+    `🌐 8 Live forex pairs\n` +
+    `₿ 4 Crypto OTC\n` +
+    `🛢 2 Commodity OTC\n\n` +
+    `<b>⏱ Recommended settings:</b>\n` +
+    `Expiry: 15 MIN | Stake: 2-3% of balance`,
+    KB
+  );
+}
+
+// ── Boot ───────────────────────────────────────────────────────
 setTimeout(() => {
   send(
-    `🚀 <b>OMNI BULLS EYE v6.1 — ONLINE</b>\n` +
+    `🚀 <b>OMNI BULLS EYE v7.0 — ONLINE</b>\n` +
     `━━━━━━━━━━━━━━━━━━━━\n` +
-    `✅ 54 pairs loaded\n` +
-    `✅ RSI Divergence: ACTIVE\n` +
-    `✅ Volume/OBV: ACTIVE\n` +
-    `✅ Multi-TF engine: ACTIVE\n` +
-    `✅ News blackout filter: ACTIVE\n` +
-    `✅ Session gate GMT+6: ARMED\n` +
-    `✅ Circuit breaker: ARMED\n` +
-    `✅ Pair cooldown: ACTIVE\n\n` +
-    `⭐ Live pairs prioritized in all scans\n\n` +
-    `Tap <b>🔍 Scan All</b> to begin`,
+    `✅ Single-pair scan engine active\n` +
+    `✅ Rate-limit safe (2 API calls per scan)\n` +
+    `✅ Auto circuit breaker reset: 2hrs\n` +
+    `✅ Per-pair win tracking active\n` +
+    `✅ News alerts active\n` +
+    `✅ Retry logic on API failure\n\n` +
+    `<b>Tap 📋 OTC Pairs to start your first scan</b>`,
     KB
   );
   console.log('Boot message sent');
 }, 3000);
 
 console.log('=== Bot setup complete, waiting for messages ===');
-
