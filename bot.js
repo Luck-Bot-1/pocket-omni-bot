@@ -230,20 +230,25 @@ async function sendSignal(sig, session, newsWarn='') {
   const ps   = getPairStat(sig.symbol);
   const wr   = pct(ps.wins, ps.losses);
 
+// REPLACE WITH:
+  // Sanitize all values — escape < and > to prevent Telegram HTML parse errors
+  const san = v => String(v||'?').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  const sanReasons = (arr) => (arr||[]).map(r => san(r));
+
   const msg =
     `${de} <b>${sig.direction}${live}</b> ${tier}\n` +
     `━━━━━━━━━━━━━━━━━━━━\n` +
-    `📊 <b>${sig.symbol}</b>\n` +
+    `📊 <b>${san(sig.symbol)}</b>\n` +
     `💰 Payout: +${sig.payout}%  ⏱ Expiry: ${expiry}MIN\n` +
     `🎯 Confidence: ${sig.confidence}%\n` +
     `[${confBar(sig.confidence)}]\n\n` +
-    `📈 RSI:${sig.rsi||'?'}  Stoch:${sig.stochK||'?'}\n` +
-    `MACD:${sig.macd||'?'}  ADX:${sig.adx||'?'}\n` +
-    `HTF Bias: ${sig.htfBias||'?'}${div}\n\n` +
-    `✅ <b>Confluence (${sig.indicators||'?'}):</b>\n` +
-    (sig.reasons||[]).slice(0,5).map(r=>`  • ${r}`).join('\n') +
-    ((sig.warnings||[]).length ? `\n\n⚠️ <b>Caution:</b>\n`+(sig.warnings||[]).slice(0,2).map(w=>`  • ${w}`).join('\n') : '') +
-    `\n\n📅 ${session.name||'OTC Session'}` +
+    `📈 RSI: ${san(sig.rsi)}  Stoch: ${san(sig.stochK)}\n` +
+    `MACD: ${san(sig.macd)}  ADX: ${san(sig.adx)}\n` +
+    `HTF Bias: ${san(sig.htfBias)}${div}\n\n` +
+    `✅ <b>Confluence (${san(sig.indicators)}):</b>\n` +
+    sanReasons(sig.reasons).slice(0,5).map(r=>`  • ${r}`).join('\n') +
+    (sanReasons(sig.warnings).length ? `\n\n⚠️ <b>Caution:</b>\n`+sanReasons(sig.warnings).slice(0,2).map(w=>`  • ${w}`).join('\n') : '') +
+    `\n\n📅 ${san(session.name||'OTC Session')}` +
     `${newsWarn}\n` +
     `💵 Stake: $${stake} → Win: +$${(stake*sig.payout/100).toFixed(2)} | Loss: -$${stake}\n` +
     `📌 Your record: ${ps.wins}W/${ps.losses}L${ps.wins+ps.losses>0?` (${wr}% WR)`:''}\n\n` +
