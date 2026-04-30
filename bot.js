@@ -1,10 +1,10 @@
 require('dotenv').config();
-const { Telegraf, Markup } = require('telegraf');
+const { Telegraf, Markup } = require('telegraf');   // ✅ CORRECT
 const analyzer = require('./analyzer');
 const pairsConfig = require('./pairs.json');
 const priceFetcher = require('./pricefetcher');
 
-const bot = new Telegraf(process.env.BOT_TOKEN);
+const bot = new Telegraf(process.env.BOT_TOKEN);    // ✅ Single underscore
 // API_KEY is available if needed for external services
 const API_KEY = process.env.API_KEY;
 
