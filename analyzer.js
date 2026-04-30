@@ -24,11 +24,11 @@ class SignalAnalyzer {
             if (multiTF) {
                 multiTFSignal = await this.checkMultiTimeframe(pair);
                 if (multiTFSignal && multiTFSignal.agreement < 2) {
-                    return null; // Not enough timeframe agreement
+                    return null;
                 }
             }
 
-            // Calculate all indicators
+            // Calculate indicators
             const rsi = this.calculateRSI(closes, 7);
             const macd = this.calculateMACD(closes);
             const ema9 = this.calculateEMA(closes, 9);
@@ -38,7 +38,6 @@ class SignalAnalyzer {
             const stoch = this.calculateStochastic(highs, lows, closes);
             const volumeProfile = this.analyzeVolume(volumes);
             
-            // Check if we have valid indicator values
             if (!rsi || !macd || !ema9 || !ema21 || !bb || !adx || !stoch) {
                 return null;
             }
@@ -52,7 +51,6 @@ class SignalAnalyzer {
                 ema21: ema21[ema21.length - 1],
                 bbUpper: bb.upper[bb.upper.length - 1],
                 bbLower: bb.lower[bb.lower.length - 1],
-                bbMiddle: bb.middle[bb.middle.length - 1],
                 adx: adx.adx[adx.adx.length - 1],
                 dmiPlus: adx.plusDI[adx.plusDI.length - 1],
                 dmiMinus: adx.minusDI[adx.minusDI.length - 1],
@@ -68,11 +66,9 @@ class SignalAnalyzer {
                 macdSignal: macd.signal[macd.signal.length - 2],
                 ema9: ema9[ema9.length - 2],
                 ema21: ema21[ema21.length - 2],
-                stochK: stoch.k[stoch.k.length - 2],
-                stochD: stoch.d[stoch.d.length - 2]
+                stochK: stoch.k[stoch.k.length - 2]
             };
 
-            // Generate signal with confidence
             const minConfidence = pair.min_confidence || 75;
             const signal = this.generateSignal(current, prev, minConfidence);
             
@@ -91,7 +87,6 @@ class SignalAnalyzer {
                     timestamp: new Date()
                 };
             }
-            
             return null;
         } catch (error) {
             console.error(`Error analyzing ${pair.name}:`, error.message);
@@ -103,7 +98,6 @@ class SignalAnalyzer {
         try {
             return indicators.RSI.calculate({ values, period });
         } catch (error) {
-            console.error('RSI calculation error:', error.message);
             return null;
         }
     }
@@ -119,7 +113,6 @@ class SignalAnalyzer {
                 SimpleMASignal: false
             });
         } catch (error) {
-            console.error('MACD calculation error:', error.message);
             return null;
         }
     }
@@ -128,7 +121,6 @@ class SignalAnalyzer {
         try {
             return indicators.SMA.calculate({ values, period });
         } catch (error) {
-            console.error('EMA calculation error:', error.message);
             return null;
         }
     }
@@ -141,7 +133,6 @@ class SignalAnalyzer {
                 stdDev: 2
             });
         } catch (error) {
-            console.error('Bollinger Bands calculation error:', error.message);
             return null;
         }
     }
@@ -150,7 +141,6 @@ class SignalAnalyzer {
         try {
             return indicators.ADX.calculate({ high, low, close, period });
         } catch (error) {
-            console.error('ADX calculation error:', error.message);
             return null;
         }
     }
@@ -165,7 +155,6 @@ class SignalAnalyzer {
                 signalPeriod: 3
             });
         } catch (error) {
-            console.error('Stochastic calculation error:', error.message);
             return null;
         }
     }
@@ -175,14 +164,8 @@ class SignalAnalyzer {
             const volumeMA = volumes.slice(-20).reduce((a, b) => a + b, 0) / 20;
             const currentVolume = volumes[volumes.length - 1];
             const ratio = currentVolume / volumeMA;
-            
-            return {
-                ratio: ratio,
-                spike: ratio > 1.5,
-                dry: ratio < 0.5
-            };
+            return { ratio, spike: ratio > 1.5, dry: ratio < 0.5 };
         } catch (error) {
-            console.error('Volume analysis error:', error.message);
             return { ratio: 1, spike: false, dry: false };
         }
     }
@@ -193,7 +176,7 @@ class SignalAnalyzer {
         let bullishScore = 0;
         let bearishScore = 0;
 
-        // 1. RSI (30% weight)
+        // RSI (30%)
         if (current.rsi < 30) {
             bullishScore += 30;
             confidence += 20;
@@ -205,28 +188,24 @@ class SignalAnalyzer {
         } else if (current.rsi < 40) {
             bullishScore += 15;
             confidence += 10;
-            reasons.push(`RSI rising from low: ${current.rsi.toFixed(1)}`);
+            reasons.push(`RSI rising: ${current.rsi.toFixed(1)}`);
         } else if (current.rsi > 60) {
             bearishScore += 15;
             confidence += 10;
-            reasons.push(`RSI falling from high: ${current.rsi.toFixed(1)}`);
-        } else {
-            // Neutral RSI
-            confidence += 5;
+            reasons.push(`RSI falling: ${current.rsi.toFixed(1)}`);
         }
 
-        // 2. MACD (25% weight)
+        // MACD (25%)
         const macdBullish = current.macd > current.macdSignal && prev.macd <= prev.macdSignal;
         const macdBearish = current.macd < current.macdSignal && prev.macd >= prev.macdSignal;
-        
         if (macdBullish) {
             bullishScore += 25;
             confidence += 25;
-            reasons.push('MACD bullish crossover');
+            reasons.push('MACD bullish cross');
         } else if (macdBearish) {
             bearishScore += 25;
             confidence += 25;
-            reasons.push('MACD bearish crossover');
+            reasons.push('MACD bearish cross');
         } else if (current.macdHistogram > 0 && current.macdHistogram > prev.macdHistogram) {
             bullishScore += 12;
             confidence += 12;
@@ -235,17 +214,9 @@ class SignalAnalyzer {
             bearishScore += 12;
             confidence += 12;
             reasons.push('MACD histogram falling');
-        } else if (current.macdHistogram > 0) {
-            bullishScore += 6;
-            confidence += 6;
-            reasons.push('MACD positive zone');
-        } else if (current.macdHistogram < 0) {
-            bearishScore += 6;
-            confidence += 6;
-            reasons.push('MACD negative zone');
         }
 
-        // 3. EMA Cross (20% weight)
+        // EMA (20%)
         if (current.ema9 > current.ema21 && prev.ema9 <= prev.ema21) {
             bullishScore += 20;
             confidence += 20;
@@ -257,20 +228,17 @@ class SignalAnalyzer {
         } else if (current.ema9 > current.ema21) {
             bullishScore += 10;
             confidence += 10;
-            reasons.push('EMA9 above EMA21 (uptrend)');
+            reasons.push('EMA9 above EMA21');
         } else if (current.ema9 < current.ema21) {
             bearishScore += 10;
             confidence += 10;
-            reasons.push('EMA9 below EMA21 (downtrend)');
-        } else {
-            confidence += 5;
+            reasons.push('EMA9 below EMA21');
         }
 
-        // 4. ADX Trend Strength (15% weight)
+        // ADX (15%)
         if (current.adx > 25) {
             confidence += 10;
             reasons.push(`Strong trend (ADX: ${current.adx.toFixed(1)})`);
-            
             if (current.dmiPlus > current.dmiMinus) {
                 bullishScore += 10;
                 confidence += 5;
@@ -280,14 +248,9 @@ class SignalAnalyzer {
                 confidence += 5;
                 reasons.push('DMI- dominant');
             }
-        } else if (current.adx > 20) {
-            confidence += 5;
-            reasons.push(`Developing trend (ADX: ${current.adx.toFixed(1)})`);
-        } else {
-            reasons.push(`Weak trend (ADX: ${current.adx.toFixed(1)})`);
         }
 
-        // 5. Stochastic (10% weight)
+        // Stochastic (10%)
         if (current.stochK < 20 && prev.stochK <= 20 && current.stochK > prev.stochK) {
             bullishScore += 10;
             confidence += 10;
@@ -296,27 +259,8 @@ class SignalAnalyzer {
             bearishScore += 10;
             confidence += 10;
             reasons.push('Stochastic bearish divergence');
-        } else if (current.stochK < 30) {
-            bullishScore += 5;
-            confidence += 5;
-            reasons.push('Stochastic oversold');
-        } else if (current.stochK > 70) {
-            bearishScore += 5;
-            confidence += 5;
-            reasons.push('Stochastic overbought');
         }
 
-        // 6. Volume confirmation (bonus)
-        if (current.volumeRatio > 1.5) {
-            confidence += 5;
-            if (bullishScore > bearishScore) {
-                reasons.push('Volume spike confirms bullish move');
-            } else if (bearishScore > bullishScore) {
-                reasons.push('Volume spike confirms bearish move');
-            }
-        }
-
-        // Determine final direction
         let direction = 'NEUTRAL';
         if (bullishScore > bearishScore && bullishScore >= 35) {
             direction = 'CALL';
@@ -326,49 +270,27 @@ class SignalAnalyzer {
             confidence = Math.max(40, confidence - 20);
         }
 
-        // Cap confidence between 0-98
         confidence = Math.min(98, Math.max(0, confidence));
-        
-        // Bonus confidence for strong signals
-        if (direction === 'CALL' && bullishScore > 70) {
-            confidence = Math.min(98, confidence + 5);
-        }
-        if (direction === 'PUT' && bearishScore > 70) {
-            confidence = Math.min(98, confidence + 5);
-        }
 
         if (direction !== 'NEUTRAL' && confidence >= minConfidence) {
             return { direction, confidence, reasons: reasons.slice(0, 5) };
         }
-
         return null;
     }
 
     async checkMultiTimeframe(pair) {
         const timeframes = ['1m', '5m', '15m'];
         const signals = [];
-        
         for (const tf of timeframes) {
             try {
                 const result = await this.analyzePair(pair, tf, false);
-                if (result && result.direction) {
-                    signals.push(result.direction);
-                }
-            } catch (error) {
-                console.error(`Multi-timeframe error for ${pair.name} on ${tf}:`, error.message);
-            }
-            // Small delay to avoid rate limiting
+                if (result && result.direction) signals.push(result.direction);
+            } catch (error) {}
             await new Promise(resolve => setTimeout(resolve, 200));
         }
-        
-        if (signals.length >= 2) {
-            const allSame = signals.every(s => s === signals[0]);
-            return {
-                agreement: signals.length,
-                direction: allSame ? signals[0] : null
-            };
+        if (signals.length >= 2 && signals.every(s => s === signals[0])) {
+            return { agreement: signals.length, direction: signals[0] };
         }
-        
         return null;
     }
 }
