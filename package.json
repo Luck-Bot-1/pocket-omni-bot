@@ -1,6 +1,3 @@
-git add package.json
-git commit -m "Added socket.io-client"
-git push origin main
 {
   "name": "pocket-omni-bot",
   "version": "4.7.0",
@@ -20,38 +17,5 @@ git push origin main
   },
   "engines": {
     "node": ">=18.0.0"
-  }
-}
-  "keywords": [
-    "binary-options",
-    "trading-bot",
-    "forex-signals",
-    "crypto-signals",
-    "telegram-bot",
-    "pocket-option",
-    "trading-strategy"
-  ],
-  "author": "Elite Trading Systems",
-  "license": "MIT",
-  "dependencies": {
-    "telegraf": "^4.15.3",
-    "axios": "^1.6.5",
-    "yahoo-finance2": "^2.11.3",
-    "ccxt": "^4.2.20",
-    "technicalindicators": "^3.1.0",
-    "node-cron": "^3.0.3",
-    "dotenv": "^16.3.1",
-    "moment": "^2.29.4"
-  },
-  "devDependencies": {
-    "nodemon": "^3.0.2"
-  },
-  "engines": {
-    "node": ">=18.0.0",
-    "npm": ">=9.0.0"
-  },
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/Luck-Bot-1/pocket-omni-bot"
   }
 }
