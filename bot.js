@@ -125,7 +125,7 @@ function newsCheck() {
 
 // ── Helpers ────────────────────────────────────────────────────
 const auth    = m => m.chat.id.toString() === CHAT_ID.toString();
-const send    = (t, x={}) => bot.sendMessage(CHAT_ID, t, { parse_mode:'HTML', ...x }).catch(e => console.error('Send error:', e.message));
+const send = (t, x={}) => bot.sendMessage(CHAT_ID, t, x).catch(e => console.error('Send error:', e.message));
 const delay   = ms => new Promise(r => setTimeout(r, ms));
 const gmt6    = () => new Date(Date.now()+6*3600000).toISOString().slice(11,16);
 const confBar = p => '█'.repeat(Math.round(p/10)) + '░'.repeat(10-Math.round(p/10));
@@ -221,14 +221,49 @@ async function scanPair(pair) {
   await sendSignal(sig, session, newsWarn);
 }
 
-// ── Send signal card ───────────────────────────────────────────
 async function sendSignal(sig, session, newsWarn='') {
   const de   = sig.direction==='CALL' ? '🟢⬆️' : '🔴⬇️';
   const tier = sig.payout>=92 ? '💎' : sig.payout>=88 ? '🥇' : '🥈';
   const live = sig.cat==='LIVE' ? ' ⭐ LIVE' : '';
-  const div  = sig.divergence && sig.divergence!=='NONE' ? `\n🔥 <b>DIVERGENCE:</b> ${sig.divergence}` : '';
+  const div  = sig.divergence && sig.divergence!=='NONE' ? `\n🔥 DIVERGENCE: ${sig.divergence}` : '';
   const ps   = getPairStat(sig.symbol);
   const wr   = pct(ps.wins, ps.losses);
+
+  // Strip all HTML-unsafe characters from every value
+  const clean = v => String(v||'?').replace(/[<>&"']/g, '');
+
+  const reasonLines = (sig.reasons||[]).slice(0,5).map(r => `  • ${clean(r)}`).join('\n');
+  const warnLines   = (sig.warnings||[]).length
+    ? '\n\n⚠️ Caution:\n' + (sig.warnings||[]).slice(0,2).map(w => `  • ${clean(w)}`).join('\n')
+    : '';
+
+  const msg =
+    `${de} ${sig.direction}${live} ${tier}\n` +
+    `━━━━━━━━━━━━━━━━━━━━\n` +
+    `📊 ${clean(sig.symbol)}\n` +
+    `💰 Payout: +${sig.payout}%  ⏱ Expiry: ${expiry}MIN\n` +
+    `🎯 Confidence: ${sig.confidence}%\n` +
+    `[${confBar(sig.confidence)}]\n\n` +
+    `📈 RSI: ${clean(sig.rsi)}  Stoch: ${clean(sig.stochK)}\n` +
+    `MACD: ${clean(sig.macd)}  ADX: ${clean(sig.adx)}\n` +
+    `HTF Bias: ${clean(sig.htfBias)}${div}\n\n` +
+    `✅ Confluence (${clean(sig.indicators)}):\n` +
+    reasonLines +
+    warnLines +
+    `\n\n📅 ${clean(session.name||'OTC Session')}` +
+    `${newsWarn}\n` +
+    `💵 Stake: $${stake} → Win: +$${(stake*sig.payout/100).toFixed(2)} | Loss: -$${stake}\n` +
+    `📌 Your record: ${ps.wins}W/${ps.losses}L${ps.wins+ps.losses>0?` (${wr}% WR)`:''}\n\n` +
+    `⚠️ Verify payout on Pocket Option before entering`;
+
+  await bot.sendMessage(CHAT_ID, msg, {
+    reply_markup:{ inline_keyboard:[[
+      { text:'✅ WIN',  callback_data:`W_${sig.symbol}` },
+      { text:'❌ LOSS', callback_data:`L_${sig.symbol}` },
+      { text:'⏭ SKIP', callback_data:`K_${sig.symbol}` },
+    ]]}
+  }).catch(e => console.error('Signal send error:', e.message));
+}
 
 // REPLACE WITH:
   // Sanitize all values — escape < and > to prevent Telegram HTML parse errors
