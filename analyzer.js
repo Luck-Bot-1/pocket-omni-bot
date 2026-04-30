@@ -1,5 +1,5 @@
 const indicators = require('technicalindicators');
-const priceFetcher = require('./pricefetcher');
+const priceFetcher = require('./pricefetcher.js'); // ✅ CORRECT
 
 class SignalAnalyzer {
     constructor() {
