@@ -1,173 +1,199 @@
-// ═══════════════════════════════════════════════════════════════
-// OMNI PRICE FETCHER v2.1 — Twelve Data API (Rate-Limited Fix)
-// Max 6 calls/min — safe under free tier limit of 8/min
-// OTC pairs skip HTF fetch (saves 50% of API credits)
-// ═══════════════════════════════════════════════════════════════
-const fetch = require('node-fetch');
-const API_KEY = process.env.API_KEY;
-const BASE_URL = 'https://api.twelvedata.com';
+const { io } = require('socket.io-client');
 
-const SYMBOL_MAP = {
-  'EUR/USD': 'EUR/USD', 'GBP/USD': 'GBP/USD', 'USD/JPY': 'USD/JPY',
-  'USD/CHF': 'USD/CHF', 'USD/CAD': 'USD/CAD', 'EUR/GBP': 'EUR/GBP',
-  'AUD/CAD': 'AUD/CAD', 'AUD/CHF': 'AUD/CHF', 'CHF/JPY': 'CHF/JPY',
-  'EUR/JPY': 'EUR/JPY', 'GBP/JPY': 'GBP/JPY', 'GBP/CAD': 'GBP/CAD',
-  'EUR/USD OTC': 'EUR/USD', 'GBP/USD OTC': 'GBP/USD',
-  'AUD/USD OTC': 'AUD/USD', 'AUD/CHF OTC': 'AUD/CHF',
-  'EUR/GBP OTC': 'EUR/GBP', 'EUR/JPY OTC': 'EUR/JPY',
-  'GBP/JPY OTC': 'GBP/JPY', 'GBP/AUD OTC': 'GBP/AUD',
-  'NZD/USD OTC': 'NZD/USD', 'USD/JPY OTC': 'USD/JPY',
-  'AUD/JPY OTC': 'AUD/JPY', 'AUD/NZD OTC': 'AUD/NZD',
-  'NZD/JPY OTC': 'NZD/JPY', 'USD/CAD OTC': 'USD/CAD',
-  'USD/CHF OTC': 'USD/CHF', 'USD/SGD OTC': 'USD/SGD',
-  'USD/MYR OTC': 'USD/MYR', 'USD/INR OTC': 'USD/INR',
-  'USD/RUB OTC': 'USD/RUB', 'USD/COP OTC': 'USD/COP',
-  'USD/IDR OTC': 'USD/IDR', 'ZAR/USD OTC': 'USD/ZAR',
-  'USD/ARS OTC': 'USD/ARS', 'NGN/USD OTC': 'USD/NGN',
-  'QAR/CNY OTC': 'USD/CNY', 'SAR/CNY OTC': 'USD/CNY',
-  'AED/CNY OTC': 'USD/CNY', 'TND/USD OTC': 'USD/TND',
-  'BHD/CNY OTC': 'USD/BHD', 'KES/USD OTC': 'USD/KES',
-  'BTC/USD OTC': 'BTC/USD', 'ETH/USD OTC': 'ETH/USD',
-  'LTC/USD OTC': 'LTC/USD', 'XRP/USD OTC': 'XRP/USD',
-  'BNB/USD OTC': 'BNB/USD', 'SOL/USD OTC': 'SOL/USD',
-  'XAU/USD OTC': 'XAU/USD', 'XAG/USD OTC': 'XAG/USD',
-  'WTI/USD OTC': 'WTI/USD',
-};
-
-const INTERVAL_MAP = {
-  '1min': '1min', '5min': '5min', '15min': '15min', '30min': '30min',
-};
-
-// ── Strict Rate Limiter ────────────────────────────────────────
-// 10s between calls = max 6 calls/min (free tier limit = 8/min)
-const queue = [];
-let processing = false;
-
-function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
-
-async function rateLimitedFetch(url) {
-  return new Promise((resolve, reject) => {
-    queue.push({ url, resolve, reject });
-    if (!processing) processQueue();
-  });
-}
-
-async function processQueue() {
-  processing = true;
-  while (queue.length > 0) {
-    const { url, resolve, reject } = queue.shift();
-    try {
-      const res = await fetch(url);
-      const data = await res.json();
-
-      // Detect rate limit hit and wait out the minute
-      if (data && data.status === 'error' && data.message && data.message.includes('run out of API credits')) {
-        console.log('⚠️ Rate limit hit — waiting 65 seconds before retrying...');
-        await sleep(65000);
-        // Re-queue this request
-        queue.unshift({ url, resolve, reject });
-        continue;
-      }
-
-      resolve(data);
-    } catch (e) {
-      reject(e);
-    }
-    // Always wait 10s between calls
-    if (queue.length > 0) await sleep(10000);
-  }
-  processing = false;
-}
-
-// ── Fetch candle data ──────────────────────────────────────────
-async function fetchPriceData(displaySymbol, interval = '15min') {
-  try {
-    const symbol = SYMBOL_MAP[displaySymbol];
-    if (!symbol) return null;
-
-    const isOTC = displaySymbol.includes('OTC');
-    const tf = INTERVAL_MAP[interval] || '15min';
-    const url = `${BASE_URL}/time_series?symbol=${symbol}&interval=${tf}&outputsize=60&apikey=${API_KEY}`;
-
-    const data = await rateLimitedFetch(url);
-
-    if (!data || data.status === 'error' || !data.values || data.values.length < 30) {
-      console.log(`No data for ${displaySymbol}:`, data?.message || 'empty');
-      return null;
+class PriceFetcher {
+    constructor() {
+        this.socket = null;
+        this.isConnected = false;
+        this.cache = new Map();
+        this.cacheTTL = 30000;
+        this.pendingRequests = new Map();
+        this.ssid = process.env.PO_SSID || null;
+        this.isDemo = process.env.PO_DEMO === 'true' || true;
     }
 
-    const candles = data.values.reverse();
-    const opens   = candles.map(c => parseFloat(c.open));
-    const highs   = candles.map(c => parseFloat(c.high));
-    const lows    = candles.map(c => parseFloat(c.low));
-    const closes  = candles.map(c => parseFloat(c.close));
-    const volumes = candles.map(c => parseFloat(c.volume || 0));
+    async connect() {
+        if (this.isConnected) return true;
 
-    const ltf = { opens, highs, lows, closes, volumes, isSynthetic: isOTC };
+        return new Promise((resolve, reject) => {
+            const socketUrl = 'wss://ws1.pocketoption.com/socket.io/?EIO=4&transport=websocket';
+            
+            this.socket = io(socketUrl, {
+                transports: ['websocket'],
+                reconnection: true,
+                reconnectionAttempts: 5
+            });
 
-    // ── HTF: ONLY fetch for LIVE pairs (saves 50% API credits on OTC scans)
-    let htf = null;
-    if (!isOTC) {
-      try {
-        const htfUrl = `${BASE_URL}/time_series?symbol=${symbol}&interval=1h&outputsize=30&apikey=${API_KEY}`;
-        const htfData = await rateLimitedFetch(htfUrl);
-        if (htfData && htfData.values && htfData.values.length >= 26) {
-          const hc = htfData.values.reverse();
-          htf = { closes: hc.map(c => parseFloat(c.close)) };
+            this.socket.on('connect', () => {
+                console.log('✅ Connected to Pocket Option');
+                this.isConnected = true;
+                if (this.ssid) this.authenticate();
+                resolve(true);
+            });
+
+            this.socket.on('connect_error', (error) => {
+                console.error('❌ Connection error:', error);
+                reject(error);
+            });
+
+            this.socket.on('message', (data) => {
+                this.handleMessage(data);
+            });
+        });
+    }
+
+    authenticate() {
+        if (!this.socket || !this.ssid) return;
+        
+        // If SSID already includes the full 42["auth",...] payload, use it directly
+        let authMessage = this.ssid;
+        if (!authMessage.startsWith('42["auth"')) {
+            authMessage = `42["auth",${JSON.stringify({ session: this.ssid, isDemo: this.isDemo ? 1 : 0, platform: 2 })}]`;
         }
-      } catch (e) {
-        // HTF optional — continue without it
-      }
+        
+        this.socket.emit('message', authMessage);
+        console.log('🔐 Authenticated with Pocket Option');
     }
 
-    return { ltf, htf };
+    handleMessage(data) {
+        try {
+            const parsed = JSON.parse(data);
+            
+            if (Array.isArray(parsed) && parsed[0] === 'price-update') {
+                const priceData = parsed[1];
+                const symbol = priceData.asset;
+                const price = priceData.price;
+                
+                if (symbol) {
+                    this.cache.set(`price_${symbol}`, {
+                        price: price,
+                        timestamp: Date.now(),
+                        bid: priceData.bid,
+                        ask: priceData.ask
+                    });
+                }
+            }
+            
+            if (Array.isArray(parsed) && parsed[0] === 'candles') {
+                const requestId = parsed[1]?.requestId;
+                const candles = parsed[1]?.data;
+                
+                if (requestId && this.pendingRequests.has(requestId)) {
+                    const resolve = this.pendingRequests.get(requestId);
+                    resolve(candles);
+                    this.pendingRequests.delete(requestId);
+                }
+            }
+        } catch (error) {
+            // Not JSON, ignore
+        }
+    }
 
-  } catch (e) {
-    console.error(`fetchPriceData error ${displaySymbol}:`, e.message);
-    return null;
-  }
+    async fetchOHLCV(symbol, interval = '60', limit = 200) {
+        // Ensure _otc suffix
+        let otcSymbol = symbol;
+        if (!symbol.toLowerCase().includes('_otc')) {
+            otcSymbol = `${symbol}_otc`;
+        }
+        
+        const cacheKey = `${otcSymbol}_${interval}_${limit}`;
+        const cached = this.cache.get(cacheKey);
+        
+        if (cached && (Date.now() - cached.timestamp) < this.cacheTTL) {
+            return cached.data;
+        }
+
+        if (!this.isConnected) {
+            await this.connect();
+        }
+
+        return new Promise((resolve, reject) => {
+            const requestId = `candles_${Date.now()}_${Math.random()}`;
+            this.pendingRequests.set(requestId, resolve);
+            
+            setTimeout(() => {
+                if (this.pendingRequests.has(requestId)) {
+                    this.pendingRequests.delete(requestId);
+                    reject(new Error(`Timeout for ${otcSymbol}`));
+                }
+            }, 10000);
+            
+            const requestMessage = JSON.stringify([
+                "candles",
+                {
+                    asset: otcSymbol,
+                    interval: parseInt(interval),
+                    period: limit,
+                    requestId: requestId
+                }
+            ]);
+            
+            this.socket?.emit('message', requestMessage);
+        }).then(candles => {
+            const formattedCandles = candles.map(candle => ({
+                time: candle.time,
+                open: candle.open,
+                high: candle.high,
+                low: candle.low,
+                close: candle.close,
+                volume: candle.volume || 0
+            }));
+            
+            this.cache.set(cacheKey, {
+                data: formattedCandles,
+                timestamp: Date.now()
+            });
+            
+            return formattedCandles;
+        }).catch(error => {
+            console.error(`Error fetching ${otcSymbol}:`, error.message);
+            return null;
+        });
+    }
+
+    async fetchCurrentPrice(symbol) {
+        let otcSymbol = symbol;
+        if (!symbol.toLowerCase().includes('_otc')) {
+            otcSymbol = `${symbol}_otc`;
+        }
+        
+        const cached = this.cache.get(`price_${otcSymbol}`);
+        if (cached && (Date.now() - cached.timestamp) < 5000) {
+            return cached.price;
+        }
+        
+        if (!this.isConnected) {
+            await this.connect();
+        }
+        
+        const subscribeMessage = JSON.stringify([
+            "subscribe",
+            { asset: otcSymbol }
+        ]);
+        
+        this.socket?.emit('message', subscribeMessage);
+        
+        return new Promise((resolve) => {
+            const checkCache = setInterval(() => {
+                const cachedPrice = this.cache.get(`price_${otcSymbol}`);
+                if (cachedPrice && (Date.now() - cachedPrice.timestamp) < 10000) {
+                    clearInterval(checkCache);
+                    resolve(cachedPrice.price);
+                }
+            }, 100);
+            
+            setTimeout(() => {
+                clearInterval(checkCache);
+                resolve(null);
+            }, 5000);
+        });
+    }
+
+    disconnect() {
+        if (this.socket) {
+            this.socket.disconnect();
+            this.isConnected = false;
+        }
+    }
 }
 
-// ── Fetch historical data for backtest ────────────────────────
-async function fetchHistoricalData(displaySymbol, interval = '15min', outputsize = 200) {
-  try {
-    const symbol = SYMBOL_MAP[displaySymbol];
-    if (!symbol) return null;
-
-    const tf = INTERVAL_MAP[interval] || '15min';
-    const url = `${BASE_URL}/time_series?symbol=${symbol}&interval=${tf}&outputsize=${outputsize}&apikey=${API_KEY}`;
-
-    const data = await rateLimitedFetch(url);
-    if (!data || data.status === 'error' || !data.values) return null;
-
-    const candles = data.values.reverse();
-    return {
-      opens:   candles.map(c => parseFloat(c.open)),
-      highs:   candles.map(c => parseFloat(c.high)),
-      lows:    candles.map(c => parseFloat(c.low)),
-      closes:  candles.map(c => parseFloat(c.close)),
-      volumes: candles.map(c => parseFloat(c.volume || 0)),
-    };
-  } catch (e) {
-    console.error(`fetchHistoricalData error:`, e.message);
-    return null;
-  }
-}
-
-// ── News blackout ─────────────────────────────────────────────
-function isNewsBlackout() {
-  const now = new Date();
-  const h = now.getUTCHours(), m = now.getUTCMinutes(), d = now.getUTCDay();
-  const min = h * 60 + m;
-  const windows = [
-    { s: 8*60+15,  e: 9*60+15  },
-    { s: 13*60+15, e: 14*60+15 },
-    { s: 15*60+45, e: 16*60+30 },
-    { s: 18*60+45, e: 19*60+30 },
-    ...(d===5 ? [{ s: 13*60+15, e: 14*60+30 }] : []),
-    ...(d===3 ? [{ s: 18*60+45, e: 20*60    }] : []),
-  ];
-  return windows.some(w => min >= w.s - 15 && min <= w.e);
-}
-
-module.exports = { fetchPriceData, fetchHistoricalData, isNewsBlackout };
+module.exports = new PriceFetcher();
