@@ -10,7 +10,6 @@ class SignalAnalyzer {
         const highs = ohlcv.map(c => c.high);
         const lows = ohlcv.map(c => c.low);
 
-        // Calculate indicators
         const rsi = indicators.RSI.calculate({ values: closes, period: 7 });
         const macd = indicators.MACD.calculate({ values: closes, fastPeriod: 12, slowPeriod: 26, signalPeriod: 9 });
         const ema9 = indicators.EMA.calculate({ values: closes, period: 9 });
@@ -41,43 +40,49 @@ class SignalAnalyzer {
 
         let score = 0, reasons = [], direction = 'NEUTRAL';
 
-        // RSI
+        // RSI (max 30)
         if (cur.rsi < 30) { score += 30; reasons.push(`RSI oversold (${cur.rsi.toFixed(1)})`); direction = 'CALL'; }
         else if (cur.rsi > 70) { score += 30; reasons.push(`RSI overbought (${cur.rsi.toFixed(1)})`); direction = 'PUT'; }
-        else if (cur.rsi < 40) { score += 15; reasons.push(`RSI rising (${cur.rsi.toFixed(1)})`); direction = 'CALL'; }
-        else if (cur.rsi > 60) { score += 15; reasons.push(`RSI falling (${cur.rsi.toFixed(1)})`); direction = 'PUT'; }
+        else if (cur.rsi < 40) { score += 20; reasons.push(`RSI rising (${cur.rsi.toFixed(1)})`); direction = 'CALL'; }
+        else if (cur.rsi > 60) { score += 20; reasons.push(`RSI falling (${cur.rsi.toFixed(1)})`); direction = 'PUT'; }
+        else { score += 10; }
 
-        // MACD
+        // MACD (max 25)
         const macdBull = cur.macd > cur.signal && prev.macd <= prev.signal;
         const macdBear = cur.macd < cur.signal && prev.macd >= prev.signal;
-        if (macdBull) { score += 25; reasons.push('MACD bullish cross'); direction = 'CALL'; }
-        else if (macdBear) { score += 25; reasons.push('MACD bearish cross'); direction = 'PUT'; }
-        else if (cur.macd > cur.signal) { score += 12; reasons.push('MACD above signal'); if(direction === 'NEUTRAL') direction = 'CALL'; }
-        else { score += 12; reasons.push('MACD below signal'); if(direction === 'NEUTRAL') direction = 'PUT'; }
+        if (macdBull) { score += 25; reasons.push('MACD bullish cross'); if(direction !== 'PUT') direction = 'CALL'; }
+        else if (macdBear) { score += 25; reasons.push('MACD bearish cross'); if(direction !== 'CALL') direction = 'PUT'; }
+        else if (cur.macd > cur.signal) { score += 15; reasons.push('MACD above signal'); if(direction === 'NEUTRAL') direction = 'CALL'; }
+        else { score += 15; reasons.push('MACD below signal'); if(direction === 'NEUTRAL') direction = 'PUT'; }
 
-        // EMA cross
+        // EMA cross (max 20)
         if (cur.ema9 > cur.ema21 && prev.ema9 <= prev.ema21) { score += 20; reasons.push('EMA9 crossed above EMA21'); direction = 'CALL'; }
         else if (cur.ema9 < cur.ema21 && prev.ema9 >= prev.ema21) { score += 20; reasons.push('EMA9 crossed below EMA21'); direction = 'PUT'; }
-        else if (cur.ema9 > cur.ema21) { score += 10; reasons.push('EMA9 above EMA21'); if(direction === 'NEUTRAL') direction = 'CALL'; }
-        else { score += 10; reasons.push('EMA9 below EMA21'); if(direction === 'NEUTRAL') direction = 'PUT'; }
+        else if (cur.ema9 > cur.ema21) { score += 12; reasons.push('EMA9 above EMA21'); if(direction === 'NEUTRAL') direction = 'CALL'; }
+        else { score += 12; reasons.push('EMA9 below EMA21'); if(direction === 'NEUTRAL') direction = 'PUT'; }
 
-        // ADX
+        // ADX (max 15)
         if (cur.adx > 25) {
-            score += 15; reasons.push(`Strong trend ADX ${cur.adx.toFixed(1)}`);
+            score += 15; reasons.push(`Strong trend (ADX ${cur.adx.toFixed(1)})`);
             if (cur.plusDI > cur.minusDI) { if(direction !== 'PUT') direction = 'CALL'; }
             else { if(direction !== 'CALL') direction = 'PUT'; }
-        }
+        } else if (cur.adx > 20) { score += 8; reasons.push(`Developing trend (ADX ${cur.adx.toFixed(1)})`); }
 
-        // Stochastic
+        // Stochastic (max 10)
         if (cur.stochK < 20) { score += 10; reasons.push('Stochastic oversold'); if(direction !== 'PUT') direction = 'CALL'; }
         else if (cur.stochK > 80) { score += 10; reasons.push('Stochastic overbought'); if(direction !== 'CALL') direction = 'PUT'; }
 
         if (direction === 'NEUTRAL') direction = cur.rsi < 50 ? 'CALL' : 'PUT';
-        let confidence = Math.min(98, Math.max(70, score + (cur.adx > 25 ? 5 : 0)));
-        if (direction === 'CALL' && cur.rsi > 70) confidence -= 10;
-        if (direction === 'PUT' && cur.rsi < 30) confidence -= 10;
 
-        // Prepare last 40 candles for chart
+        // Confidence: base 60 + (score / 2) → range 60–98
+        let confidence = Math.min(98, Math.max(70, 60 + Math.floor(score / 2)));
+        // Extra bonus for strong ADX
+        if (cur.adx > 25) confidence = Math.min(98, confidence + 5);
+        // Penalty if RSI contradicts direction
+        if (direction === 'CALL' && cur.rsi > 70) confidence = Math.max(70, confidence - 15);
+        if (direction === 'PUT' && cur.rsi < 30) confidence = Math.max(70, confidence - 15);
+
+        // Prepare chart data
         const lastCandles = ohlcv.slice(-40);
         const closesLast = lastCandles.map(c => c.close);
         const ema9Values = this.calculateEMA(closesLast, 9);
@@ -111,7 +116,7 @@ class SignalAnalyzer {
 
     getFallbackSignal(pair, timeframe) {
         const isCall = Math.random() > 0.5;
-        // Generate mock candles for chart
+        const confidence = 75 + Math.floor(Math.random() * 20);
         const mockCandles = [];
         let price = 1.1000;
         for (let i = 0; i < 40; i++) {
@@ -131,7 +136,7 @@ class SignalAnalyzer {
         return {
             pair,
             direction: isCall ? 'CALL' : 'PUT',
-            confidence: 75 + Math.floor(Math.random() * 20),
+            confidence,
             reasons: ['Technical indicators signal', 'Market momentum', 'Trend confirmation'],
             rsi: isCall ? 35 : 65,
             adx: 28,
