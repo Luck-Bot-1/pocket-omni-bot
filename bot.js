@@ -2,7 +2,6 @@ require('dotenv').config();
 const { Telegraf, Markup } = require('telegraf');
 const analyzer = require('./analyzer');
 const pairsConfig = require('./pairs.json');
-const { generateChart } = require('./chartGenerator');
 const fs = require('fs');
 const path = require('path');
 
@@ -109,16 +108,12 @@ bot.action(/tf_(.+)_(.+)/, async (ctx) => {
         if (!signal) throw new Error('No signal');
 
         const dirEmoji = signal.direction === 'CALL' ? '📈' : '📉';
+        const dirColor = signal.direction === 'CALL' ? '🟢' : '🔴';
         const confEmoji = signal.confidence >= 85 ? '🟢' : (signal.confidence >= 75 ? '🟡' : '🔴');
         const reasons = signal.reasons.slice(0,3).map(r => `• ${r}`).join('\n');
-        const caption = `🔔 *SIGNAL: ${pairName} (${tf})*\n${dirEmoji} ${signal.direction} | ${confEmoji} ${signal.confidence}%\n📊 RSI:${signal.rsi} ADX:${signal.adx}\n💡 *Reasons:*\n${reasons}\n\n⏱️ Expiry: ${tf==='1m'?'3 min':tf==='5m'?'10 min':'1 hour'}\n📈 *Win rate:* ${getWinRate()}%`;
+        const caption = `🔔 *SIGNAL: ${pairName} (${tf})*\n${dirEmoji} ${signal.direction} | ${dirColor} ${signal.confidence}%\n📊 RSI:${signal.rsi} ADX:${signal.adx}\n💡 *Reasons:*\n${reasons}\n\n⏱️ Expiry: ${tf==='1m'?'3 min':tf==='5m'?'10 min':'1 hour'}\n📈 *Win rate:* ${getWinRate()}%`;
 
-        const chartUrl = generateChart(pairName, tf, signal.candles, signal, signal.ema9, signal.ema21);
-        if (chartUrl) {
-            await ctx.replyWithPhoto({ url: chartUrl }, { caption });
-        } else {
-            await ctx.replyWithMarkdown(caption);
-        }
+        await ctx.replyWithMarkdown(caption);
 
         const resultKB = Markup.inlineKeyboard([
             [Markup.button.callback('✅ WIN', `win_${pairName}_${signal.direction}`)],
@@ -152,18 +147,15 @@ bot.action('skip', async (ctx) => {
     await ctx.answerCbQuery('Skipped');
     await ctx.editMessageText('Skipped. Use /start for new analysis.');
 });
-
 bot.action('back_cats', async (ctx) => {
     await ctx.answerCbQuery();
     await ctx.editMessageText('Select asset category:', await categoryKeyboard());
 });
-
 bot.action(/back_pairs_(.+)/, async (ctx) => {
     const pair = ctx.match[1];
     await ctx.answerCbQuery();
     await ctx.editMessageText(`📈 *${pair}*\nSelect timeframe:`, timeframeKeyboard(pair));
 });
-
 bot.action('cancel', async (ctx) => {
     await ctx.answerCbQuery();
     await ctx.deleteMessage();
@@ -180,19 +172,17 @@ bot.command('signals', async (ctx) => {
     }
     if (!signals.length) return ctx.reply('No signals now.');
     let msg = '🔥 *TOP SIGNALS*\n';
-    signals.forEach(s => msg += `\n*${s.pair}*: ${s.direction} (${s.confidence}%)\nRSI ${s.rsi} ADX ${s.adx}`);
+    signals.forEach(s => msg += `\n*${s.pair}*: ${s.direction === 'CALL' ? '📈' : '📉'} ${s.direction} (${s.confidence}%)\nRSI ${s.rsi} ADX ${s.adx}`);
     await ctx.replyWithMarkdown(msg);
 });
-
 bot.command('stats', async (ctx) => {
     const trades = loadTrades();
     const wins = trades.filter(t => t.result === 'win').length;
     const losses = trades.filter(t => t.result === 'loss').length;
     await ctx.replyWithMarkdown(`📊 *Trade Stats*\nTotal: ${trades.length}\n✅ Wins: ${wins}\n❌ Losses: ${losses}\n📈 Win rate: ${getWinRate()}%`);
 });
-
 bot.command('backtest', async (ctx) => {
     await ctx.reply('Backtest: Based on last 100 simulated trades, estimated win rate 84%. Use /stats for live tracking.');
 });
 
-bot.launch().then(() => console.log('✅ Bot 4.8 live – charts fixed, emojis correct'));
+bot.launch().then(() => console.log('✅ Bot 4.8 live – text signals only, green/red correct'));
