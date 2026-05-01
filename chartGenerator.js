@@ -38,7 +38,7 @@ function generateChart(pairName, timeframe, candles, signal, ema9, ema21) {
         options: { responsive: true, plugins: { legend: { position: 'top' }, title: { display: true, text: `${pairName} – ${signal.direction} (${signal.confidence}%)` } }, scales: { x: { title: { display: true, text: 'Time' } }, y: { title: { display: true, text: 'Price' } } } }
     };
     const encoded = encodeURIComponent(JSON.stringify(config));
-    return `https://quickchart.io/chart?c=${encoded}&w=800&h=500&bkg=white`;
+    return `https://image-charts.com/chart.js?chs=800x500&cht=js&chd=${encoded}&chan=900000`;
 }
 function calcEMA(values, period) {
     const k = 2 / (period + 1);
