@@ -1,3 +1,6 @@
+// analyzer.js – Calculates RSI, MACD, EMA, ADX on mock data
+// Always returns a signal with confidence 75-95%
+
 const indicators = require('technicalindicators');
 const priceFetcher = require('./pricefetcher');
 
@@ -10,6 +13,7 @@ class SignalAnalyzer {
         const highs = ohlcv.map(c => c.high);
         const lows = ohlcv.map(c => c.low);
 
+        // Calculate indicators
         const rsi = indicators.RSI.calculate({ values: closes, period: 7 });
         const macd = indicators.MACD.calculate({ values: closes, fastPeriod: 12, slowPeriod: 26, signalPeriod: 9 });
         const ema9 = indicators.SMA.calculate({ values: closes, period: 9 });
@@ -64,8 +68,9 @@ class SignalAnalyzer {
         
         // Prepare last 40 candles for chart
         const lastCandles = ohlcv.slice(-40);
-        const ema9Values = this.calculateEMA(lastCandles.map(c => c.close), 9);
-        const ema21Values = this.calculateEMA(lastCandles.map(c => c.close), 21);
+        const closesLast = lastCandles.map(c => c.close);
+        const ema9Values = this.calculateEMA(closesLast, 9);
+        const ema21Values = this.calculateEMA(closesLast, 21);
 
         return {
             pair: pair.name,
