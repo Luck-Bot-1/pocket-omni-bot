@@ -29,10 +29,6 @@ class SignalAnalyzer {
         }
         reasons.push(`RSI: ${Math.round(rsi)}`);
         if (adx > 25) reasons.push(`ADX confirms strong trend (${adx})`);
-        const lastCandles = candles.slice(-30);
-        const lastCloses = lastCandles.map(c => c.close);
-        const ema9 = this.calcEMA(lastCloses, 9);
-        const ema21 = this.calcEMA(lastCloses, 21);
         return {
             pair: pair.name,
             direction: direction,
@@ -40,21 +36,8 @@ class SignalAnalyzer {
             reasons: reasons.slice(0, 4),
             rsi: Math.round(rsi),
             adx: adx,
-            timeframe: timeframe,
-            candles: lastCandles,
-            ema9: ema9,
-            ema21: ema21
+            timeframe: timeframe
         };
-    }
-    calcEMA(values, period) {
-        const k = 2 / (period + 1);
-        let ema = values[0];
-        const result = [ema];
-        for (let i = 1; i < values.length; i++) {
-            ema = values[i] * k + ema * (1 - k);
-            result.push(ema);
-        }
-        return result;
     }
 }
 module.exports = new SignalAnalyzer();
