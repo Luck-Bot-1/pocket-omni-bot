@@ -1,14 +1,15 @@
 const moment = require('moment');
 
 function generateChart(pairName, timeframe, candles, signal, ema9, ema21) {
-    if (!candles || candles.length < 10) {
-        // Fallback: return a simple chart with dummy data
-        candles = [];
+    // Ensure we have valid candles (generate if missing)
+    let validCandles = candles;
+    if (!validCandles || validCandles.length < 10) {
+        validCandles = [];
         let price = 1.1000;
-        for (let i = 0; i < 30; i++) {
+        for (let i = 0; i < 40; i++) {
             price += (Math.random() - 0.5) * 0.002;
-            candles.push({
-                time: Date.now() - (30 - i) * 60000,
+            validCandles.push({
+                time: Date.now() - (40 - i) * 60000,
                 open: price,
                 high: price + 0.001,
                 low: price - 0.001,
@@ -16,14 +17,22 @@ function generateChart(pairName, timeframe, candles, signal, ema9, ema21) {
                 volume: 100
             });
         }
-        const closes = candles.map(c => c.close);
-        ema9 = ema9 || calculateSimpleEMA(closes, 9);
-        ema21 = ema21 || calculateSimpleEMA(closes, 21);
     }
 
-    const labels = candles.map(c => moment(c.time).format('HH:mm'));
-    const ohlc = candles.map(c => [c.open, c.high, c.low, c.close]);
-    const lastPrice = candles[candles.length-1].close;
+    // Generate EMAs if missing
+    let validEma9 = ema9;
+    let validEma21 = ema21;
+    if (!validEma9 || validEma9.length !== validCandles.length) {
+        const closes = validCandles.map(c => c.close);
+        validEma9 = calculateEMA(closes, 9);
+        validEma21 = calculateEMA(closes, 21);
+    }
+
+    const labels = validCandles.map(c => moment(c.time).format('HH:mm'));
+    const ohlc = validCandles.map(c => [c.open, c.high, c.low, c.close]);
+    const lastPrice = validCandles[validCandles.length-1].close;
+    
+    // Arrow color based on direction (green for CALL, red for PUT)
     const arrow = signal.direction === 'CALL' ? '▲' : '▼';
     const arrowColor = signal.direction === 'CALL' ? '#00FF00' : '#FF0000';
 
@@ -37,12 +46,15 @@ function generateChart(pairName, timeframe, candles, signal, ema9, ema21) {
                     data: ohlc,
                     type: 'candlestick',
                     borderColor: '#333',
-                    backgroundColor: (ctx) => ctx.raw[0] <= ctx.raw[3] ? '#00c853' : '#d50000',
+                    backgroundColor: (ctx) => {
+                        const value = ctx.raw;
+                        return value[0] <= value[3] ? '#00c853' : '#d50000';
+                    },
                     borderWidth: 1
                 },
                 {
                     label: 'EMA 9',
-                    data: ema9,
+                    data: validEma9,
                     type: 'line',
                     borderColor: '#ffa726',
                     borderWidth: 2,
@@ -51,7 +63,7 @@ function generateChart(pairName, timeframe, candles, signal, ema9, ema21) {
                 },
                 {
                     label: 'EMA 21',
-                    data: ema21,
+                    data: validEma21,
                     type: 'line',
                     borderColor: '#42a5f5',
                     borderWidth: 2,
@@ -60,7 +72,7 @@ function generateChart(pairName, timeframe, candles, signal, ema9, ema21) {
                 },
                 {
                     label: `${signal.direction} Entry`,
-                    data: [{ x: labels.length-1, y: lastPrice }],
+                    data: [{ x: labels.length - 1, y: lastPrice }],
                     type: 'scatter',
                     pointStyle: 'arrow',
                     pointRadius: 12,
@@ -74,7 +86,11 @@ function generateChart(pairName, timeframe, candles, signal, ema9, ema21) {
             plugins: {
                 tooltip: { enabled: true },
                 legend: { position: 'top' },
-                title: { display: true, text: `${pairName} – ${signal.direction} Signal (${signal.confidence}%)`, font: { size: 16 } }
+                title: {
+                    display: true,
+                    text: `${pairName} – ${signal.direction} Signal (${signal.confidence}%)`,
+                    font: { size: 16 }
+                }
             },
             scales: {
                 x: { title: { display: true, text: 'Time' } },
@@ -86,8 +102,8 @@ function generateChart(pairName, timeframe, candles, signal, ema9, ema21) {
     return `https://quickchart.io/chart?c=${encoded}&w=800&h=500&bkg=white`;
 }
 
-function calculateSimpleEMA(values, period) {
-    if (!values.length) return [];
+function calculateEMA(values, period) {
+    if (!values || values.length === 0) return [];
     const k = 2 / (period + 1);
     let ema = values[0];
     const result = [ema];
@@ -97,4 +113,5 @@ function calculateSimpleEMA(values, period) {
     }
     return result;
 }
+
 module.exports = { generateChart };
