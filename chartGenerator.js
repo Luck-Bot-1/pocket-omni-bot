@@ -1,8 +1,8 @@
 const moment = require('moment');
 
 function generateChart(pairName, timeframe, candles, signal, ema9, ema21) {
-    // Ensure valid data
     if (!candles || candles.length < 5) {
+        // fallback candles
         candles = [];
         let price = 1.1000;
         for (let i = 0; i < 30; i++) {
@@ -16,20 +16,16 @@ function generateChart(pairName, timeframe, candles, signal, ema9, ema21) {
                 volume: 100
             });
         }
-    }
-    if (!ema9 || ema9.length !== candles.length) {
         const closes = candles.map(c => c.close);
         ema9 = calcEMA(closes, 9);
         ema21 = calcEMA(closes, 21);
     }
-
     const labels = candles.map(c => moment(c.time).format('HH:mm'));
     const ohlc = candles.map(c => [c.open, c.high, c.low, c.close]);
     const lastPrice = candles[candles.length-1].close;
     const arrow = signal.direction === 'CALL' ? '▲' : '▼';
     const arrowColor = signal.direction === 'CALL' ? '00FF00' : 'FF0000';
-
-    const chartConfig = {
+    const config = {
         type: 'candlestick',
         data: {
             labels: labels,
@@ -42,10 +38,9 @@ function generateChart(pairName, timeframe, candles, signal, ema9, ema21) {
         },
         options: { responsive: true, plugins: { legend: { position: 'top' }, title: { display: true, text: `${pairName} – ${signal.direction} (${signal.confidence}%)` } }, scales: { x: { title: { display: true, text: 'Time' } }, y: { title: { display: true, text: 'Price' } } } }
     };
-    const encoded = encodeURIComponent(JSON.stringify(chartConfig));
+    const encoded = encodeURIComponent(JSON.stringify(config));
     return `https://image-charts.com/chart.js?chs=800x500&cht=js&chd=${encoded}&chan=900000`;
 }
-
 function calcEMA(values, period) {
     const k = 2 / (period + 1);
     let ema = values[0];
