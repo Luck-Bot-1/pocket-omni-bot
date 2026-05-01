@@ -13,22 +13,17 @@ function generateChart(pairName, timeframe, candles, signal, ema9, ema21) {
         data: {
             labels: labels,
             datasets: [
-                {
-                    label: `${pairName} (${timeframe})`,
-                    data: ohlc,
-                    type: 'candlestick',
-                    borderColor: '#333',
-                    backgroundColor: (ctx) => ctx.raw[0] <= ctx.raw[3] ? '#00c853' : '#d50000',
-                    borderWidth: 1
-                },
+                { label: `${pairName} (${timeframe})`, data: ohlc, type: 'candlestick', borderColor: '#333',
+                  backgroundColor: (ctx) => ctx.raw[0] <= ctx.raw[3] ? '#00c853' : '#d50000', borderWidth: 1 },
                 { label: 'EMA 9', data: ema9, type: 'line', borderColor: '#ffa726', borderWidth: 2, fill: false, pointRadius: 0 },
                 { label: 'EMA 21', data: ema21, type: 'line', borderColor: '#42a5f5', borderWidth: 2, fill: false, pointRadius: 0 },
-                { label: `${signal.direction} Entry`, data: [{ x: labels.length-1, y: lastPrice }], type: 'scatter', pointStyle: 'arrow', pointRadius: 12, pointBackgroundColor: arrowColor, showLine: false }
+                { label: `${signal.direction} Entry`, data: [{ x: labels.length-1, y: lastPrice }], type: 'scatter',
+                  pointStyle: 'arrow', pointRadius: 12, pointBackgroundColor: arrowColor, showLine: false }
             ]
         },
         options: {
-            responsive: true,
-            plugins: { tooltip: { enabled: true }, legend: { position: 'top' }, title: { display: true, text: `${pairName} – ${signal.direction} Signal (${signal.confidence}%)`, font: { size: 16 } } },
+            responsive: true, plugins: { tooltip: { enabled: true }, legend: { position: 'top' },
+            title: { display: true, text: `${pairName} – ${signal.direction} Signal (${signal.confidence}%)`, font: { size: 16 } } },
             scales: { x: { title: { display: true, text: 'Time' } }, y: { title: { display: true, text: 'Price' } } }
         }
     };
