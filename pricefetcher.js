@@ -1,4 +1,4 @@
-const yahooFinance = require('@yahoo-finance2/api').default;
+const yahooFinance = require('yahoo-finance2').default;
 const { io } = require('socket.io-client');
 
 class PriceFetcher {
@@ -10,7 +10,7 @@ class PriceFetcher {
         this.cache = new Map();
         this.cacheTTL = 30000;
         this.pendingRequests = new Map();
-        this.fallbackMode = !this.ssid; // if no SSID, use mock
+        this.fallbackMode = !this.ssid;
     }
 
     async connectWebSocket() {
@@ -63,7 +63,6 @@ class PriceFetcher {
         }
     }
 
-    // Fallback mock data (to never break the bot)
     generateMock(symbol, limit) {
         const candles = [];
         let price = symbol.includes('USD') ? 1.1000 : 100.00;
