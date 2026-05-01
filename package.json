@@ -1,7 +1,6 @@
 {
   "name": "pocket-omni-bot",
   "version": "4.7.0",
-  "description": "Advanced binary options signal bot - 84% win rate verified",
   "main": "bot.js",
   "scripts": {
     "start": "node bot.js"
@@ -12,7 +11,6 @@
     "socket.io-client": "^4.5.4",
     "technicalindicators": "^3.1.0",
     "axios": "^1.6.5",
-    "node-cron": "^3.0.3",
     "moment": "^2.29.4"
   },
   "engines": {
