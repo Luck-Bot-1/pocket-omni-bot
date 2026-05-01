@@ -1,29 +1,73 @@
 {
   "forex_live": [
-    {"name": "EUR/USD_live", "symbol": "EURUSD=X", "type": "forex", "min_confidence": 75, "active": true},
-    {"name": "GBP/USD_live", "symbol": "GBPUSD=X", "type": "forex", "min_confidence": 75, "active": true},
-    {"name": "USD/JPY_live", "symbol": "USDJPY=X", "type": "forex", "min_confidence": 75, "active": true},
-    {"name": "AUD/USD_live", "symbol": "AUDUSD=X", "type": "forex", "min_confidence": 75, "active": true},
-    {"name": "USD/CAD_live", "symbol": "USDCAD=X", "type": "forex", "min_confidence": 75, "active": true}
+    {"name":"EUR/USD_live","symbol":"EURUSD=X","type":"forex","min_confidence":75,"active":true},
+    {"name":"GBP/USD_live","symbol":"GBPUSD=X","type":"forex","min_confidence":75,"active":true},
+    {"name":"USD/JPY_live","symbol":"USDJPY=X","type":"forex","min_confidence":75,"active":true},
+    {"name":"AUD/USD_live","symbol":"AUDUSD=X","type":"forex","min_confidence":75,"active":true},
+    {"name":"USD/CAD_live","symbol":"USDCAD=X","type":"forex","min_confidence":75,"active":true},
+    {"name":"USD/CHF_live","symbol":"USDCHF=X","type":"forex","min_confidence":75,"active":true},
+    {"name":"NZD/USD_live","symbol":"NZDUSD=X","type":"forex","min_confidence":75,"active":true},
+    {"name":"EUR/GBP_live","symbol":"EURGBP=X","type":"forex","min_confidence":75,"active":true},
+    {"name":"EUR/JPY_live","symbol":"EURJPY=X","type":"forex","min_confidence":75,"active":true},
+    {"name":"GBP/JPY_live","symbol":"GBPJPY=X","type":"forex","min_confidence":75,"active":true},
+    {"name":"AUD/JPY_live","symbol":"AUDJPY=X","type":"forex","min_confidence":75,"active":true},
+    {"name":"CHF/JPY_live","symbol":"CHFJPY=X","type":"forex","min_confidence":75,"active":true},
+    {"name":"EUR/AUD_live","symbol":"EURAUD=X","type":"forex","min_confidence":75,"active":true},
+    {"name":"GBP/AUD_live","symbol":"GBPAUD=X","type":"forex","min_confidence":75,"active":true},
+    {"name":"AUD/CAD_live","symbol":"AUDCAD=X","type":"forex","min_confidence":75,"active":true},
+    {"name":"CAD/CHF_live","symbol":"CADCHF=X","type":"forex","min_confidence":75,"active":true}
   ],
   "crypto_live": [
-    {"name": "BTC/USD_live", "symbol": "BTC-USD", "type": "crypto", "min_confidence": 80, "active": true},
-    {"name": "ETH/USD_live", "symbol": "ETH-USD", "type": "crypto", "min_confidence": 80, "active": true},
-    {"name": "SOL/USD_live", "symbol": "SOL-USD", "type": "crypto", "min_confidence": 78, "active": true}
+    {"name":"BTC/USD_live","symbol":"BTC-USD","type":"crypto","min_confidence":80,"active":true},
+    {"name":"ETH/USD_live","symbol":"ETH-USD","type":"crypto","min_confidence":80,"active":true},
+    {"name":"SOL/USD_live","symbol":"SOL-USD","type":"crypto","min_confidence":78,"active":true},
+    {"name":"XRP/USD_live","symbol":"XRP-USD","type":"crypto","min_confidence":78,"active":true},
+    {"name":"ADA/USD_live","symbol":"ADA-USD","type":"crypto","min_confidence":78,"active":true},
+    {"name":"DOGE/USD_live","symbol":"DOGE-USD","type":"crypto","min_confidence":75,"active":true}
   ],
   "indices_live": [
-    {"name": "SP500_live", "symbol": "^GSPC", "type": "index", "min_confidence": 75, "active": true},
-    {"name": "NAS100_live", "symbol": "^IXIC", "type": "index", "min_confidence": 75, "active": true}
+    {"name":"SP500_live","symbol":"^GSPC","type":"index","min_confidence":75,"active":true},
+    {"name":"NAS100_live","symbol":"^IXIC","type":"index","min_confidence":75,"active":true},
+    {"name":"US30_live","symbol":"^DJI","type":"index","min_confidence":75,"active":true},
+    {"name":"GER40_live","symbol":"^GDAXI","type":"index","min_confidence":75,"active":true},
+    {"name":"UK100_live","symbol":"^FTSE","type":"index","min_confidence":75,"active":true}
   ],
   "commodities_live": [
-    {"name": "XAU/USD_live", "symbol": "GC=F", "type": "commodity", "min_confidence": 78, "active": true}
+    {"name":"XAU/USD_live","symbol":"GC=F","type":"commodity","min_confidence":78,"active":true},
+    {"name":"XAG/USD_live","symbol":"SI=F","type":"commodity","min_confidence":78,"active":true},
+    {"name":"WTI/USD_live","symbol":"CL=F","type":"commodity","min_confidence":75,"active":true}
   ],
   "forex_otc": [
-    {"name": "EUR/USD_otc", "symbol": "EUR/USD_otc", "type": "forex", "min_confidence": 75, "active": true},
-    {"name": "GBP/USD_otc", "symbol": "GBP/USD_otc", "type": "forex", "min_confidence": 75, "active": true}
+    {"name":"EUR/USD_otc","symbol":"EUR/USD_otc","type":"forex","min_confidence":75,"active":true},
+    {"name":"GBP/USD_otc","symbol":"GBP/USD_otc","type":"forex","min_confidence":75,"active":true},
+    {"name":"USD/JPY_otc","symbol":"USD/JPY_otc","type":"forex","min_confidence":75,"active":true},
+    {"name":"AUD/USD_otc","symbol":"AUD/USD_otc","type":"forex","min_confidence":75,"active":true},
+    {"name":"EUR/JPY_otc","symbol":"EUR/JPY_otc","type":"forex","min_confidence":75,"active":true},
+    {"name":"GBP/JPY_otc","symbol":"GBP/JPY_otc","type":"forex","min_confidence":75,"active":true},
+    {"name":"AUD/JPY_otc","symbol":"AUD/JPY_otc","type":"forex","min_confidence":75,"active":true},
+    {"name":"CAD/CHF_otc","symbol":"CAD/CHF_otc","type":"forex","min_confidence":75,"active":true}
   ],
   "crypto_otc": [
-    {"name": "BTC/USD_otc", "symbol": "BTC/USD_otc", "type": "crypto", "min_confidence": 80, "active": true}
+    {"name":"BTC/USD_otc","symbol":"BTC/USD_otc","type":"crypto","min_confidence":80,"active":true},
+    {"name":"ETH/USD_otc","symbol":"ETH/USD_otc","type":"crypto","min_confidence":80,"active":true},
+    {"name":"SOL/USD_otc","symbol":"SOL/USD_otc","type":"crypto","min_confidence":78,"active":true}
+  ],
+  "stocks_otc": [
+    {"name":"Apple_otc","symbol":"AAPL","type":"stock","min_confidence":75,"active":true},
+    {"name":"Amazon_otc","symbol":"AMZN","type":"stock","min_confidence":75,"active":true},
+    {"name":"Microsoft_otc","symbol":"MSFT","type":"stock","min_confidence":75,"active":true},
+    {"name":"Google_otc","symbol":"GOOGL","type":"stock","min_confidence":75,"active":true},
+    {"name":"Tesla_otc","symbol":"TSLA","type":"stock","min_confidence":75,"active":true},
+    {"name":"Facebook_otc","symbol":"META","type":"stock","min_confidence":75,"active":true},
+    {"name":"Netflix_otc","symbol":"NFLX","type":"stock","min_confidence":75,"active":true},
+    {"name":"Intel_otc","symbol":"INTC","type":"stock","min_confidence":75,"active":true},
+    {"name":"Cisco_otc","symbol":"CSCO","type":"stock","min_confidence":75,"active":true},
+    {"name":"Pfizer_otc","symbol":"PFE","type":"stock","min_confidence":75,"active":true},
+    {"name":"Boeing_otc","symbol":"BA","type":"stock","min_confidence":75,"active":true},
+    {"name":"VISA_otc","symbol":"V","type":"stock","min_confidence":75,"active":true},
+    {"name":"McDonald's_otc","symbol":"MCD","type":"stock","min_confidence":75,"active":true},
+    {"name":"FedEx_otc","symbol":"FDX","type":"stock","min_confidence":75,"active":true},
+    {"name":"Alibaba_otc","symbol":"BABA","type":"stock","min_confidence":75,"active":true},
+    {"name":"Twitter_otc","symbol":"TWTR","type":"stock","min_confidence":75,"active":true}
   ]
 }
-
