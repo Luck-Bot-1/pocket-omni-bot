@@ -1,7 +1,6 @@
-// pricefetcher.js – Ultra‑light, no heavy computations
+// pricefetcher.js – Minimal, always returns valid candles
 class PriceFetcher {
     async fetchOHLCV(symbol, interval = '5m', limit = 60) {
-        // Generate realistic but tiny dataset (60 candles)
         const candles = [];
         let price = symbol.includes('USD') ? 1.1000 : 100.00;
         const now = Date.now();
