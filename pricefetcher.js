@@ -1,4 +1,3 @@
-// pricefetcher.js – Minimal, always returns valid candles
 class PriceFetcher {
     async fetchOHLCV(symbol, interval = '5m', limit = 60) {
         const candles = [];
