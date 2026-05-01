@@ -49,3 +49,7 @@ class PriceFetcher {
 }
 
 module.exports = new PriceFetcher();
+class PriceFetcher {
+    async fetchOHLCV() { return []; }
+}
+module.exports = new PriceFetcher();
