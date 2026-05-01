@@ -9,7 +9,7 @@
     "telegraf": "^4.15.3",
     "dotenv": "^16.3.1",
     "socket.io-client": "^4.5.4",
-    "@yahoo-finance2/api": "^2.3.0",
+    "yahoo-finance2": "^2.11.3",
     "technicalindicators": "^3.1.0",
     "axios": "^1.6.5",
     "moment": "^2.29.4"
