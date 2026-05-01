@@ -1,7 +1,7 @@
 const moment = require('moment');
 
 function generateChart(pairName, timeframe, candles, signal, ema9, ema21) {
-    // Ensure we have valid candles (generate if missing)
+    // Ensure valid candles
     let validCandles = candles;
     if (!validCandles || validCandles.length < 10) {
         validCandles = [];
@@ -19,7 +19,7 @@ function generateChart(pairName, timeframe, candles, signal, ema9, ema21) {
         }
     }
 
-    // Generate EMAs if missing
+    // Ensure EMAs match candle length
     let validEma9 = ema9;
     let validEma21 = ema21;
     if (!validEma9 || validEma9.length !== validCandles.length) {
@@ -31,12 +31,11 @@ function generateChart(pairName, timeframe, candles, signal, ema9, ema21) {
     const labels = validCandles.map(c => moment(c.time).format('HH:mm'));
     const ohlc = validCandles.map(c => [c.open, c.high, c.low, c.close]);
     const lastPrice = validCandles[validCandles.length-1].close;
-    
-    // Arrow color based on direction (green for CALL, red for PUT)
     const arrow = signal.direction === 'CALL' ? '▲' : '▼';
-    const arrowColor = signal.direction === 'CALL' ? '#00FF00' : '#FF0000';
+    const arrowColor = signal.direction === 'CALL' ? '00FF00' : 'FF0000';
 
-    const config = {
+    // Build Chart.js config as JSON string for Image-Charts
+    const chartData = {
         type: 'candlestick',
         data: {
             labels: labels,
@@ -46,64 +45,27 @@ function generateChart(pairName, timeframe, candles, signal, ema9, ema21) {
                     data: ohlc,
                     type: 'candlestick',
                     borderColor: '#333',
-                    backgroundColor: (ctx) => {
-                        const value = ctx.raw;
-                        return value[0] <= value[3] ? '#00c853' : '#d50000';
-                    },
+                    backgroundColor: (ctx) => ctx.raw[0] <= ctx.raw[3] ? '#00c853' : '#d50000',
                     borderWidth: 1
                 },
-                {
-                    label: 'EMA 9',
-                    data: validEma9,
-                    type: 'line',
-                    borderColor: '#ffa726',
-                    borderWidth: 2,
-                    fill: false,
-                    pointRadius: 0
-                },
-                {
-                    label: 'EMA 21',
-                    data: validEma21,
-                    type: 'line',
-                    borderColor: '#42a5f5',
-                    borderWidth: 2,
-                    fill: false,
-                    pointRadius: 0
-                },
-                {
-                    label: `${signal.direction} Entry`,
-                    data: [{ x: labels.length - 1, y: lastPrice }],
-                    type: 'scatter',
-                    pointStyle: 'arrow',
-                    pointRadius: 12,
-                    pointBackgroundColor: arrowColor,
-                    showLine: false
-                }
+                { label: 'EMA9', data: validEma9, type: 'line', borderColor: '#ffa726', borderWidth: 2, fill: false, pointRadius: 0 },
+                { label: 'EMA21', data: validEma21, type: 'line', borderColor: '#42a5f5', borderWidth: 2, fill: false, pointRadius: 0 },
+                { label: `${signal.direction} Entry`, data: [{ x: labels.length-1, y: lastPrice }], type: 'scatter', pointStyle: 'arrow', pointRadius: 12, pointBackgroundColor: arrowColor, showLine: false }
             ]
         },
         options: {
             responsive: true,
-            plugins: {
-                tooltip: { enabled: true },
-                legend: { position: 'top' },
-                title: {
-                    display: true,
-                    text: `${pairName} – ${signal.direction} Signal (${signal.confidence}%)`,
-                    font: { size: 16 }
-                }
-            },
-            scales: {
-                x: { title: { display: true, text: 'Time' } },
-                y: { title: { display: true, text: 'Price' } }
-            }
+            plugins: { legend: { position: 'top' }, title: { display: true, text: `${pairName} – ${signal.direction} (${signal.confidence}%)` } },
+            scales: { x: { title: { display: true, text: 'Time' } }, y: { title: { display: true, text: 'Price' } } }
         }
     };
-    const encoded = encodeURIComponent(JSON.stringify(config));
-    return `https://quickchart.io/chart?c=${encoded}&w=800&h=500&bkg=white`;
+    const encoded = encodeURIComponent(JSON.stringify(chartData));
+    // Use Image‑Charts (no regional block, free 1000 requests/day)
+    return `https://image-charts.com/chart.js?chs=800x500&cht=js&chd=${encoded}&chan=900000`;
 }
 
 function calculateEMA(values, period) {
-    if (!values || values.length === 0) return [];
+    if (!values.length) return [];
     const k = 2 / (period + 1);
     let ema = values[0];
     const result = [ema];
@@ -113,5 +75,4 @@ function calculateEMA(values, period) {
     }
     return result;
 }
-
 module.exports = { generateChart };
