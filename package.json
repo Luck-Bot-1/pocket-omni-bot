@@ -1,20 +1,8 @@
-{
-  "name": "pocket-omni-bot",
-  "version": "4.8.0",
-  "main": "bot.js",
-  "scripts": {
-    "start": "node bot.js"
-  },
-  "dependencies": {
-    "telegraf": "^4.15.3",
-    "dotenv": "^16.3.1",
-    "socket.io-client": "^4.5.4",
-    "yahoo-finance2": "^2.11.3",
-    "technicalindicators": "^3.1.0",
-    "axios": "^1.6.5",
-    "moment": "^2.29.4"
-  },
-  "engines": {
-    "node": ">=18.0.0"
-  }
+"dependencies": {
+  "telegraf": "^4.15.3",
+  "dotenv": "^16.3.1",
+  "socket.io-client": "^4.5.4",
+  "yahoo-finance2": "^2.11.3",
+  "technicalindicators": "^3.1.0",
+  "moment": "^2.29.4"
 }
