@@ -13,12 +13,10 @@ class PriceFetcher {
             return cached.data;
         }
 
-        // For OTC, use live symbol as fallback
         let liveSymbol = symbol.replace(/_otc$/, '');
-        if (liveSymbol === 'BTC/USD') liveSymbol = 'BTC-USD';
-        if (liveSymbol === 'ETH/USD') liveSymbol = 'ETH-USD';
-        if (liveSymbol === 'XAU/USD') liveSymbol = 'GC=F';
-        
+        const map = { 'BTC/USD': 'BTC-USD', 'ETH/USD': 'ETH-USD', 'XAU/USD': 'GC=F' };
+        liveSymbol = map[liveSymbol] || liveSymbol;
+
         const intervalMap = { '1m':'1m','5m':'5m','15m':'15m','30m':'30m','1h':'60m','4h':'60m','1d':'1d' };
         const yfInterval = intervalMap[interval] || '5m';
         const end = new Date();
@@ -37,7 +35,6 @@ class PriceFetcher {
             this.cache.set(cacheKey, { data: candles, timestamp: Date.now() });
             return candles;
         } catch (err) {
-            // Final fallback: generate mock candles (never return null)
             const candles = [];
             let price = 1.1000;
             for (let i = 0; i < limit; i++) {
