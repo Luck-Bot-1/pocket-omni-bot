@@ -1,8 +1,3 @@
-
-Armanul Azim <armanulazim@gmail.com>
-10:57 PM (0 minutes ago)
-to me
-
 const priceFetcher = require('./pricefetcher');
 
 class SignalAnalyzer {
