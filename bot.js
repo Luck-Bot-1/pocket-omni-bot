@@ -185,4 +185,6 @@ bot.command('backtest', async (ctx) => {
     await ctx.reply('Backtest: Based on last 100 simulated trades, estimated win rate 84%. Use /stats for live tracking.');
 });
 
-bot.launch().then(() => console.log('✅ Bot 4.8 live – text signals only, green/red correct'));
+setTimeout(() => {
+    bot.launch().catch(console.error);
+}, 3000);
