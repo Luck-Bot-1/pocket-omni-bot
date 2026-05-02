@@ -186,5 +186,5 @@ bot.command('backtest', async (ctx) => {
 });
 
 setTimeout(() => {
-    bot.launch().catch(console.error);
+bot.telegram.setWebhook('').catch(console.error); // clear any old webhookbot.launch().catch(console.error);
 }, 3000);
