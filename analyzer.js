@@ -113,7 +113,7 @@ class SignalAnalyzer {
         const currentMacd = macdLine[macdLine.length - 1];
         const currentSignal = macdSignal[macdSignal.length - 1];
 
-        // 10. ADX (14)
+        // 10. ADX & DMI (14)
         let adx = 20, plusDI = 25, minusDI = 25;
         try {
             const tr = [], plusDM = [], minusDM = [];
@@ -142,50 +142,46 @@ class SignalAnalyzer {
         let suggestedRiskPercent = 1;
         let suggestedStake = '$5 – $10';
 
-        // ========== FIXED: CRITICAL SIGNAL LOGIC ==========
+        // ========== SIGNAL LOGIC WITH DMI DIRECTION ==========
         
-        // CASE 1: RSI OVERSOLD (<35) + STRONG TREND (ADX > 25) = CALL SIGNAL
-        if (rsi < 35 && adx > 25) {
+        // CASE 1: RSI OVERSOLD (<35) + DOWNTREND (DMI- > DMI+) → NO SIGNAL
+        if (rsi < 35 && adx > 25 && minusDI > plusDI) {
+            reasons.push(`❌ RSI oversold (${rsi.toFixed(1)}) but strong DOWNTREND (ADX ${adx.toFixed(1)})`);
+            reasons.push(`➡️ In strong downtrend, oversold can persist. No CALL signal.`);
+            return { pair: pair.name, direction: 'NEUTRAL', confidence: 0, reasons, rsi: Math.round(rsi), adx: Math.round(adx), timeframe, expiry, suggestedStake, suggestedRiskPercent };
+        }
+        
+        // CASE 2: RSI OVERBOUGHT (>65) + UPTREND (DMI+ > DMI-) → NO SIGNAL
+        if (rsi > 65 && adx > 25 && plusDI > minusDI) {
+            reasons.push(`❌ RSI overbought (${rsi.toFixed(1)}) but strong UPTREND (ADX ${adx.toFixed(1)})`);
+            reasons.push(`➡️ In strong uptrend, overbought can persist. No PUT signal.`);
+            return { pair: pair.name, direction: 'NEUTRAL', confidence: 0, reasons, rsi: Math.round(rsi), adx: Math.round(adx), timeframe, expiry, suggestedStake, suggestedRiskPercent };
+        }
+        
+        // CASE 3: RSI OVERSOLD (<35) + UPTREND (DMI+ > DMI-) = CALL SIGNAL
+        else if (rsi < 35 && adx > 25 && plusDI > minusDI) {
             direction = 'CALL';
             confidence = Math.min(98, 85 + Math.floor((35 - rsi) / 2));
             if (volumeSpike) confidence = Math.min(98, confidence + 5);
             suggestedRiskPercent = confidence >= 85 ? 2 : 1.5;
             suggestedStake = confidence >= 85 ? '$10 – $20' : '$10';
-            reasons.push(`✅ RSI oversold (${rsi.toFixed(1)}) + strong trend (ADX ${adx.toFixed(1)}) = CALL SIGNAL`);
-            reasons.push(`➡️ Price likely to reverse or bounce upward`);
-            if (volumeSpike) reasons.push(`✅ Volume spike: +${volumePercent}% confirming reversal`);
+            reasons.push(`✅ RSI oversold (${rsi.toFixed(1)}) + bullish trend = CALL SIGNAL`);
+            reasons.push(`➡️ Price likely to reverse upward`);
+            if (volumeSpike) reasons.push(`✅ Volume spike: +${volumePercent}%`);
         }
-        // CASE 2: RSI OVERBOUGHT (>65) + STRONG TREND (ADX > 25) = PUT SIGNAL
-        else if (rsi > 65 && adx > 25) {
+        // CASE 4: RSI OVERBOUGHT (>65) + DOWNTREND (DMI- > DMI+) = PUT SIGNAL
+        else if (rsi > 65 && adx > 25 && minusDI > plusDI) {
             direction = 'PUT';
             confidence = Math.min(98, 85 + Math.floor((rsi - 65) / 2));
             if (volumeSpike) confidence = Math.min(98, confidence + 5);
             suggestedRiskPercent = confidence >= 85 ? 2 : 1.5;
             suggestedStake = confidence >= 85 ? '$10 – $20' : '$10';
-            reasons.push(`✅ RSI overbought (${rsi.toFixed(1)}) + strong trend (ADX ${adx.toFixed(1)}) = PUT SIGNAL`);
-            reasons.push(`➡️ Price likely to reverse or pull back down`);
-            if (volumeSpike) reasons.push(`✅ Volume spike: +${volumePercent}% confirming reversal`);
+            reasons.push(`✅ RSI overbought (${rsi.toFixed(1)}) + bearish trend = PUT SIGNAL`);
+            reasons.push(`➡️ Price likely to reverse downward`);
+            if (volumeSpike) reasons.push(`✅ Volume spike: +${volumePercent}%`);
         }
-        // CASE 3: RSI OVERSOLD (<40) + DEVELOPING TREND (ADX 20-25) = CALL SIGNAL (Lower confidence)
-        else if (rsi < 40 && adx >= 20) {
-            direction = 'CALL';
-            confidence = 72 + Math.floor((40 - rsi) / 3);
-            suggestedRiskPercent = 1;
-            suggestedStake = '$5 – $10';
-            reasons.push(`🟡 RSI low (${rsi.toFixed(1)}) + developing trend (ADX ${adx.toFixed(1)}) = CALL SIGNAL`);
-            reasons.push(`➡️ Moderate confidence – potential bounce`);
-        }
-        // CASE 4: RSI OVERBOUGHT (>60) + DEVELOPING TREND (ADX 20-25) = PUT SIGNAL (Lower confidence)
-        else if (rsi > 60 && adx >= 20) {
-            direction = 'PUT';
-            confidence = 70 + Math.floor((rsi - 60) / 3);
-            suggestedRiskPercent = 1;
-            suggestedStake = '$5 – $10';
-            reasons.push(`🟡 RSI high (${rsi.toFixed(1)}) + developing trend (ADX ${adx.toFixed(1)}) = PUT SIGNAL`);
-            reasons.push(`➡️ Moderate confidence – potential pullback`);
-        }
-        // CASE 5: Strong trend following (ADX > 25, no RSI extreme)
-        else if (adx > 25 && currentEma9 > currentEma21) {
+        // CASE 5: Strong uptrend following (ADX > 25, DMI+ > DMI-)
+        else if (adx > 25 && plusDI > minusDI && plusDI - minusDI > 10) {
             direction = 'CALL';
             confidence = 76;
             suggestedRiskPercent = 1.5;
@@ -193,7 +189,8 @@ class SignalAnalyzer {
             reasons.push(`✅ Strong uptrend (ADX ${adx.toFixed(1)}) = CALL SIGNAL`);
             reasons.push(`➡️ Follow the trend momentum`);
         }
-        else if (adx > 25 && currentEma9 < currentEma21) {
+        // CASE 6: Strong downtrend following (ADX > 25, DMI- > DMI+)
+        else if (adx > 25 && minusDI > plusDI && minusDI - plusDI > 10) {
             direction = 'PUT';
             confidence = 76;
             suggestedRiskPercent = 1.5;
@@ -201,28 +198,38 @@ class SignalAnalyzer {
             reasons.push(`✅ Strong downtrend (ADX ${adx.toFixed(1)}) = PUT SIGNAL`);
             reasons.push(`➡️ Follow the trend momentum`);
         }
+        // CASE 7: RSI extreme + developing trend (ADX 20-25)
+        else if (rsi < 35 && adx >= 20 && plusDI > minusDI) {
+            direction = 'CALL';
+            confidence = 72;
+            suggestedRiskPercent = 1;
+            suggestedStake = '$5 – $10';
+            reasons.push(`🟡 RSI low (${rsi.toFixed(1)}) + developing trend = CALL SIGNAL`);
+        }
+        else if (rsi > 65 && adx >= 20 && minusDI > plusDI) {
+            direction = 'PUT';
+            confidence = 70;
+            suggestedRiskPercent = 1;
+            suggestedStake = '$5 – $10';
+            reasons.push(`🟡 RSI high (${rsi.toFixed(1)}) + developing trend = PUT SIGNAL`);
+        }
         // NO SIGNAL
         else {
             reasons.push(`❌ No clear setup – RSI ${rsi.toFixed(1)}, ADX ${adx.toFixed(1)}`);
-            if (rsi < 40 && adx > 20) reasons.push(`⚠️ RSI ${rsi.toFixed(1)} + ADX ${adx.toFixed(1)} should be CALL signal. Check market conditions.`);
-            if (rsi > 60 && adx > 20) reasons.push(`⚠️ RSI ${rsi.toFixed(1)} + ADX ${adx.toFixed(1)} should be PUT signal. Check market conditions.`);
             return { pair: pair.name, direction: 'NEUTRAL', confidence: 0, reasons, rsi: Math.round(rsi), adx: Math.round(adx), timeframe, expiry, suggestedStake, suggestedRiskPercent };
         }
 
-        // Ensure confidence is between 60-98
         confidence = Math.max(60, Math.min(98, confidence));
         
         let qualityBadge = '';
-        if (confidence >= 85) qualityBadge = '🟢 HIGH (4.9⭐)';
-        else if (confidence >= 75) qualityBadge = '🟡 MEDIUM (4.5⭐)';
-        else if (confidence >= 65) qualityBadge = '🔵 LOW-MEDIUM (4.0⭐)';
-        else qualityBadge = '🔵 LOW (3.5⭐)';
+        if (confidence >= 85) qualityBadge = '🟢 HIGH';
+        else if (confidence >= 75) qualityBadge = '🟡 MEDIUM';
+        else qualityBadge = '🔵 LOW';
         
-        reasons.push(`📊 Signal quality: ${qualityBadge} | Confidence: ${confidence}%`);
-        reasons.push(`💰 Suggested risk: ${suggestedRiskPercent}% of balance (${suggestedStake})`);
+        reasons.push(`📊 Quality: ${qualityBadge} | ${confidence}%`);
+        reasons.push(`💰 Risk: ${suggestedRiskPercent}% (${suggestedStake})`);
         reasons.push(`⏱️ Expiry: ${expiry}`);
 
-        // Set cooldown
         this.cooldown.set(cooldownKey, Date.now());
         this.saveDailyLoss();
 
