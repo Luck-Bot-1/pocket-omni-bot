@@ -1,9 +1,60 @@
 const priceFetcher = require('./pricefetcher');
+const moment = require('moment-timezone');
+const fs = require('fs');
+const path = require('path');
+
+const DAILY_LOSS_FILE = path.join(__dirname, 'dailyLoss.json');
 
 class SignalAnalyzer {
-    async analyzePair(pair, timeframe = '5m') {
+    constructor() {
+        this.cooldown = new Map();
+        this.dailyLossTracker = this.loadDailyLoss();
+    }
+
+    loadDailyLoss() {
+        try {
+            if (fs.existsSync(DAILY_LOSS_FILE)) {
+                return JSON.parse(fs.readFileSync(DAILY_LOSS_FILE, 'utf8'));
+            }
+        } catch(e) {}
+        return {};
+    }
+
+    saveDailyLoss() {
+        try {
+            fs.writeFileSync(DAILY_LOSS_FILE, JSON.stringify(this.dailyLossTracker, null, 2));
+        } catch(e) {}
+    }
+
+    async analyzePair(pair, timeframe = '5m', userId = null) {
+        // 1. MARKET SESSION CHECK
+        const localHour = moment().tz('Asia/Dhaka').hour();
+        const isActiveSession = (localHour >= 13 && localHour <= 21) || (localHour >= 1 && localHour <= 9);
+        
+        if (!isActiveSession && userId) {
+            return this.neutral(pair.name, timeframe, '🌙 Outside active trading hours. Trade during London/Asia sessions.');
+        }
+
+        // 2. DAILY LOSS LIMIT
+        if (userId) {
+            const today = moment().format('YYYY-MM-DD');
+            const userLosses = this.dailyLossTracker[userId];
+            if (userLosses && userLosses.date === today && userLosses.losses >= 3) {
+                return this.neutral(pair.name, timeframe, `⚠️ Daily loss limit reached (${userLosses.losses} losses). Trading paused until tomorrow.`);
+            }
+        }
+
+        // 3. COOLDOWN
+        const cooldownKey = userId ? `${userId}_${pair.name}` : pair.name;
+        const lastSignal = this.cooldown.get(cooldownKey);
+        if (lastSignal && Date.now() - lastSignal < 300000) {
+            const remaining = Math.ceil((300000 - (Date.now() - lastSignal)) / 60000);
+            return this.neutral(pair.name, timeframe, `⏱️ Cooldown active. Next signal in ${remaining} min.`);
+        }
+
+        // 4. FETCH CANDLES
         const candles = await priceFetcher.fetchOHLCV(pair.symbol, timeframe, 100);
-        if (!candles || candles.length < 50) return this.neutral(pair.name, timeframe, 'Insufficient data');
+        if (!candles || candles.length < 50) return this.neutral(pair.name, timeframe, 'Insufficient data.');
 
         const closes = candles.map(c => c.close);
         const highs = candles.map(c => c.high);
@@ -11,12 +62,13 @@ class SignalAnalyzer {
         const volumes = candles.map(c => c.volume);
         const n = closes.length;
 
-        // Volume spike detection
+        // 5. VOLUME SPIKE
         const avgVolume = volumes.slice(-20).reduce((a, b) => a + b, 0) / 20;
         const currentVolume = volumes[volumes.length - 1];
-        const volumeSpike = currentVolume > avgVolume * 1.5;
+        const volumeSpike = currentVolume > avgVolume * 1.3;
+        const volumePercent = Math.round(currentVolume / avgVolume * 100 - 100);
 
-        // RSI (7)
+        // 6. RSI (7)
         let rsi = 50;
         try {
             let gains = 0, losses = 0;
@@ -35,25 +87,33 @@ class SignalAnalyzer {
             }
         } catch(e) { rsi = 50; }
 
-        // EMA (9, 21)
+        // 7. EMA (9, 21)
         const ema9 = this.calcEMA(closes, 9);
         const ema21 = this.calcEMA(closes, 21);
         const currentEma9 = ema9[ema9.length - 1];
         const currentEma21 = ema21[ema21.length - 1];
-        const prevEma9 = ema9[ema9.length - 2];
-        const prevEma21 = ema21[ema21.length - 2];
 
-        // MACD (12, 26, 9)
+        // 8. HIGHER TIMEFRAME (1H)
+        let higherTrend = 'neutral';
+        try {
+            const higherCandles = await priceFetcher.fetchOHLCV(pair.symbol, '1h', 50, true);
+            if (higherCandles && higherCandles.length > 20) {
+                const higherCloses = higherCandles.map(c => c.close);
+                const higherEma9 = this.calcEMA(higherCloses, 9);
+                const higherEma21 = this.calcEMA(higherCloses, 21);
+                higherTrend = higherEma9[higherEma9.length - 1] > higherEma21[higherEma21.length - 1] ? 'bullish' : 'bearish';
+            }
+        } catch(e) {}
+
+        // 9. MACD
         const ema12 = this.calcEMA(closes, 12);
         const ema26 = this.calcEMA(closes, 26);
         const macdLine = ema12.map((v, i) => v - ema26[i]);
         const macdSignal = this.calcEMA(macdLine, 9);
         const currentMacd = macdLine[macdLine.length - 1];
         const currentSignal = macdSignal[macdSignal.length - 1];
-        const prevMacd = macdLine[macdLine.length - 2];
-        const prevSignal = macdSignal[macdSignal.length - 2];
 
-        // ADX (14)
+        // 10. ADX (14)
         let adx = 20, plusDI = 25, minusDI = 25;
         try {
             const tr = [], plusDM = [], minusDM = [];
@@ -79,53 +139,94 @@ class SignalAnalyzer {
         let direction = 'NEUTRAL';
         let confidence = 0;
         let expiry = timeframe === '1m' ? '3 min' : timeframe === '5m' ? '10 min' : '1 hour';
-        let suggestedStake = '$5 – $10 (1-2% of balance)';
+        let suggestedRiskPercent = 1;
+        let suggestedStake = '$5 – $10';
 
-        // ADX FILTER: No signal in ranging markets
-        if (adx < 20) {
-            reasons.push(`⚠️ ADX ${adx.toFixed(1)} < 20 – ranging market, no signal`);
-            reasons.push(`💡 Wait for ADX > 20 before trading`);
-            return { pair: pair.name, direction: 'NEUTRAL', confidence: 0, reasons, rsi: Math.round(rsi), adx: Math.round(adx), timeframe, expiry, suggestedStake };
+        // ========== FIXED: CRITICAL SIGNAL LOGIC ==========
+        
+        // CASE 1: RSI OVERSOLD (<35) + STRONG TREND (ADX > 25) = CALL SIGNAL
+        if (rsi < 35 && adx > 25) {
+            direction = 'CALL';
+            confidence = Math.min(98, 85 + Math.floor((35 - rsi) / 2));
+            if (volumeSpike) confidence = Math.min(98, confidence + 5);
+            suggestedRiskPercent = confidence >= 85 ? 2 : 1.5;
+            suggestedStake = confidence >= 85 ? '$10 – $20' : '$10';
+            reasons.push(`✅ RSI oversold (${rsi.toFixed(1)}) + strong trend (ADX ${adx.toFixed(1)}) = CALL SIGNAL`);
+            reasons.push(`➡️ Price likely to reverse or bounce upward`);
+            if (volumeSpike) reasons.push(`✅ Volume spike: +${volumePercent}% confirming reversal`);
         }
-
-        const isUptrend = currentEma9 > currentEma21;
-        const isDowntrend = currentEma9 < currentEma21;
-        const emaBull = currentEma9 > currentEma21 && prevEma9 <= prevEma21;
-        const emaBear = currentEma9 < currentEma21 && prevEma9 >= prevEma21;
-        const macdBull = currentMacd > currentSignal && prevMacd <= prevSignal;
-        const macdBear = currentMacd < currentSignal && prevMacd >= prevSignal;
-
-        // STRATEGY: RSI Extreme + Confirmation
-        if (rsi < 30 && (isUptrend || emaBull || macdBull)) {
-            direction = 'CALL';
-            confidence = Math.min(98, 85 + Math.floor((30 - rsi) / 2));
-            if (volumeSpike) confidence = Math.min(98, confidence + 5);
-            reasons.push(`✅ RSI oversold (${rsi.toFixed(1)}) + uptrend confirmation`);
-            if (volumeSpike) reasons.push(`✅ Volume spike confirms momentum`);
-        } else if (rsi > 70 && (isDowntrend || emaBear || macdBear)) {
+        // CASE 2: RSI OVERBOUGHT (>65) + STRONG TREND (ADX > 25) = PUT SIGNAL
+        else if (rsi > 65 && adx > 25) {
             direction = 'PUT';
-            confidence = Math.min(98, 85 + Math.floor((rsi - 70) / 2));
+            confidence = Math.min(98, 85 + Math.floor((rsi - 65) / 2));
             if (volumeSpike) confidence = Math.min(98, confidence + 5);
-            reasons.push(`✅ RSI overbought (${rsi.toFixed(1)}) + downtrend confirmation`);
-            if (volumeSpike) reasons.push(`✅ Volume spike confirms momentum`);
-        } else if (adx > 30 && isUptrend && plusDI > minusDI + 10) {
+            suggestedRiskPercent = confidence >= 85 ? 2 : 1.5;
+            suggestedStake = confidence >= 85 ? '$10 – $20' : '$10';
+            reasons.push(`✅ RSI overbought (${rsi.toFixed(1)}) + strong trend (ADX ${adx.toFixed(1)}) = PUT SIGNAL`);
+            reasons.push(`➡️ Price likely to reverse or pull back down`);
+            if (volumeSpike) reasons.push(`✅ Volume spike: +${volumePercent}% confirming reversal`);
+        }
+        // CASE 3: RSI OVERSOLD (<40) + DEVELOPING TREND (ADX 20-25) = CALL SIGNAL (Lower confidence)
+        else if (rsi < 40 && adx >= 20) {
             direction = 'CALL';
-            confidence = 78;
-            reasons.push(`✅ Strong uptrend (ADX ${adx.toFixed(1)}, DMI+ ${plusDI.toFixed(1)})`);
-        } else if (adx > 30 && isDowntrend && minusDI > plusDI + 10) {
+            confidence = 72 + Math.floor((40 - rsi) / 3);
+            suggestedRiskPercent = 1;
+            suggestedStake = '$5 – $10';
+            reasons.push(`🟡 RSI low (${rsi.toFixed(1)}) + developing trend (ADX ${adx.toFixed(1)}) = CALL SIGNAL`);
+            reasons.push(`➡️ Moderate confidence – potential bounce`);
+        }
+        // CASE 4: RSI OVERBOUGHT (>60) + DEVELOPING TREND (ADX 20-25) = PUT SIGNAL (Lower confidence)
+        else if (rsi > 60 && adx >= 20) {
             direction = 'PUT';
-            confidence = 78;
-            reasons.push(`✅ Strong downtrend (ADX ${adx.toFixed(1)}, DMI- ${minusDI.toFixed(1)})`);
-        } else {
+            confidence = 70 + Math.floor((rsi - 60) / 3);
+            suggestedRiskPercent = 1;
+            suggestedStake = '$5 – $10';
+            reasons.push(`🟡 RSI high (${rsi.toFixed(1)}) + developing trend (ADX ${adx.toFixed(1)}) = PUT SIGNAL`);
+            reasons.push(`➡️ Moderate confidence – potential pullback`);
+        }
+        // CASE 5: Strong trend following (ADX > 25, no RSI extreme)
+        else if (adx > 25 && currentEma9 > currentEma21) {
+            direction = 'CALL';
+            confidence = 76;
+            suggestedRiskPercent = 1.5;
+            suggestedStake = '$10';
+            reasons.push(`✅ Strong uptrend (ADX ${adx.toFixed(1)}) = CALL SIGNAL`);
+            reasons.push(`➡️ Follow the trend momentum`);
+        }
+        else if (adx > 25 && currentEma9 < currentEma21) {
+            direction = 'PUT';
+            confidence = 76;
+            suggestedRiskPercent = 1.5;
+            suggestedStake = '$10';
+            reasons.push(`✅ Strong downtrend (ADX ${adx.toFixed(1)}) = PUT SIGNAL`);
+            reasons.push(`➡️ Follow the trend momentum`);
+        }
+        // NO SIGNAL
+        else {
             reasons.push(`❌ No clear setup – RSI ${rsi.toFixed(1)}, ADX ${adx.toFixed(1)}`);
-            return { pair: pair.name, direction: 'NEUTRAL', confidence: 0, reasons, rsi: Math.round(rsi), adx: Math.round(adx), timeframe, expiry, suggestedStake };
+            if (rsi < 40 && adx > 20) reasons.push(`⚠️ RSI ${rsi.toFixed(1)} + ADX ${adx.toFixed(1)} should be CALL signal. Check market conditions.`);
+            if (rsi > 60 && adx > 20) reasons.push(`⚠️ RSI ${rsi.toFixed(1)} + ADX ${adx.toFixed(1)} should be PUT signal. Check market conditions.`);
+            return { pair: pair.name, direction: 'NEUTRAL', confidence: 0, reasons, rsi: Math.round(rsi), adx: Math.round(adx), timeframe, expiry, suggestedStake, suggestedRiskPercent };
         }
 
-        confidence = Math.max(70, Math.min(98, confidence));
-        reasons.push(`💡 Suggested stake: ${suggestedStake}`);
+        // Ensure confidence is between 60-98
+        confidence = Math.max(60, Math.min(98, confidence));
+        
+        let qualityBadge = '';
+        if (confidence >= 85) qualityBadge = '🟢 HIGH (4.9⭐)';
+        else if (confidence >= 75) qualityBadge = '🟡 MEDIUM (4.5⭐)';
+        else if (confidence >= 65) qualityBadge = '🔵 LOW-MEDIUM (4.0⭐)';
+        else qualityBadge = '🔵 LOW (3.5⭐)';
+        
+        reasons.push(`📊 Signal quality: ${qualityBadge} | Confidence: ${confidence}%`);
+        reasons.push(`💰 Suggested risk: ${suggestedRiskPercent}% of balance (${suggestedStake})`);
         reasons.push(`⏱️ Expiry: ${expiry}`);
 
-        return { pair: pair.name, direction, confidence, reasons: reasons.slice(0, 5), rsi: Math.round(rsi), adx: Math.round(adx), timeframe, expiry, suggestedStake };
+        // Set cooldown
+        this.cooldown.set(cooldownKey, Date.now());
+        this.saveDailyLoss();
+
+        return { pair: pair.name, direction, confidence, reasons: reasons.slice(0, 8), rsi: Math.round(rsi), adx: Math.round(adx), timeframe, expiry, suggestedStake, suggestedRiskPercent };
     }
 
     calcEMA(values, period) {
@@ -140,7 +241,29 @@ class SignalAnalyzer {
     }
 
     neutral(pair, timeframe, reason) {
-        return { pair, direction: 'NEUTRAL', confidence: 0, reasons: [reason], rsi: 50, adx: 20, timeframe, expiry: 'N/A', suggestedStake: 'N/A' };
+        return { pair, direction: 'NEUTRAL', confidence: 0, reasons: [reason], rsi: 50, adx: 20, timeframe, expiry: 'N/A', suggestedStake: 'N/A', suggestedRiskPercent: 0 };
+    }
+
+    recordDailyLoss(userId) {
+        const today = moment().format('YYYY-MM-DD');
+        const current = this.dailyLossTracker[userId];
+        if (!current || current.date !== today) {
+            this.dailyLossTracker[userId] = { date: today, losses: 1 };
+        } else {
+            current.losses++;
+            this.dailyLossTracker[userId] = current;
+        }
+        this.saveDailyLoss();
+    }
+
+    resetDailyLoss(userId) {
+        const today = moment().format('YYYY-MM-DD');
+        const current = this.dailyLossTracker[userId];
+        if (current && current.date === today && current.losses > 0) {
+            current.losses--;
+            this.dailyLossTracker[userId] = current;
+            this.saveDailyLoss();
+        }
     }
 }
 module.exports = new SignalAnalyzer();
