@@ -92,6 +92,7 @@ bot.action(/pair_(.+)/, async (ctx) => {
     await ctx.editMessageText(`📈 *${pair}*\nSelect timeframe:`, timeframeKeyboard(pair));
 });
 
+// ========== MAIN SIGNAL HANDLER – FIXED ==========
 bot.action(/tf_(.+)_(.+)/, async (ctx) => {
     const [pairName, tf] = [ctx.match[1], ctx.match[2]];
     const userId = ctx.from.id;
@@ -105,26 +106,44 @@ bot.action(/tf_(.+)_(.+)/, async (ctx) => {
         const signal = await analyzer.analyzePair(pair, tf, userId);
         if (!signal) throw new Error('No signal');
 
-        const dirEmoji = signal.direction === 'CALL' ? '📈' : signal.direction === 'PUT' ? '📉' : '⚪';
-        const confEmoji = signal.confidence >= 85 ? '🟢' : (signal.confidence >= 75 ? '🟡' : (signal.confidence >= 60 ? '🔵' : '🔴'));
-        const reasons = signal.reasons?.slice(0, 6).map(r => `• ${r}`).join('\n') || 'No specific reasons';
+        const dirEmoji = signal.direction === 'CALL' ? '📈' : (signal.direction === 'PUT' ? '📉' : '⚪');
+        
+        let confEmoji = '';
+        if (signal.direction === 'NEUTRAL') {
+            confEmoji = '⚪';
+        } else if (signal.confidence >= 85) {
+            confEmoji = '🟢';
+        } else if (signal.confidence >= 75) {
+            confEmoji = '🟡';
+        } else {
+            confEmoji = '🔴';
+        }
 
-        const caption = `🔔 *SIGNAL: ${pairName} (${tf})*\n${dirEmoji} ${signal.direction} | ${confEmoji} ${signal.confidence}%\n📊 RSI:${signal.rsi} ADX:${signal.adx}\n💡 *Analysis:*\n${reasons}\n\n⏱️ *Expiry:* ${signal.expiry}\n📈 *Your win rate:* ${getWinRate(userId)}%\n💰 *Risk:* ${signal.suggestedRiskPercent}% of balance (${signal.suggestedStake})`;
+        const reasons = signal.reasons?.slice(0, 6).map(r => `• ${r}`).join('\n') || 'No specific reasons';
+        const expiry = signal.expiry || (tf === '1m' ? '3 min' : tf === '5m' ? '10 min' : '1 hour');
+
+        const caption = `🔔 *SIGNAL: ${pairName} (${tf})*\n${dirEmoji} ${signal.direction} | ${confEmoji} ${signal.confidence}%\n📊 RSI:${signal.rsi} ADX:${signal.adx}\n💡 *Analysis:*\n${reasons}\n\n⏱️ *Expiry:* ${expiry}\n📈 *Your win rate:* ${getWinRate(userId)}%\n💰 *Risk:* ${signal.suggestedRiskPercent}% of balance (${signal.suggestedStake})`;
 
         await ctx.replyWithMarkdown(caption);
 
-        const resultKB = Markup.inlineKeyboard([
-            [Markup.button.callback('✅ WIN', `win_${pairName}_${signal.direction}`)],
-            [Markup.button.callback('❌ LOSS', `loss_${pairName}_${signal.direction}`)],
-            [Markup.button.callback('⏭️ SKIP', 'skip')]
-        ]);
-        await ctx.reply('📝 Record this trade?', resultKB);
+        // FIXED: Only ask to record if signal is NOT NEUTRAL
+        if (signal.direction !== 'NEUTRAL') {
+            const resultKB = Markup.inlineKeyboard([
+                [Markup.button.callback('✅ WIN', `win_${pairName}_${signal.direction}`)],
+                [Markup.button.callback('❌ LOSS', `loss_${pairName}_${signal.direction}`)],
+                [Markup.button.callback('⏭️ SKIP', 'skip')]
+            ]);
+            await ctx.reply('📝 Record this trade?', resultKB);
+        } else {
+            await ctx.reply('⚪ No trade signal – analysis only. Use /start to analyze another pair.');
+        }
     } catch (err) {
         console.error('Signal error:', err);
         await ctx.reply('⚠️ Could not generate signal. Try another pair or timeframe.');
     }
 });
 
+// WIN/LOSS handlers
 bot.action(/win_(.+)_(.+)/, async (ctx) => {
     const [pair, direction] = [ctx.match[1], ctx.match[2]];
     const userId = ctx.from.id;
