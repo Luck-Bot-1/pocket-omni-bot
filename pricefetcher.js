@@ -11,6 +11,8 @@ class PriceFetcher {
         this.isDemo = process.env.PO_DEMO === 'true';
         this.cache = new Map();
         this.cacheTTL = 30000;
+        this.multiTTCache = new Map();
+        this.multiTTL = 60000;
         this.pendingRequests = new Map();
     }
 
@@ -24,6 +26,7 @@ class PriceFetcher {
                 this.wsConnected = true;
                 this.reconnectAttempts = 0;
                 this.socket.emit('message', `42["auth",{"session":"${this.ssid}","isDemo":${this.isDemo ? 1 : 0},"platform":2}]`);
+                console.log('✅ WebSocket connected');
                 resolve(true);
             });
             this.socket.on('connect_error', () => {
@@ -75,10 +78,13 @@ class PriceFetcher {
         return candles;
     }
 
-    async fetchOHLCV(symbol, interval = '5m', limit = 60) {
+    async fetchOHLCV(symbol, interval = '5m', limit = 60, isHigherTF = false) {
+        const cache = isHigherTF ? this.multiTTCache : this.cache;
+        const ttl = isHigherTF ? this.multiTTL : this.cacheTTL;
         const cacheKey = `${symbol}_${interval}_${limit}`;
-        const cached = this.cache.get(cacheKey);
-        if (cached && Date.now() - cached.timestamp < this.cacheTTL) return cached.data;
+        const cached = cache.get(cacheKey);
+        if (cached && Date.now() - cached.timestamp < ttl) return cached.data;
+        
         let data = null;
         const isOTC = symbol.toLowerCase().includes('_otc');
         if (isOTC) {
@@ -92,7 +98,7 @@ class PriceFetcher {
             data = await this.fetchFromYahoo(symbol, interval, limit);
             if (!data) data = this.generateMockCandles(limit);
         }
-        this.cache.set(cacheKey, { data, timestamp: Date.now() });
+        cache.set(cacheKey, { data, timestamp: Date.now() });
         return data;
     }
 }
