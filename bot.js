@@ -1,260 +1,308 @@
-require('dotenv').config();
-const { Telegraf, Markup } = require('telegraf');
-const analyzer = require('./analyzer');
-const pairsConfig = require('./pairs.json');
+const priceFetcher = require('./pricefetcher');
+const moment = require('moment-timezone');
 const fs = require('fs');
 const path = require('path');
 
-const bot = new Telegraf(process.env.BOT_TOKEN);
-const TRADES_FILE = path.join(__dirname, 'trades.json');
+const DAILY_LOSS_FILE = path.join(__dirname, 'dailyLoss.json');
 
-function loadTrades() {
-    if (!fs.existsSync(TRADES_FILE)) return [];
-    try { return JSON.parse(fs.readFileSync(TRADES_FILE, 'utf8')); } catch(e) { return []; }
-}
-function saveTrades(trades) { fs.writeFileSync(TRADES_FILE, JSON.stringify(trades, null, 2)); }
-function addTrade(pair, direction, result) {
-    const trades = loadTrades();
-    trades.push({ pair, direction, result, timestamp: Date.now() });
-    saveTrades(trades);
-}
-function getWinRate() {
-    const trades = loadTrades();
-    if (trades.length === 0) return 'N/A';
-    const wins = trades.filter(t => t.result === 'win').length;
-    return ((wins / trades.length) * 100).toFixed(1);
-}
-
-const ALL_PAIRS = [
-    ...(pairsConfig.forex_live || []),
-    ...(pairsConfig.forex_otc || []),
-    ...(pairsConfig.crypto_otc || []),
-    ...(pairsConfig.stocks_otc || []),
-    ...(pairsConfig.commodities_otc || []),
-    ...(pairsConfig.indices || [])
-].filter(p => p && p.active !== false);
-
-const TIMEFRAMES = ['1m','5m','15m','30m','1h','4h','1d'];
-
-async function categoryKeyboard() {
-    const cats = [
-        { id:'forex_live', label:'💱 Forex Live', count: ALL_PAIRS.filter(p=>p.type==='forex' && !p.name.includes('_otc')).length },
-        { id:'forex_otc', label:'💱 Forex OTC', count: ALL_PAIRS.filter(p=>p.type==='forex' && p.name.includes('_otc')).length },
-        { id:'crypto_otc', label:'🪙 Crypto OTC', count: ALL_PAIRS.filter(p=>p.type==='crypto').length },
-        { id:'stocks_otc', label:'📊 Stocks OTC', count: ALL_PAIRS.filter(p=>p.type==='stock').length },
-        { id:'commodities_otc', label:'🛢️ Commodities OTC', count: ALL_PAIRS.filter(p=>p.type==='commodity').length },
-        { id:'indices', label:'📈 Indices', count: ALL_PAIRS.filter(p=>p.type==='index').length }
-    ].filter(c=>c.count>0);
-    const kb = cats.map(c=>[Markup.button.callback(`${c.label} (${c.count})`, `cat_${c.id}`)]);
-    kb.push([Markup.button.callback('❌ Cancel', 'cancel')]);
-    return Markup.inlineKeyboard(kb);
-}
-
-async function pairsKeyboard(catId) {
-    let filtered;
-    if(catId === 'forex_live') filtered = ALL_PAIRS.filter(p=>p.type==='forex' && !p.name.includes('_otc'));
-    else if(catId === 'forex_otc') filtered = ALL_PAIRS.filter(p=>p.type==='forex' && p.name.includes('_otc'));
-    else if(catId === 'crypto_otc') filtered = ALL_PAIRS.filter(p=>p.type==='crypto');
-    else if(catId === 'stocks_otc') filtered = ALL_PAIRS.filter(p=>p.type==='stock');
-    else if(catId === 'commodities_otc') filtered = ALL_PAIRS.filter(p=>p.type==='commodity');
-    else if(catId === 'indices') filtered = ALL_PAIRS.filter(p=>p.type==='index');
-    else filtered = [];
-    const kb = [];
-    for(let i=0;i<filtered.length;i+=2) {
-        const row = [Markup.button.callback(filtered[i].name, `pair_${filtered[i].name}`)];
-        if(filtered[i+1]) row.push(Markup.button.callback(filtered[i+1].name, `pair_${filtered[i+1].name}`));
-        kb.push(row);
-    }
-    kb.push([Markup.button.callback('🔙 Back', 'back_cats')]);
-    return Markup.inlineKeyboard(kb);
-}
-
-function timeframeKeyboard(pairName) {
-    const kb = TIMEFRAMES.map(tf=>[Markup.button.callback(tf, `tf_${pairName}_${tf}`)]);
-    kb.push([Markup.button.callback('🔙 Back', `back_pairs_${pairName}`)]);
-    return Markup.inlineKeyboard(kb);
-}
-
-bot.start(async (ctx) => {
-    await ctx.replyWithMarkdown(`🚀 *PULSE OMNI BOT v5.0* – Legendary Edition\nActive pairs: ${ALL_PAIRS.length}\nTracked win rate: ${getWinRate()}%\nSelect asset category:`, await categoryKeyboard());
-});
-
-bot.action(/cat_(.+)/, async (ctx) => {
-    const cat = ctx.match[1];
-    await ctx.answerCbQuery();
-    await ctx.editMessageText(`📊 *${cat.replace('_',' ').toUpperCase()} pairs:*`, await pairsKeyboard(cat));
-});
-
-bot.action(/pair_(.+)/, async (ctx) => {
-    const pair = ctx.match[1];
-    await ctx.answerCbQuery();
-    await ctx.editMessageText(`📈 *${pair}*\nSelect timeframe:`, timeframeKeyboard(pair));
-});
-
-bot.action(/tf_(.+)_(.+)/, async (ctx) => {
-    const [pairName, tf] = [ctx.match[1], ctx.match[2]];
-    await ctx.answerCbQuery(`Analyzing ${pairName}...`);
-    await ctx.editMessageText(`🔄 Analyzing ${pairName} (${tf})...`);
-
-    const pair = ALL_PAIRS.find(p => p.name === pairName);
-    if (!pair) {
-        await ctx.reply('❌ Pair not found.');
-        return;
+class SignalAnalyzer {
+    constructor() {
+        this.cooldown = new Map();
+        this.dailyLossTracker = this.loadDailyLoss();
     }
 
-    try {
-        const signal = await analyzer.analyzePair(pair, tf);
-        if (!signal) throw new Error('No signal');
+    loadDailyLoss() {
+        try {
+            if (fs.existsSync(DAILY_LOSS_FILE)) {
+                return JSON.parse(fs.readFileSync(DAILY_LOSS_FILE, 'utf8'));
+            }
+        } catch(e) {}
+        return {};
+    }
 
-        const dirEmoji = signal.direction === 'CALL' ? '📈' : signal.direction === 'PUT' ? '📉' : '⚪';
-        const confEmoji = signal.confidence >= 85 ? '🟢' : (signal.confidence >= 75 ? '🟡' : '🔴');
-        const reasons = signal.reasons?.slice(0,4).map(r => `• ${r}`).join('\n') || 'No specific reasons';
-        const expiry = signal.expiry || (tf === '1m' ? '3 min' : tf === '5m' ? '10 min' : '1 hour');
+    saveDailyLoss() {
+        try {
+            fs.writeFileSync(DAILY_LOSS_FILE, JSON.stringify(this.dailyLossTracker, null, 2));
+        } catch(e) {}
+    }
+
+    async analyzePair(pair, timeframe = '5m', userId = null) {
+        // 1. MARKET SESSION CHECK
+        const localHour = moment().tz('Asia/Dhaka').hour();
+        const isActiveSession = (localHour >= 13 && localHour <= 21) || (localHour >= 1 && localHour <= 9);
         
-        const caption = `🔔 *SIGNAL: ${pairName} (${tf})*\n${dirEmoji} ${signal.direction} | ${confEmoji} ${signal.confidence}%\n📊 RSI:${signal.rsi} ADX:${signal.adx}\n💡 *Reasons:*\n${reasons}\n\n⏱️ Expiry: ${expiry}\n📈 *Win rate:* ${getWinRate()}%\n💰 *Suggested stake:* ${signal.suggestedStake || '$5-$10 (1-2% of balance)'}`;
+        if (!isActiveSession && userId) {
+            return this.neutral(pair.name, timeframe, '🌙 Outside active trading hours. Trade during London/Asia sessions.');
+        }
 
-        await ctx.replyWithMarkdown(caption);
+        // 2. DAILY LOSS LIMIT
+        if (userId) {
+            const today = moment().format('YYYY-MM-DD');
+            const userLosses = this.dailyLossTracker[userId];
+            if (userLosses && userLosses.date === today && userLosses.losses >= 3) {
+                return this.neutral(pair.name, timeframe, `⚠️ Daily loss limit reached (${userLosses.losses} losses). Trading paused until tomorrow.`);
+            }
+        }
 
-        const resultKB = Markup.inlineKeyboard([
-            [Markup.button.callback('✅ WIN', `win_${pairName}_${signal.direction}`)],
-            [Markup.button.callback('❌ LOSS', `loss_${pairName}_${signal.direction}`)],
-            [Markup.button.callback('⏭️ SKIP', 'skip')]
-        ]);
-        await ctx.reply('Record this trade?', resultKB);
-    } catch (err) {
-        console.error('Signal error:', err);
-        await ctx.reply('⚠️ Could not generate signal. Please try another pair or timeframe.');
-    }
-});
+        // 3. COOLDOWN
+        const cooldownKey = userId ? `${userId}_${pair.name}` : pair.name;
+        const lastSignal = this.cooldown.get(cooldownKey);
+        if (lastSignal && Date.now() - lastSignal < 300000) {
+            const remaining = Math.ceil((300000 - (Date.now() - lastSignal)) / 60000);
+            return this.neutral(pair.name, timeframe, `⏱️ Cooldown active. Next signal in ${remaining} min.`);
+        }
 
-bot.action(/win_(.+)_(.+)/, async (ctx) => {
-    const [pair, direction] = [ctx.match[1], ctx.match[2]];
-    addTrade(pair, direction, 'win');
-    await ctx.answerCbQuery('✅ Recorded WIN');
-    await ctx.editMessageText(`✅ WIN recorded for ${pair} ${direction}\nCurrent win rate: ${getWinRate()}%`);
-    await ctx.reply('🔄 *Another analysis?*', await categoryKeyboard());
-});
+        // 4. FETCH CANDLES
+        const candles = await priceFetcher.fetchOHLCV(pair.symbol, timeframe, 100);
+        if (!candles || candles.length < 50) return this.neutral(pair.name, timeframe, 'Insufficient data.');
 
-bot.action(/loss_(.+)_(.+)/, async (ctx) => {
-    const [pair, direction] = [ctx.match[1], ctx.match[2]];
-    addTrade(pair, direction, 'loss');
-    await ctx.answerCbQuery('❌ Recorded LOSS');
-    await ctx.editMessageText(`❌ LOSS recorded for ${pair} ${direction}\nCurrent win rate: ${getWinRate()}%`);
-    await ctx.reply('🔄 *Another analysis?*', await categoryKeyboard());
-});
+        const closes = candles.map(c => c.close);
+        const highs = candles.map(c => c.high);
+        const lows = candles.map(c => c.low);
+        const volumes = candles.map(c => c.volume);
+        const n = closes.length;
 
-bot.action('skip', async (ctx) => {
-    await ctx.answerCbQuery('Skipped');
-    await ctx.editMessageText('Skipped. Use /start for new analysis.');
-});
+        // 5. VOLUME SPIKE
+        const avgVolume = volumes.slice(-20).reduce((a, b) => a + b, 0) / 20;
+        const currentVolume = volumes[volumes.length - 1];
+        const volumeSpike = currentVolume > avgVolume * 1.3; // Lowered from 1.5
+        const volumePercent = Math.round(currentVolume / avgVolume * 100 - 100);
 
-bot.action('back_cats', async (ctx) => {
-    await ctx.answerCbQuery();
-    await ctx.editMessageText('Select asset category:', await categoryKeyboard());
-});
+        // 6. RSI (7)
+        let rsi = 50;
+        try {
+            let gains = 0, losses = 0;
+            for (let i = n - 7; i < n; i++) {
+                const diff = closes[i] - closes[i - 1];
+                if (diff >= 0) gains += diff;
+                else losses -= diff;
+            }
+            let avgGain = gains / 7, avgLoss = losses / 7;
+            rsi = 100 - 100 / (1 + avgGain / (avgLoss || 0.001));
+            for (let i = n - 6; i < n; i++) {
+                const diff = closes[i] - closes[i - 1];
+                avgGain = (avgGain * 6 + Math.max(diff, 0)) / 7;
+                avgLoss = (avgLoss * 6 + Math.max(-diff, 0)) / 7;
+                rsi = 100 - 100 / (1 + avgGain / (avgLoss || 0.001));
+            }
+        } catch(e) { rsi = 50; }
 
-bot.action(/back_pairs_(.+)/, async (ctx) => {
-    const pair = ctx.match[1];
-    await ctx.answerCbQuery();
-    await ctx.editMessageText(`📈 *${pair}*\nSelect timeframe:`, timeframeKeyboard(pair));
-});
+        // 7. EMA (9, 21)
+        const ema9 = this.calcEMA(closes, 9);
+        const ema21 = this.calcEMA(closes, 21);
+        const currentEma9 = ema9[ema9.length - 1];
+        const currentEma21 = ema21[ema21.length - 1];
+        const prevEma9 = ema9[ema9.length - 2];
+        const prevEma21 = ema21[ema21.length - 2];
 
-bot.action('cancel', async (ctx) => {
-    await ctx.answerCbQuery();
-    await ctx.deleteMessage();
-    await ctx.reply('Cancelled. Send /start again.');
-});
+        // 8. HIGHER TIMEFRAME (1H)
+        let higherTrend = 'neutral';
+        try {
+            const higherCandles = await priceFetcher.fetchOHLCV(pair.symbol, '1h', 50, true);
+            if (higherCandles && higherCandles.length > 20) {
+                const higherCloses = higherCandles.map(c => c.close);
+                const higherEma9 = this.calcEMA(higherCloses, 9);
+                const higherEma21 = this.calcEMA(higherCloses, 21);
+                higherTrend = higherEma9[higherEma9.length - 1] > higherEma21[higherEma21.length - 1] ? 'bullish' : 'bearish';
+            }
+        } catch(e) {}
 
-bot.command('signals', async (ctx) => {
-    await ctx.reply('Fetching top signals...');
-    const signals = [];
-    for (const p of ALL_PAIRS.slice(0,15)) {
-        const s = await analyzer.analyzePair(p, '5m');
-        if (s && s.direction !== 'NEUTRAL' && s.confidence >= 75) signals.push(s);
-        if (signals.length >= 3) break;
-    }
-    if (!signals.length) return ctx.reply('No high-confidence signals now. Use /start and select a pair.');
-    let msg = '🔥 *TOP SIGNALS*\n';
-    signals.forEach(s => msg += `\n*${s.pair}*: ${s.direction === 'CALL' ? '📈' : '📉'} ${s.direction} (${s.confidence}%)\nRSI ${s.rsi} ADX ${s.adx}`);
-    await ctx.replyWithMarkdown(msg);
-});
+        // 9. MACD
+        const ema12 = this.calcEMA(closes, 12);
+        const ema26 = this.calcEMA(closes, 26);
+        const macdLine = ema12.map((v, i) => v - ema26[i]);
+        const macdSignal = this.calcEMA(macdLine, 9);
+        const currentMacd = macdLine[macdLine.length - 1];
+        const currentSignal = macdSignal[macdSignal.length - 1];
+        const prevMacd = macdLine[macdLine.length - 2];
+        const prevSignal = macdSignal[macdSignal.length - 2];
 
-bot.command('stats', async (ctx) => {
-    const trades = loadTrades();
-    const wins = trades.filter(t => t.result === 'win').length;
-    const losses = trades.filter(t => t.result === 'loss').length;
-    await ctx.replyWithMarkdown(`📊 *Trade Stats*\nTotal: ${trades.length}\n✅ Wins: ${wins}\n❌ Losses: ${losses}\n📈 Win rate: ${getWinRate()}%`);
-});
+        // 10. ADX (14)
+        let adx = 20, plusDI = 25, minusDI = 25;
+        try {
+            const tr = [], plusDM = [], minusDM = [];
+            for (let i = 1; i < n; i++) {
+                tr.push(Math.max(highs[i] - lows[i], Math.abs(highs[i] - closes[i-1]), Math.abs(lows[i] - closes[i-1])));
+                const up = highs[i] - highs[i-1], down = lows[i-1] - lows[i];
+                plusDM.push(up > down && up > 0 ? up : 0);
+                minusDM.push(down > up && down > 0 ? down : 0);
+            }
+            let atr = tr.slice(0,14).reduce((a,b)=>a+b,0)/14;
+            plusDI = plusDM.slice(0,14).reduce((a,b)=>a+b,0)/14;
+            minusDI = minusDM.slice(0,14).reduce((a,b)=>a+b,0)/14;
+            adx = 100 * Math.abs(plusDI - minusDI) / (plusDI + minusDI || 1);
+            for (let i = 14; i < tr.length; i++) {
+                atr = (atr*13 + tr[i])/14;
+                plusDI = (plusDI*13 + plusDM[i])/14;
+                minusDI = (minusDI*13 + minusDM[i])/14;
+                adx = 100 * Math.abs(plusDI - minusDI) / (plusDI + minusDI || 1);
+            }
+        } catch(e) { adx = 20; }
 
-bot.command('pairs', async (ctx) => {
-    const counts = {
-        forex_live: ALL_PAIRS.filter(p=>p.type==='forex' && !p.name.includes('_otc')).length,
-        forex_otc: ALL_PAIRS.filter(p=>p.type==='forex' && p.name.includes('_otc')).length,
-        crypto: ALL_PAIRS.filter(p=>p.type==='crypto').length,
-        stocks: ALL_PAIRS.filter(p=>p.type==='stock').length,
-        commodities: ALL_PAIRS.filter(p=>p.type==='commodity').length,
-        indices: ALL_PAIRS.filter(p=>p.type==='index').length
-    };
-    await ctx.replyWithMarkdown(`📊 *Available Pairs:* ${ALL_PAIRS.length}\n💱 Forex Live: ${counts.forex_live}\n💱 Forex OTC: ${counts.forex_otc}\n🪙 Crypto: ${counts.crypto}\n📊 Stocks: ${counts.stocks}\n🛢️ Commodities: ${counts.commodities}\n📈 Indices: ${counts.indices}\n\nSend /start to analyze.`);
-});
+        const reasons = [];
+        let direction = 'NEUTRAL';
+        let confidence = 0;
+        let expiry = timeframe === '1m' ? '3 min' : timeframe === '5m' ? '10 min' : '1 hour';
+        let suggestedRiskPercent = 1;
+        let suggestedStake = '$5 – $10';
 
-// ========== PROFESSIONAL BACKTEST COMMAND ==========
-bot.command('backtest', async (ctx) => {
-    const args = ctx.message.text.split(' ');
-    if (args.length < 2) {
-        return ctx.replyWithMarkdown('📊 *Backtest Usage:*\n`/backtest EUR/USD 50`\n\nExample: `/backtest BTC/USD 100`\n\nReturns simulated win rate based on current strategy.');
-    }
-    
-    const pairName = args[1];
-    const tradesToSimulate = parseInt(args[2]) || 50;
-    
-    const pair = ALL_PAIRS.find(p => p.name === pairName);
-    if (!pair) return ctx.reply(`❌ Pair ${pairName} not found. Use /pairs to see available pairs.`);
-    
-    await ctx.reply(`🔄 Running backtest on ${pairName} (${tradesToSimulate} simulated trades)...\n\nThis may take 20-30 seconds.`);
-    
-    let wins = 0, losses = 0, total = 0;
-    const results = [];
-    
-    for (let i = 0; i < tradesToSimulate; i++) {
-        const signal = await analyzer.analyzePair(pair, '5m');
-        if (!signal || signal.direction === 'NEUTRAL') continue;
+        // ========== FIXED: ADX FILTER (Now signals in developing trends) ==========
+        // Only block if ADX < 12 (extremely ranging)
+        if (adx < 12) {
+            reasons.push(`⚠️ ADX ${adx.toFixed(1)} < 12 – extremely ranging market, no signal`);
+            reasons.push(`💡 Wait for ADX > 12`);
+            return { pair: pair.name, direction: 'NEUTRAL', confidence: 0, reasons, rsi: Math.round(rsi), adx: Math.round(adx), timeframe, expiry, suggestedStake, suggestedRiskPercent };
+        }
+
+        const isUptrend = currentEma9 > currentEma21;
+        const isDowntrend = currentEma9 < currentEma21;
+        const emaBull = currentEma9 > currentEma21 && prevEma9 <= prevEma21;
+        const emaBear = currentEma9 < currentEma21 && prevEma9 >= prevEma21;
+        const macdBull = currentMacd > currentSignal && prevMacd <= prevSignal;
+        const macdBear = currentMacd < currentSignal && prevMacd >= prevSignal;
+        const bullishDMI = plusDI > minusDI;
+        const bearishDMI = minusDI > plusDI;
+        const higherConfluence = (higherTrend === 'bullish' && isUptrend) || (higherTrend === 'bearish' && isDowntrend);
+
+        // ========== SIGNAL LOGIC (60-100% CONFIDENCE) ==========
         
-        total++;
-        const winProbability = signal.confidence / 100;
-        const isWin = Math.random() < winProbability;
+        // HIGH CONFIDENCE (80-100%)
+        if (rsi < 30 && (isUptrend || (adx > 25 && bullishDMI))) {
+            direction = 'CALL';
+            confidence = Math.min(98, 85 + Math.floor((30 - rsi) / 2));
+            if (volumeSpike) confidence = Math.min(98, confidence + 5);
+            if (higherConfluence) confidence = Math.min(98, confidence + 3);
+            suggestedRiskPercent = confidence >= 85 ? 2 : 1.5;
+            suggestedStake = confidence >= 85 ? '$10 – $20' : '$10';
+            reasons.push(`✅ HIGH CONFIDENCE: RSI oversold (${rsi.toFixed(1)}) + bullish confirmation`);
+            if (isUptrend) reasons.push(`➡️ Uptrend: EMA9 > EMA21`);
+            if (adx > 25 && bullishDMI) reasons.push(`➡️ Strong trend (ADX ${adx.toFixed(1)})`);
+            if (volumeSpike) reasons.push(`✅ Volume spike: +${volumePercent}%`);
+            if (higherConfluence) reasons.push(`✅ 1H timeframe aligns: ${higherTrend}`);
+        }
+        else if (rsi > 70 && (isDowntrend || (adx > 25 && bearishDMI))) {
+            direction = 'PUT';
+            confidence = Math.min(98, 85 + Math.floor((rsi - 70) / 2));
+            if (volumeSpike) confidence = Math.min(98, confidence + 5);
+            if (higherConfluence) confidence = Math.min(98, confidence + 3);
+            suggestedRiskPercent = confidence >= 85 ? 2 : 1.5;
+            suggestedStake = confidence >= 85 ? '$10 – $20' : '$10';
+            reasons.push(`✅ HIGH CONFIDENCE: RSI overbought (${rsi.toFixed(1)}) + bearish confirmation`);
+            if (isDowntrend) reasons.push(`➡️ Downtrend: EMA9 < EMA21`);
+            if (adx > 25 && bearishDMI) reasons.push(`➡️ Strong trend (ADX ${adx.toFixed(1)})`);
+            if (volumeSpike) reasons.push(`✅ Volume spike: +${volumePercent}%`);
+            if (higherConfluence) reasons.push(`✅ 1H timeframe aligns: ${higherTrend}`);
+        }
         
-        if (isWin) {
-            wins++;
-            results.push('✅');
+        // MEDIUM CONFIDENCE (70-85%)
+        else if ((rsi < 35 || (adx > 20 && isUptrend)) && (isUptrend || bullishDMI)) {
+            direction = 'CALL';
+            confidence = 72 + Math.min(13, Math.floor(adx / 5));
+            if (rsi < 30) confidence += 5;
+            if (higherConfluence) confidence = Math.min(85, confidence + 3);
+            suggestedRiskPercent = 1.5;
+            suggestedStake = '$10';
+            reasons.push(`🟡 MEDIUM CONFIDENCE: Bullish momentum detected`);
+            if (isUptrend) reasons.push(`➡️ Uptrend confirmed by EMA`);
+            if (adx > 20) reasons.push(`➡️ Trend developing (ADX ${adx.toFixed(1)})`);
+            if (rsi < 35) reasons.push(`➡️ RSI ${rsi.toFixed(1)} approaching oversold`);
+            if (higherConfluence) reasons.push(`✅ 1H timeframe aligns: ${higherTrend}`);
+        }
+        else if ((rsi > 65 || (adx > 20 && isDowntrend)) && (isDowntrend || bearishDMI)) {
+            direction = 'PUT';
+            confidence = 72 + Math.min(13, Math.floor(adx / 5));
+            if (rsi > 70) confidence += 5;
+            if (higherConfluence) confidence = Math.min(85, confidence + 3);
+            suggestedRiskPercent = 1.5;
+            suggestedStake = '$10';
+            reasons.push(`🟡 MEDIUM CONFIDENCE: Bearish momentum detected`);
+            if (isDowntrend) reasons.push(`➡️ Downtrend confirmed by EMA`);
+            if (adx > 20) reasons.push(`➡️ Trend developing (ADX ${adx.toFixed(1)})`);
+            if (rsi > 65) reasons.push(`➡️ RSI ${rsi.toFixed(1)} approaching overbought`);
+            if (higherConfluence) reasons.push(`✅ 1H timeframe aligns: ${higherTrend}`);
+        }
+        
+        // LOW CONFIDENCE (60-70%) – Still a signal, just lower confidence
+        else if (adx >= 15 && (isUptrend || isDowntrend)) {
+            if (isUptrend) {
+                direction = 'CALL';
+                confidence = 62 + Math.min(8, Math.floor(adx / 10));
+                reasons.push(`🔵 LOW CONFIDENCE (${confidence}%): Weak uptrend detected`);
+            } else {
+                direction = 'PUT';
+                confidence = 62 + Math.min(8, Math.floor(adx / 10));
+                reasons.push(`🔵 LOW CONFIDENCE (${confidence}%): Weak downtrend detected`);
+            }
+            suggestedRiskPercent = 1;
+            suggestedStake = '$5';
+            reasons.push(`➡️ ADX ${adx.toFixed(1)} – trend developing`);
+            if (volumeSpike) reasons.push(`📊 Volume slightly above average`);
+        }
+        
+        // NO SIGNAL – extremely unclear conditions
+        else {
+            reasons.push(`❌ No clear setup – RSI ${rsi.toFixed(1)}, ADX ${adx.toFixed(1)}`);
+            reasons.push(`💡 Try a different timeframe or pair`);
+            return { pair: pair.name, direction: 'NEUTRAL', confidence: 0, reasons, rsi: Math.round(rsi), adx: Math.round(adx), timeframe, expiry, suggestedStake, suggestedRiskPercent };
+        }
+
+        // Ensure confidence is between 60-98
+        confidence = Math.max(60, Math.min(98, confidence));
+        
+        // Signal quality badge based on confidence
+        let qualityBadge = '';
+        if (confidence >= 85) qualityBadge = '🟢 HIGH (4.9⭐)';
+        else if (confidence >= 75) qualityBadge = '🟡 MEDIUM (4.5⭐)';
+        else if (confidence >= 65) qualityBadge = '🔵 LOW-MEDIUM (4.0⭐)';
+        else qualityBadge = '🔵 LOW (3.5⭐)';
+        
+        reasons.push(`📊 Signal quality: ${qualityBadge} | Confidence: ${confidence}%`);
+        reasons.push(`💰 Suggested risk: ${suggestedRiskPercent}% of balance (${suggestedStake})`);
+        reasons.push(`⏱️ Expiry: ${expiry}`);
+
+        // Set cooldown (shorter for lower confidence signals)
+        const cooldownTime = confidence >= 80 ? 300000 : 180000;
+        this.cooldown.set(cooldownKey, Date.now());
+        this.saveDailyLoss();
+
+        return { pair: pair.name, direction, confidence, reasons: reasons.slice(0, 8), rsi: Math.round(rsi), adx: Math.round(adx), timeframe, expiry, suggestedStake, suggestedRiskPercent };
+    }
+
+    calcEMA(values, period) {
+        const k = 2 / (period + 1);
+        let ema = values[0];
+        const result = [ema];
+        for (let i = 1; i < values.length; i++) {
+            ema = values[i] * k + ema * (1 - k);
+            result.push(ema);
+        }
+        return result;
+    }
+
+    neutral(pair, timeframe, reason) {
+        return { pair, direction: 'NEUTRAL', confidence: 0, reasons: [reason], rsi: 50, adx: 20, timeframe, expiry: 'N/A', suggestedStake: 'N/A', suggestedRiskPercent: 0 };
+    }
+
+    recordDailyLoss(userId) {
+        const today = moment().format('YYYY-MM-DD');
+        const current = this.dailyLossTracker[userId];
+        if (!current || current.date !== today) {
+            this.dailyLossTracker[userId] = { date: today, losses: 1 };
         } else {
-            losses++;
-            results.push('❌');
+            current.losses++;
+            this.dailyLossTracker[userId] = current;
+        }
+        this.saveDailyLoss();
+    }
+
+    resetDailyLoss(userId) {
+        const today = moment().format('YYYY-MM-DD');
+        const current = this.dailyLossTracker[userId];
+        if (current && current.date === today && current.losses > 0) {
+            current.losses--;
+            this.dailyLossTracker[userId] = current;
+            this.saveDailyLoss();
         }
     }
-    
-    const winRate = total > 0 ? ((wins / total) * 100).toFixed(1) : 0;
-    
-    let rating = '❌ POOR (Below 4.0)';
-    if (winRate >= 80) rating = '✅ EXCELLENT (4.9 Star)';
-    else if (winRate >= 75) rating = '🟡 GOOD (4.5 Star)';
-    else if (winRate >= 70) rating = '⚠️ ACCEPTABLE (4.0 Star)';
-    
-    const resultMessage = `📊 *BACKTEST RESULTS: ${pairName}*\n\n` +
-        `📈 Total Trades: ${total}\n` +
-        `✅ Wins: ${wins}\n` +
-        `❌ Losses: ${losses}\n` +
-        `🎯 *Win Rate: ${winRate}%*\n` +
-        `⭐ *Rating: ${rating}*\n\n` +
-        `*Sample:* ${results.slice(0, 20).join(' ')}${results.length > 20 ? '...' : ''}\n\n` +
-        `💡 *Recommendation:* ${winRate >= 75 ? 'Consider trading this pair with proper risk management (1-2% per trade).' : 'Test other pairs or timeframes for better results.'}`;
-    
-    await ctx.replyWithMarkdown(resultMessage);
-});
-
-// Launch bot with delay to prevent 409 conflict
-setTimeout(() => {
-    bot.launch().catch(console.error);
-}, 5000);
-
-console.log('✅ Bot starting...');
+}
+module.exports = new SignalAnalyzer();
