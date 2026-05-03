@@ -1,6 +1,6 @@
 {
   "name": "pocket-omni-bot",
-  "version": "4.9.0",
+  "version": "5.0.0",
   "main": "bot.js",
   "scripts": {
     "start": "node bot.js"
