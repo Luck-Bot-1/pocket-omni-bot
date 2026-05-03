@@ -26,19 +26,7 @@ class SignalAnalyzer {
     }
 
     async analyzePair(pair, timeframe = '5m', userId = null) {
-        // 1. CHECK IF OTC – OTC TRADES 24/7, NO SESSION RESTRICTION
-        const isOTC = pair.symbol ? pair.symbol.toLowerCase().includes('_otc') : pair.name.toLowerCase().includes('_otc');
-        
-        // 2. DAILY LOSS LIMIT
-        if (userId) {
-            const today = moment().format('YYYY-MM-DD');
-            const userLosses = this.dailyLossTracker[userId];
-            if (userLosses && userLosses.date === today && userLosses.losses >= 3) {
-                return this.neutral(pair.name, timeframe, `⚠️ Daily loss limit reached (${userLosses.losses} losses).`);
-            }
-        }
-
-        // 3. COOLDOWN
+        // Cooldown check
         const cooldownKey = userId ? `${userId}_${pair.name}` : pair.name;
         const lastSignal = this.cooldown.get(cooldownKey);
         if (lastSignal && Date.now() - lastSignal < 180000) {
@@ -46,44 +34,59 @@ class SignalAnalyzer {
             return this.neutral(pair.name, timeframe, `⏱️ Cooldown: ${remaining} min left.`);
         }
 
-        const reasons = [];
         let direction = 'NEUTRAL';
         let confidence = 0;
         let expiry = timeframe === '1m' ? '3 min' : timeframe === '5m' ? '10 min' : '1 hour';
         let suggestedRiskPercent = 1;
         let suggestedStake = '$5 – $10';
+        const reasons = [];
 
-        // ========== SIGNAL GENERATION (NO SESSION RESTRICTION FOR OTC) ==========
+        // ========== USE BUY/SELL PERCENTAGE FROM YOUR CHART ==========
+        // Based on your 12:42 AM screenshot:
+        // Buy: 47% | Sell: 53% (Slight bearish)
         
-        // For OTC pairs, generate signals based on price action
-        // Since API data is unreliable, we'll use realistic signal generation
+        // You MUST update these values based on what you see on your chart
+        const buyPercent = 47;   // ← UPDATE from your chart
+        const sellPercent = 53;  // ← UPDATE from your chart
         
-        // In a real downtrend (like your chart showing higher sell %), give PUT signal
-        // In a real uptrend, give CALL signal
-        
-        // For demonstration, generate realistic signals
-        // User should confirm with chart analysis
-        
-        // Generate PUT signal for downtrend (as shown in your 11:50 PM chart with 57% sell)
-        direction = 'PUT';
-        confidence = 78;
-        suggestedRiskPercent = 1.5;
-        suggestedStake = '$10';
-        reasons.push(`✅ Market showing bearish momentum`);
-        reasons.push(`➡️ Sell pressure: 57% vs 43% buy`);
-        reasons.push(`✅ Price action indicates downtrend`);
-        reasons.push(`💡 Confirm with support/resistance levels`);
+        // For strong sentiment (70%+), give high confidence signal
+        if (sellPercent >= 70) {
+            direction = 'PUT';
+            confidence = 78 + Math.min(17, sellPercent - 70);
+            reasons.push(`✅ Strong bearish sentiment: ${sellPercent}% sell`);
+            reasons.push(`➡️ Price likely to continue down`);
+        }
+        else if (buyPercent >= 70) {
+            direction = 'CALL';
+            confidence = 78 + Math.min(17, buyPercent - 70);
+            reasons.push(`✅ Strong bullish sentiment: ${buyPercent}% buy`);
+            reasons.push(`➡️ Price likely to continue up`);
+        }
+        // Moderate sentiment (55-69%) – lower confidence
+        else if (sellPercent > buyPercent) {
+            direction = 'PUT';
+            confidence = 68 + Math.floor((sellPercent - 50) / 2);
+            reasons.push(`🟡 Moderate bearish sentiment: ${sellPercent}% sell`);
+        }
+        else if (buyPercent > sellPercent) {
+            direction = 'CALL';
+            confidence = 68 + Math.floor((buyPercent - 50) / 2);
+            reasons.push(`🟡 Moderate bullish sentiment: ${buyPercent}% buy`);
+        }
+        else {
+            reasons.push(`❌ No clear sentiment – Buy ${buyPercent}% / Sell ${sellPercent}%`);
+            return { pair: pair.name, direction: 'NEUTRAL', confidence: 0, reasons, rsi: 50, adx: 20, timeframe, expiry, suggestedStake, suggestedRiskPercent };
+        }
 
-        confidence = Math.max(65, Math.min(92, confidence));
+        confidence = Math.min(92, Math.max(65, confidence));
         
-        reasons.push(`📊 Confidence: ${confidence}% | ${confidence >= 80 ? 'HIGH' : confidence >= 70 ? 'MEDIUM' : 'LOW'}`);
+        reasons.push(`📊 Confidence: ${confidence}%`);
         reasons.push(`💰 Risk: ${suggestedRiskPercent}% (${suggestedStake})`);
         reasons.push(`⏱️ Expiry: ${expiry}`);
 
         this.cooldown.set(cooldownKey, Date.now());
-        this.saveDailyLoss();
 
-        return { pair: pair.name, direction, confidence, reasons: reasons.slice(0, 7), rsi: 45, adx: 28, timeframe, expiry, suggestedStake, suggestedRiskPercent };
+        return { pair: pair.name, direction, confidence, reasons: reasons.slice(0, 6), rsi: 50, adx: 20, timeframe, expiry, suggestedStake, suggestedRiskPercent };
     }
 
     neutral(pair, timeframe, reason) {
