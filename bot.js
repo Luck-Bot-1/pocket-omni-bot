@@ -1,3 +1,4 @@
+const analyzer = require('./analyzer');
 // BACKTEST COMMAND – Professional Historical Backtest
 bot.command('backtest', async (ctx) => {
     const args = ctx.message.text.split(' ');
