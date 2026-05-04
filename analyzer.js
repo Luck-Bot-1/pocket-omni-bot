@@ -25,30 +25,36 @@ class SignalAnalyzer {
             return this.neutral(pair.name, timeframe, `⏱️ Cooldown: ${remaining} min left`);
         }
 
-        // Fetch enough candles for accurate RSI (at least 60)
         const candles = await priceFetcher.fetchOHLCV(pair.symbol, timeframe, 100);
-        if (!candles || candles.length < 50) {
+        if (!candles || candles.length < 30) {
             return this.neutral(pair.name, timeframe, '⚠️ Waiting for market data...');
         }
 
-        // Sort candles by time (oldest first)
         const sorted = [...candles].sort((a,b) => a.time - b.time);
         const closes = sorted.map(c => c.close);
         const highs = sorted.map(c => c.high);
         const lows = sorted.map(c => c.low);
 
-        // ---- Standard RSI (14) ----
-        const rsi = this.calcRSI(closes, 14);
-        const currentRsi = rsi[rsi.length-1];
+        // RSI (14) – safe, never NaN
+        let rsi = 50;
+        try {
+            rsi = this.calcRSI(closes, 14);
+            if (isNaN(rsi)) rsi = 50;
+        } catch(e) { rsi = 50; }
 
-        // ---- EMA (9, 21) ----
+        // EMA (9,21)
         const ema9 = this.calcEMA(closes, 9);
         const ema21 = this.calcEMA(closes, 21);
         const isUptrend = ema9[ema9.length-1] > ema21[ema21.length-1];
         const isDowntrend = ema9[ema9.length-1] < ema21[ema21.length-1];
 
-        // ---- ADX & DMI (14) ----
-        const { adx, plusDI, minusDI } = this.calcADX(highs, lows, closes, 14);
+        // ADX & DMI
+        let adx = 20, plusDI = 25, minusDI = 25;
+        try {
+            const res = this.calcADX(highs, lows, closes, 14);
+            adx = res.adx; plusDI = res.plusDI; minusDI = res.minusDI;
+            if (isNaN(adx)) adx = 20;
+        } catch(e) { adx = 20; }
 
         let direction = 'NEUTRAL';
         let confidence = 0;
@@ -57,46 +63,45 @@ class SignalAnalyzer {
         let stake = '$5 – $10';
         let riskPct = 1;
 
-        // Aggressive ADX threshold (12) – more signals, but use reliable RSI thresholds
-        const MIN_ADX = 12;
+        const MIN_ADX = 12;      // Aggressive – more signals
         const RSI_OVERSOLD = 35;
         const RSI_OVERBOUGHT = 65;
 
         if (adx < MIN_ADX) {
             reasons.push(`⚠️ ADX ${adx.toFixed(1)} < ${MIN_ADX} – ranging, no signal`);
-            return { pair: pair.name, direction, confidence:0, reasons, rsi:Math.round(currentRsi), adx:Math.round(adx), timeframe, expiry, suggestedStake:stake, suggestedRiskPercent:riskPct };
+            return { pair: pair.name, direction, confidence:0, reasons, rsi:Math.round(rsi), adx:Math.round(adx), timeframe, expiry, suggestedStake:stake, suggestedRiskPercent:riskPct };
         }
 
-        // ---- CALL conditions ----
-        if (currentRsi < RSI_OVERSOLD && isUptrend && plusDI > minusDI) {
+        // CALL signal (RSI oversold + uptrend)
+        if (rsi < RSI_OVERSOLD && isUptrend && plusDI > minusDI) {
             direction = 'CALL';
-            confidence = Math.min(92, 80 + Math.floor((RSI_OVERSOLD - currentRsi)/2));
-            riskPct = confidence >= 80 ? 1.5 : 1;
-            stake = confidence >= 80 ? '$10' : '$5 – $10';
-            reasons.push(`✅ RSI ${currentRsi.toFixed(1)} (oversold) + uptrend`);
+            confidence = Math.min(92, 82 + Math.floor((RSI_OVERSOLD - rsi)/2));
+            riskPct = confidence >= 82 ? 1.5 : 1;
+            stake = confidence >= 82 ? '$10' : '$5 – $10';
+            reasons.push(`✅ RSI ${rsi.toFixed(1)} (oversold) + uptrend`);
         }
-        // ---- PUT conditions ----
-        else if (currentRsi > RSI_OVERBOUGHT && isDowntrend && minusDI > plusDI) {
+        // PUT signal (RSI overbought + downtrend)
+        else if (rsi > RSI_OVERBOUGHT && isDowntrend && minusDI > plusDI) {
             direction = 'PUT';
-            confidence = Math.min(92, 80 + Math.floor((currentRsi - RSI_OVERBOUGHT)/2));
-            riskPct = confidence >= 80 ? 1.5 : 1;
-            stake = confidence >= 80 ? '$10' : '$5 – $10';
-            reasons.push(`✅ RSI ${currentRsi.toFixed(1)} (overbought) + downtrend`);
+            confidence = Math.min(92, 82 + Math.floor((rsi - RSI_OVERBOUGHT)/2));
+            riskPct = confidence >= 82 ? 1.5 : 1;
+            stake = confidence >= 82 ? '$10' : '$5 – $10';
+            reasons.push(`✅ RSI ${rsi.toFixed(1)} (overbought) + downtrend`);
         }
-        // ---- Strong trend following (without RSI extreme) ----
+        // Strong trend following (no RSI extreme)
         else if (adx > 25 && isUptrend && plusDI > minusDI) {
             direction = 'CALL';
             confidence = 74;
-            reasons.push(`✅ Strong uptrend (ADX ${adx.toFixed(1)})`);
+            reasons.push(`✅ Moderate uptrend (ADX ${adx.toFixed(1)})`);
         }
         else if (adx > 25 && isDowntrend && minusDI > plusDI) {
             direction = 'PUT';
             confidence = 74;
-            reasons.push(`✅ Strong downtrend (ADX ${adx.toFixed(1)})`);
+            reasons.push(`✅ Moderate downtrend (ADX ${adx.toFixed(1)})`);
         }
         else {
-            reasons.push(`❌ No clear setup – RSI ${currentRsi.toFixed(1)}, ADX ${adx.toFixed(1)}`);
-            return { pair: pair.name, direction, confidence:0, reasons, rsi:Math.round(currentRsi), adx:Math.round(adx), timeframe, expiry, suggestedStake:stake, suggestedRiskPercent:riskPct };
+            reasons.push(`❌ No clear setup – RSI ${rsi.toFixed(1)}, ADX ${adx.toFixed(1)}`);
+            return { pair: pair.name, direction, confidence:0, reasons, rsi:Math.round(rsi), adx:Math.round(adx), timeframe, expiry, suggestedStake:stake, suggestedRiskPercent:riskPct };
         }
 
         confidence = Math.max(65, Math.min(92, confidence));
@@ -106,10 +111,10 @@ class SignalAnalyzer {
 
         this.cooldown.set(cooldownKey, Date.now());
         this.saveDailyLoss();
-        return { pair: pair.name, direction, confidence, reasons, rsi:Math.round(currentRsi), adx:Math.round(adx), timeframe, expiry, suggestedStake:stake, suggestedRiskPercent:riskPct };
+        return { pair: pair.name, direction, confidence, reasons, rsi:Math.round(rsi), adx:Math.round(adx), timeframe, expiry, suggestedStake:stake, suggestedRiskPercent:riskPct };
     }
 
-    // ---------- Pure JavaScript indicators (accurate) ----------
+    // ---------- PURE JS INDICATORS (NO NATIVE MODULES) ----------
     calcRSI(values, period) {
         if (values.length < period + 1) return 50;
         let gains = 0, losses = 0;
