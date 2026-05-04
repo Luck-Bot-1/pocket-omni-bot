@@ -1,6 +1,6 @@
 {
   "name": "pocket-omni-bot",
-  "version": "5.2.0",
+  "version": "5.3.0",
   "main": "bot.js",
   "scripts": {
     "start": "node bot.js"
@@ -8,7 +8,7 @@
   "dependencies": {
     "telegraf": "^4.15.3",
     "dotenv": "^16.3.1",
-    "yahoo-finance2": "^2.11.3",
+    "axios": "^1.6.5",
     "moment": "^2.29.4",
     "moment-timezone": "^0.5.45"
   },
