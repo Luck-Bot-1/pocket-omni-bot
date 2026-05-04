@@ -6,7 +6,7 @@ class PriceFetcher {
         this.cacheTTL = 30000;
     }
 
-    async fetchOHLCV(symbol, interval = '5m', limit = 100) {
+    async fetchOHLCV(symbol, interval = '5m', limit = 150) {
         const cacheKey = `${symbol}_${interval}_${limit}`;
         const cached = this.cache.get(cacheKey);
         if (cached && Date.now() - cached.timestamp < this.cacheTTL) return cached.data;
