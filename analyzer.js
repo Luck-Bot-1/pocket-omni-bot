@@ -25,62 +25,78 @@ class SignalAnalyzer {
             return this.neutral(pair.name, timeframe, `⏱️ Cooldown: ${remaining} min left`);
         }
 
+        // Fetch enough candles for accurate RSI (at least 60)
         const candles = await priceFetcher.fetchOHLCV(pair.symbol, timeframe, 100);
-        if (!candles || candles.length < 50) return this.neutral(pair.name, timeframe, 'Insufficient data');
+        if (!candles || candles.length < 50) {
+            return this.neutral(pair.name, timeframe, '⚠️ Waiting for market data...');
+        }
 
+        // Sort candles by time (oldest first)
         const sorted = [...candles].sort((a,b) => a.time - b.time);
         const closes = sorted.map(c => c.close);
         const highs = sorted.map(c => c.high);
         const lows = sorted.map(c => c.low);
 
+        // ---- Standard RSI (14) ----
         const rsi = this.calcRSI(closes, 14);
+        const currentRsi = rsi[rsi.length-1];
+
+        // ---- EMA (9, 21) ----
         const ema9 = this.calcEMA(closes, 9);
         const ema21 = this.calcEMA(closes, 21);
         const isUptrend = ema9[ema9.length-1] > ema21[ema21.length-1];
         const isDowntrend = ema9[ema9.length-1] < ema21[ema21.length-1];
+
+        // ---- ADX & DMI (14) ----
         const { adx, plusDI, minusDI } = this.calcADX(highs, lows, closes, 14);
 
-        let direction = 'NEUTRAL', confidence = 0;
+        let direction = 'NEUTRAL';
+        let confidence = 0;
         let expiry = timeframe === '1m' ? '3 min' : timeframe === '5m' ? '10 min' : '1 hour';
-        let reasons = [], stake = '$5 – $10', riskPct = 1;
+        let reasons = [];
+        let stake = '$5 – $10';
+        let riskPct = 1;
 
-        // Aggressive thresholds
+        // Aggressive ADX threshold (12) – more signals, but use reliable RSI thresholds
         const MIN_ADX = 12;
-        const RSI_OVERSOLD = 45;
-        const RSI_OVERBOUGHT = 55;
+        const RSI_OVERSOLD = 35;
+        const RSI_OVERBOUGHT = 65;
 
         if (adx < MIN_ADX) {
             reasons.push(`⚠️ ADX ${adx.toFixed(1)} < ${MIN_ADX} – ranging, no signal`);
-            return { pair: pair.name, direction, confidence:0, reasons, rsi:Math.round(rsi), adx:Math.round(adx), timeframe, expiry, suggestedStake:stake, suggestedRiskPercent:riskPct };
+            return { pair: pair.name, direction, confidence:0, reasons, rsi:Math.round(currentRsi), adx:Math.round(adx), timeframe, expiry, suggestedStake:stake, suggestedRiskPercent:riskPct };
         }
 
-        if (rsi < RSI_OVERSOLD && isUptrend && plusDI > minusDI) {
+        // ---- CALL conditions ----
+        if (currentRsi < RSI_OVERSOLD && isUptrend && plusDI > minusDI) {
             direction = 'CALL';
-            confidence = Math.min(92, 75 + Math.floor((RSI_OVERSOLD - rsi)/2));
+            confidence = Math.min(92, 80 + Math.floor((RSI_OVERSOLD - currentRsi)/2));
             riskPct = confidence >= 80 ? 1.5 : 1;
             stake = confidence >= 80 ? '$10' : '$5 – $10';
-            reasons.push(`✅ RSI ${rsi.toFixed(1)} (low) + uptrend`);
+            reasons.push(`✅ RSI ${currentRsi.toFixed(1)} (oversold) + uptrend`);
         }
-        else if (rsi > RSI_OVERBOUGHT && isDowntrend && minusDI > plusDI) {
+        // ---- PUT conditions ----
+        else if (currentRsi > RSI_OVERBOUGHT && isDowntrend && minusDI > plusDI) {
             direction = 'PUT';
-            confidence = Math.min(92, 75 + Math.floor((rsi - RSI_OVERBOUGHT)/2));
+            confidence = Math.min(92, 80 + Math.floor((currentRsi - RSI_OVERBOUGHT)/2));
             riskPct = confidence >= 80 ? 1.5 : 1;
             stake = confidence >= 80 ? '$10' : '$5 – $10';
-            reasons.push(`✅ RSI ${rsi.toFixed(1)} (high) + downtrend`);
+            reasons.push(`✅ RSI ${currentRsi.toFixed(1)} (overbought) + downtrend`);
         }
+        // ---- Strong trend following (without RSI extreme) ----
         else if (adx > 25 && isUptrend && plusDI > minusDI) {
             direction = 'CALL';
-            confidence = 72;
-            reasons.push(`✅ Moderate uptrend (ADX ${adx.toFixed(1)})`);
+            confidence = 74;
+            reasons.push(`✅ Strong uptrend (ADX ${adx.toFixed(1)})`);
         }
         else if (adx > 25 && isDowntrend && minusDI > plusDI) {
             direction = 'PUT';
-            confidence = 72;
-            reasons.push(`✅ Moderate downtrend (ADX ${adx.toFixed(1)})`);
+            confidence = 74;
+            reasons.push(`✅ Strong downtrend (ADX ${adx.toFixed(1)})`);
         }
         else {
-            reasons.push(`❌ No clear setup – RSI ${rsi.toFixed(1)}, ADX ${adx.toFixed(1)}`);
-            return { pair: pair.name, direction, confidence:0, reasons, rsi:Math.round(rsi), adx:Math.round(adx), timeframe, expiry, suggestedStake:stake, suggestedRiskPercent:riskPct };
+            reasons.push(`❌ No clear setup – RSI ${currentRsi.toFixed(1)}, ADX ${adx.toFixed(1)}`);
+            return { pair: pair.name, direction, confidence:0, reasons, rsi:Math.round(currentRsi), adx:Math.round(adx), timeframe, expiry, suggestedStake:stake, suggestedRiskPercent:riskPct };
         }
 
         confidence = Math.max(65, Math.min(92, confidence));
@@ -90,34 +106,36 @@ class SignalAnalyzer {
 
         this.cooldown.set(cooldownKey, Date.now());
         this.saveDailyLoss();
-        return { pair: pair.name, direction, confidence, reasons, rsi:Math.round(rsi), adx:Math.round(adx), timeframe, expiry, suggestedStake:stake, suggestedRiskPercent:riskPct };
+        return { pair: pair.name, direction, confidence, reasons, rsi:Math.round(currentRsi), adx:Math.round(adx), timeframe, expiry, suggestedStake:stake, suggestedRiskPercent:riskPct };
     }
 
-    // ---------- Pure JS indicators ----------
+    // ---------- Pure JavaScript indicators (accurate) ----------
     calcRSI(values, period) {
-        if (values.length < period+1) return 50;
+        if (values.length < period + 1) return 50;
         let gains = 0, losses = 0;
         for (let i = 1; i <= period; i++) {
             const diff = values[i] - values[i-1];
-            diff >= 0 ? gains += diff : losses -= diff;
+            if (diff >= 0) gains += diff;
+            else losses -= diff;
         }
-        let avgGain = gains/period, avgLoss = losses/period;
-        let rsi = 100 - 100/(1 + avgGain/(avgLoss||0.001));
-        for (let i = period+1; i < values.length; i++) {
+        let avgGain = gains / period;
+        let avgLoss = losses / period;
+        let rsi = 100 - 100 / (1 + avgGain / (avgLoss || 0.001));
+        for (let i = period + 1; i < values.length; i++) {
             const diff = values[i] - values[i-1];
-            avgGain = (avgGain*(period-1) + Math.max(diff,0))/period;
-            avgLoss = (avgLoss*(period-1) + Math.max(-diff,0))/period;
-            rsi = 100 - 100/(1 + avgGain/(avgLoss||0.001));
+            avgGain = (avgGain * (period - 1) + Math.max(diff, 0)) / period;
+            avgLoss = (avgLoss * (period - 1) + Math.max(-diff, 0)) / period;
+            rsi = 100 - 100 / (1 + avgGain / (avgLoss || 0.001));
         }
         return rsi;
     }
 
     calcEMA(values, period) {
-        const k = 2/(period+1);
+        const k = 2 / (period + 1);
         let ema = values[0];
         const result = [ema];
         for (let i = 1; i < values.length; i++) {
-            ema = values[i]*k + ema*(1-k);
+            ema = values[i] * k + ema * (1 - k);
             result.push(ema);
         }
         return result;
@@ -132,15 +150,15 @@ class SignalAnalyzer {
             plusDM.push(up > down && up > 0 ? up : 0);
             minusDM.push(down > up && down > 0 ? down : 0);
         }
-        let atr = tr.slice(0,period).reduce((a,b)=>a+b,0)/period;
-        let plusDI = plusDM.slice(0,period).reduce((a,b)=>a+b,0)/period;
-        let minusDI = minusDM.slice(0,period).reduce((a,b)=>a+b,0)/period;
-        let adx = 100 * Math.abs(plusDI-minusDI)/(plusDI+minusDI||1);
+        let atr = tr.slice(0, period).reduce((a,b)=>a+b,0)/period;
+        let plusDI = plusDM.slice(0, period).reduce((a,b)=>a+b,0)/period;
+        let minusDI = minusDM.slice(0, period).reduce((a,b)=>a+b,0)/period;
+        let adx = 100 * Math.abs(plusDI - minusDI) / (plusDI + minusDI || 1);
         for (let i = period; i < tr.length; i++) {
-            atr = (atr*(period-1)+tr[i])/period;
-            plusDI = (plusDI*(period-1)+plusDM[i])/period;
-            minusDI = (minusDI*(period-1)+minusDM[i])/period;
-            adx = 100 * Math.abs(plusDI-minusDI)/(plusDI+minusDI||1);
+            atr = (atr * (period-1) + tr[i]) / period;
+            plusDI = (plusDI * (period-1) + plusDM[i]) / period;
+            minusDI = (minusDI * (period-1) + minusDM[i]) / period;
+            adx = 100 * Math.abs(plusDI - minusDI) / (plusDI + minusDI || 1);
         }
         return { adx, plusDI, minusDI };
     }
