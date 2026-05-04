@@ -8,7 +8,6 @@
   "dependencies": {
     "telegraf": "^4.15.3",
     "dotenv": "^16.3.1",
-    "socket.io-client": "^4.5.4",
     "yahoo-finance2": "^2.11.3",
     "moment": "^2.29.4",
     "moment-timezone": "^0.5.45"
