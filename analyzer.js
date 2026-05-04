@@ -33,60 +33,59 @@ class SignalAnalyzer {
         const highs = sorted.map(c => c.high);
         const lows = sorted.map(c => c.low);
 
-        // RSI (14)
         const rsi = this.calcRSI(closes, 14);
-        // EMA 9 & 21
         const ema9 = this.calcEMA(closes, 9);
         const ema21 = this.calcEMA(closes, 21);
         const isUptrend = ema9[ema9.length-1] > ema21[ema21.length-1];
         const isDowntrend = ema9[ema9.length-1] < ema21[ema21.length-1];
-        // ADX & DMI (14)
         const { adx, plusDI, minusDI } = this.calcADX(highs, lows, closes, 14);
 
         let direction = 'NEUTRAL', confidence = 0;
         let expiry = timeframe === '1m' ? '3 min' : timeframe === '5m' ? '10 min' : '1 hour';
         let reasons = [], stake = '$5 – $10', riskPct = 1;
 
-        // ADX filter – no signal in ranging markets
-        if (adx < 20) {
-            reasons.push(`⚠️ ADX ${adx.toFixed(1)} < 20 – ranging market, no signal`);
+        // Aggressive thresholds
+        const MIN_ADX = 12;
+        const RSI_OVERSOLD = 45;
+        const RSI_OVERBOUGHT = 55;
+
+        if (adx < MIN_ADX) {
+            reasons.push(`⚠️ ADX ${adx.toFixed(1)} < ${MIN_ADX} – ranging, no signal`);
             return { pair: pair.name, direction, confidence:0, reasons, rsi:Math.round(rsi), adx:Math.round(adx), timeframe, expiry, suggestedStake:stake, suggestedRiskPercent:riskPct };
         }
 
-        // High confidence signals
-        if (rsi < 35 && isUptrend && plusDI > minusDI) {
+        if (rsi < RSI_OVERSOLD && isUptrend && plusDI > minusDI) {
             direction = 'CALL';
-            confidence = Math.min(95, 80 + Math.floor((35 - rsi)/2));
-            riskPct = confidence >= 85 ? 2 : 1.5;
-            stake = confidence >= 85 ? '$10 – $20' : '$10';
-            reasons.push(`✅ RSI ${rsi.toFixed(1)} (oversold) + uptrend confirmation`);
-        } 
-        else if (rsi > 65 && isDowntrend && minusDI > plusDI) {
-            direction = 'PUT';
-            confidence = Math.min(95, 80 + Math.floor((rsi - 65)/2));
-            riskPct = confidence >= 85 ? 2 : 1.5;
-            stake = confidence >= 85 ? '$10 – $20' : '$10';
-            reasons.push(`✅ RSI ${rsi.toFixed(1)} (overbought) + downtrend confirmation`);
-        } 
-        // Strong trend following (no RSI extreme)
-        else if (adx > 30 && isUptrend && plusDI > minusDI) {
-            direction = 'CALL';
-            confidence = 76;
-            reasons.push(`✅ Strong uptrend (ADX ${adx.toFixed(1)})`);
+            confidence = Math.min(92, 75 + Math.floor((RSI_OVERSOLD - rsi)/2));
+            riskPct = confidence >= 80 ? 1.5 : 1;
+            stake = confidence >= 80 ? '$10' : '$5 – $10';
+            reasons.push(`✅ RSI ${rsi.toFixed(1)} (low) + uptrend`);
         }
-        else if (adx > 30 && isDowntrend && minusDI > plusDI) {
+        else if (rsi > RSI_OVERBOUGHT && isDowntrend && minusDI > plusDI) {
             direction = 'PUT';
-            confidence = 76;
-            reasons.push(`✅ Strong downtrend (ADX ${adx.toFixed(1)})`);
+            confidence = Math.min(92, 75 + Math.floor((rsi - RSI_OVERBOUGHT)/2));
+            riskPct = confidence >= 80 ? 1.5 : 1;
+            stake = confidence >= 80 ? '$10' : '$5 – $10';
+            reasons.push(`✅ RSI ${rsi.toFixed(1)} (high) + downtrend`);
+        }
+        else if (adx > 25 && isUptrend && plusDI > minusDI) {
+            direction = 'CALL';
+            confidence = 72;
+            reasons.push(`✅ Moderate uptrend (ADX ${adx.toFixed(1)})`);
+        }
+        else if (adx > 25 && isDowntrend && minusDI > plusDI) {
+            direction = 'PUT';
+            confidence = 72;
+            reasons.push(`✅ Moderate downtrend (ADX ${adx.toFixed(1)})`);
         }
         else {
             reasons.push(`❌ No clear setup – RSI ${rsi.toFixed(1)}, ADX ${adx.toFixed(1)}`);
             return { pair: pair.name, direction, confidence:0, reasons, rsi:Math.round(rsi), adx:Math.round(adx), timeframe, expiry, suggestedStake:stake, suggestedRiskPercent:riskPct };
         }
 
-        confidence = Math.max(65, Math.min(95, confidence));
-        reasons.push(`📊 Confidence: ${confidence}% | ${confidence>=85?'HIGH':confidence>=75?'MEDIUM':'LOW'}`);
-        reasons.push(`💰 Risk: ${riskPct}% of balance (${stake})`);
+        confidence = Math.max(65, Math.min(92, confidence));
+        reasons.push(`📊 Confidence: ${confidence}% | ${confidence>=80?'MEDIUM-HIGH':confidence>=70?'MEDIUM':'LOW'}`);
+        reasons.push(`💰 Risk: ${riskPct}% (${stake})`);
         reasons.push(`⏱️ Expiry: ${expiry}`);
 
         this.cooldown.set(cooldownKey, Date.now());
@@ -94,7 +93,7 @@ class SignalAnalyzer {
         return { pair: pair.name, direction, confidence, reasons, rsi:Math.round(rsi), adx:Math.round(adx), timeframe, expiry, suggestedStake:stake, suggestedRiskPercent:riskPct };
     }
 
-    // ---------- Pure JavaScript indicators (no external libs) ----------
+    // ---------- Pure JS indicators ----------
     calcRSI(values, period) {
         if (values.length < period+1) return 50;
         let gains = 0, losses = 0;
