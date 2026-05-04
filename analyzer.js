@@ -34,28 +34,26 @@ class SignalAnalyzer {
         const lows = sorted.map(c => c.low);
 
         // RSI (14)
-        const rsiVals = this.calcRSI(closes, 14);
-        const rsi = rsiVals[rsiVals.length-1];
-
-        // EMA
+        const rsi = this.calcRSI(closes, 14);
+        // EMA 9 & 21
         const ema9 = this.calcEMA(closes, 9);
         const ema21 = this.calcEMA(closes, 21);
         const isUptrend = ema9[ema9.length-1] > ema21[ema21.length-1];
         const isDowntrend = ema9[ema9.length-1] < ema21[ema21.length-1];
-
-        // ADX & DMI
+        // ADX & DMI (14)
         const { adx, plusDI, minusDI } = this.calcADX(highs, lows, closes, 14);
 
-        let direction = 'NEUTRAL', confidence = 0, expiry = timeframe==='1m'?'3 min':timeframe==='5m'?'10 min':'1 hour';
+        let direction = 'NEUTRAL', confidence = 0;
+        let expiry = timeframe === '1m' ? '3 min' : timeframe === '5m' ? '10 min' : '1 hour';
         let reasons = [], stake = '$5 – $10', riskPct = 1;
 
-        // No signal if ADX < 20 (ranging market)
+        // ADX filter – no signal in ranging markets
         if (adx < 20) {
             reasons.push(`⚠️ ADX ${adx.toFixed(1)} < 20 – ranging market, no signal`);
             return { pair: pair.name, direction, confidence:0, reasons, rsi:Math.round(rsi), adx:Math.round(adx), timeframe, expiry, suggestedStake:stake, suggestedRiskPercent:riskPct };
         }
 
-        // RSI oversold + uptrend = CALL
+        // High confidence signals
         if (rsi < 35 && isUptrend && plusDI > minusDI) {
             direction = 'CALL';
             confidence = Math.min(95, 80 + Math.floor((35 - rsi)/2));
@@ -63,7 +61,6 @@ class SignalAnalyzer {
             stake = confidence >= 85 ? '$10 – $20' : '$10';
             reasons.push(`✅ RSI ${rsi.toFixed(1)} (oversold) + uptrend confirmation`);
         } 
-        // RSI overbought + downtrend = PUT
         else if (rsi > 65 && isDowntrend && minusDI > plusDI) {
             direction = 'PUT';
             confidence = Math.min(95, 80 + Math.floor((rsi - 65)/2));
@@ -94,44 +91,45 @@ class SignalAnalyzer {
 
         this.cooldown.set(cooldownKey, Date.now());
         this.saveDailyLoss();
-
         return { pair: pair.name, direction, confidence, reasons, rsi:Math.round(rsi), adx:Math.round(adx), timeframe, expiry, suggestedStake:stake, suggestedRiskPercent:riskPct };
     }
 
-    // ---------- INDICATOR CALCULATIONS ----------
+    // ---------- Pure JavaScript indicators (no external libs) ----------
     calcRSI(values, period) {
-        if (values.length < period+1) return [50];
+        if (values.length < period+1) return 50;
         let gains = 0, losses = 0;
         for (let i = 1; i <= period; i++) {
             const diff = values[i] - values[i-1];
             diff >= 0 ? gains += diff : losses -= diff;
         }
         let avgGain = gains/period, avgLoss = losses/period;
-        let rsi = [100 - 100/(1 + avgGain/(avgLoss||0.001))];
+        let rsi = 100 - 100/(1 + avgGain/(avgLoss||0.001));
         for (let i = period+1; i < values.length; i++) {
             const diff = values[i] - values[i-1];
             avgGain = (avgGain*(period-1) + Math.max(diff,0))/period;
             avgLoss = (avgLoss*(period-1) + Math.max(-diff,0))/period;
-            rsi.push(100 - 100/(1 + avgGain/(avgLoss||0.001)));
+            rsi = 100 - 100/(1 + avgGain/(avgLoss||0.001));
         }
         return rsi;
     }
 
     calcEMA(values, period) {
         const k = 2/(period+1);
-        let ema = values[0], res = [ema];
+        let ema = values[0];
+        const result = [ema];
         for (let i = 1; i < values.length; i++) {
             ema = values[i]*k + ema*(1-k);
-            res.push(ema);
+            result.push(ema);
         }
-        return res;
+        return result;
     }
 
     calcADX(high, low, close, period) {
         let tr = [], plusDM = [], minusDM = [];
         for (let i = 1; i < close.length; i++) {
             tr.push(Math.max(high[i]-low[i], Math.abs(high[i]-close[i-1]), Math.abs(low[i]-close[i-1])));
-            const up = high[i]-high[i-1], down = low[i-1]-low[i];
+            const up = high[i]-high[i-1];
+            const down = low[i-1]-low[i];
             plusDM.push(up > down && up > 0 ? up : 0);
             minusDM.push(down > up && down > 0 ? down : 0);
         }
