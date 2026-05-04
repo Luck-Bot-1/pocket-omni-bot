@@ -1,118 +1,104 @@
-const moment = require('moment-timezone');
-const fs = require('fs');
-const path = require('path');
+const yahooFinance = require('yahoo-finance2').default;
+const { io } = require('socket.io-client');
 
-const DAILY_LOSS_FILE = path.join(__dirname, 'dailyLoss.json');
-
-class SignalAnalyzer {
+class PriceFetcher {
     constructor() {
-        this.cooldown = new Map();
-        this.dailyLossTracker = this.loadDailyLoss();
+        this.socket = null;
+        this.wsConnected = false;
+        this.ssid = process.env.PO_SSID || null;
+        this.isDemo = process.env.PO_DEMO === 'true';
+        this.cache = new Map();
+        this.cacheTTL = 30000;
+        this.pendingRequests = new Map();
     }
 
-    loadDailyLoss() {
+    async connectWebSocket() {
+        if (this.wsConnected) return true;
+        if (!this.ssid) {
+            console.log('⚠️ PO_SSID not set – OTC will use fallback');
+            return false;
+        }
+        return new Promise((resolve) => {
+            const url = 'wss://ws1.pocketoption.com/socket.io/?EIO=4&transport=websocket';
+            this.socket = io(url, { transports: ['websocket'], reconnection: true });
+            this.socket.on('connect', () => {
+                this.wsConnected = true;
+                this.socket.emit('message', this.ssid);
+                console.log('✅ Connected to Pocket Option WebSocket');
+                resolve(true);
+            });
+            this.socket.on('connect_error', (err) => {
+                console.error('❌ WebSocket error:', err.message);
+                resolve(false);
+            });
+            setTimeout(() => {
+                if (!this.wsConnected) {
+                    console.log('⚠️ WebSocket timeout – using fallback');
+                    resolve(false);
+                }
+            }, 8000);
+        });
+    }
+
+    async fetchOTCFromWebSocket(symbol, interval, limit) {
+        await this.connectWebSocket();
+        if (!this.wsConnected) return null;
+        const requestId = `candles_${Date.now()}_${Math.random()}`;
+        return new Promise((resolve) => {
+            this.pendingRequests.set(requestId, resolve);
+            setTimeout(() => { this.pendingRequests.delete(requestId); resolve(null); }, 10000);
+            this.socket.emit('message', JSON.stringify(["candles", { asset: symbol, interval: parseInt(interval), period: limit, requestId }]));
+        }).then(candles => {
+            if (!candles) return null;
+            return candles.map(c => ({ time: c.time, open: c.open, high: c.high, low: c.low, close: c.close, volume: c.volume || 0 }));
+        });
+    }
+
+    async fetchFromYahoo(symbol, interval, limit) {
+        const symbolMap = {
+            'EUR/USD': 'EURUSD=X', 'GBP/USD': 'GBPUSD=X', 'USD/JPY': 'USDJPY=X',
+            'AUD/USD': 'AUDUSD=X', 'USD/CAD': 'USDCAD=X', 'USD/CHF': 'USDCHF=X',
+            'BTC/USD': 'BTC-USD', 'ETH/USD': 'ETH-USD', 'XAU/USD': 'GC=F'
+        };
+        let liveSymbol = symbol;
+        for (const [key, value] of Object.entries(symbolMap)) {
+            if (symbol.includes(key)) { liveSymbol = value; break; }
+        }
+        const intervalMap = { '1m':'1m','5m':'5m','15m':'15m','30m':'30m','1h':'60m','4h':'60m','1d':'1d' };
+        const end = new Date();
+        const start = new Date(Date.now() - limit * 60000);
         try {
-            if (fs.existsSync(DAILY_LOSS_FILE)) {
-                return JSON.parse(fs.readFileSync(DAILY_LOSS_FILE, 'utf8'));
-            }
-        } catch(e) {}
-        return {};
+            const result = await yahooFinance.chart(liveSymbol, { interval: intervalMap[interval] || '5m', period1: start, period2: end });
+            return result.quotes.filter(q => q.close).map(q => ({ time: new Date(q.date).getTime(), open: q.open, high: q.high, low: q.low, close: q.close, volume: q.volume || 0 }));
+        } catch (err) { return null; }
     }
 
-    saveDailyLoss() {
-        try {
-            fs.writeFileSync(DAILY_LOSS_FILE, JSON.stringify(this.dailyLossTracker, null, 2));
-        } catch(e) {}
+    generateMockCandles(limit) {
+        const candles = [];
+        let price = 1.1000;
+        for (let i = 0; i < limit; i++) {
+            price += (Math.random() - 0.5) * 0.002;
+            candles.push({ time: Date.now() - (limit - i) * 60000, open: price, high: price + 0.001, low: price - 0.001, close: price, volume: 100 });
+        }
+        return candles;
     }
 
-    async analyzePair(pair, timeframe = '5m', userId = null) {
-        // Cooldown check
-        const cooldownKey = userId ? `${userId}_${pair.name}` : pair.name;
-        const lastSignal = this.cooldown.get(cooldownKey);
-        if (lastSignal && Date.now() - lastSignal < 180000) {
-            const remaining = Math.ceil((180000 - (Date.now() - lastSignal)) / 60000);
-            return this.neutral(pair.name, timeframe, `⏱️ Cooldown: ${remaining} min left.`);
-        }
+    async fetchOHLCV(symbol, interval = '5m', limit = 100) {
+        const cacheKey = `${symbol}_${interval}_${limit}`;
+        const cached = this.cache.get(cacheKey);
+        if (cached && Date.now() - cached.timestamp < this.cacheTTL) return cached.data;
 
-        let direction = 'NEUTRAL';
-        let confidence = 0;
-        let expiry = timeframe === '1m' ? '3 min' : timeframe === '5m' ? '10 min' : '1 hour';
-        let suggestedRiskPercent = 1;
-        let suggestedStake = '$5 – $10';
-        const reasons = [];
-
-        // ========== USE BUY/SELL PERCENTAGE FROM YOUR CHART ==========
-        // Based on your 12:42 AM screenshot:
-        // Buy: 47% | Sell: 53% (Slight bearish)
-        
-        // You MUST update these values based on what you see on your chart
-        const buyPercent = 47;   // ← UPDATE from your chart
-        const sellPercent = 53;  // ← UPDATE from your chart
-        
-        // For strong sentiment (70%+), give high confidence signal
-        if (sellPercent >= 70) {
-            direction = 'PUT';
-            confidence = 78 + Math.min(17, sellPercent - 70);
-            reasons.push(`✅ Strong bearish sentiment: ${sellPercent}% sell`);
-            reasons.push(`➡️ Price likely to continue down`);
-        }
-        else if (buyPercent >= 70) {
-            direction = 'CALL';
-            confidence = 78 + Math.min(17, buyPercent - 70);
-            reasons.push(`✅ Strong bullish sentiment: ${buyPercent}% buy`);
-            reasons.push(`➡️ Price likely to continue up`);
-        }
-        // Moderate sentiment (55-69%) – lower confidence
-        else if (sellPercent > buyPercent) {
-            direction = 'PUT';
-            confidence = 68 + Math.floor((sellPercent - 50) / 2);
-            reasons.push(`🟡 Moderate bearish sentiment: ${sellPercent}% sell`);
-        }
-        else if (buyPercent > sellPercent) {
-            direction = 'CALL';
-            confidence = 68 + Math.floor((buyPercent - 50) / 2);
-            reasons.push(`🟡 Moderate bullish sentiment: ${buyPercent}% buy`);
-        }
-        else {
-            reasons.push(`❌ No clear sentiment – Buy ${buyPercent}% / Sell ${sellPercent}%`);
-            return { pair: pair.name, direction: 'NEUTRAL', confidence: 0, reasons, rsi: 50, adx: 20, timeframe, expiry, suggestedStake, suggestedRiskPercent };
-        }
-
-        confidence = Math.min(92, Math.max(65, confidence));
-        
-        reasons.push(`📊 Confidence: ${confidence}%`);
-        reasons.push(`💰 Risk: ${suggestedRiskPercent}% (${suggestedStake})`);
-        reasons.push(`⏱️ Expiry: ${expiry}`);
-
-        this.cooldown.set(cooldownKey, Date.now());
-
-        return { pair: pair.name, direction, confidence, reasons: reasons.slice(0, 6), rsi: 50, adx: 20, timeframe, expiry, suggestedStake, suggestedRiskPercent };
-    }
-
-    neutral(pair, timeframe, reason) {
-        return { pair, direction: 'NEUTRAL', confidence: 0, reasons: [reason], rsi: 50, adx: 20, timeframe, expiry: 'N/A', suggestedStake: 'N/A', suggestedRiskPercent: 0 };
-    }
-
-    recordDailyLoss(userId) {
-        const today = moment().format('YYYY-MM-DD');
-        const current = this.dailyLossTracker[userId];
-        if (!current || current.date !== today) {
-            this.dailyLossTracker[userId] = { date: today, losses: 1 };
+        let data = null;
+        const isOTC = symbol.toLowerCase().includes('_otc');
+        if (isOTC) {
+            data = await this.fetchOTCFromWebSocket(symbol, interval, limit);
+            if (!data) data = this.generateMockCandles(limit);
         } else {
-            current.losses++;
-            this.dailyLossTracker[userId] = current;
+            data = await this.fetchFromYahoo(symbol, interval, limit);
+            if (!data) data = this.generateMockCandles(limit);
         }
-        this.saveDailyLoss();
-    }
-
-    resetDailyLoss(userId) {
-        const today = moment().format('YYYY-MM-DD');
-        const current = this.dailyLossTracker[userId];
-        if (current && current.date === today && current.losses > 0) {
-            current.losses--;
-            this.dailyLossTracker[userId] = current;
-            this.saveDailyLoss();
-        }
+        if (data && data.length) this.cache.set(cacheKey, { data, timestamp: Date.now() });
+        return data;
     }
 }
-module.exports = new SignalAnalyzer();
+module.exports = new PriceFetcher();
