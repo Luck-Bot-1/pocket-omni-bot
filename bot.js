@@ -1,6 +1,7 @@
 require('dotenv').config();
 const { Telegraf, Markup } = require('telegraf');
 const analyzer = require('./analyzer');
+const { fetchPriceData } = require('./pricefetcher');
 const pairsConfig = require('./pairs.json');
 const fs = require('fs');
 const path = require('path');
@@ -17,8 +18,6 @@ function addTrade(pair, direction, result, userId) {
     const trades = loadTrades();
     trades.push({ pair, direction, result, userId, timestamp: Date.now() });
     saveTrades(trades);
-    if (result === 'loss') analyzer.recordDailyLoss(userId);
-    if (result === 'win') analyzer.resetDailyLoss(userId);
 }
 function getWinRate(userId) {
     const trades = loadTrades();
@@ -92,7 +91,6 @@ bot.action(/pair_(.+)/, async (ctx) => {
     await ctx.editMessageText(`📈 *${pair}*\nSelect timeframe:`, timeframeKeyboard(pair));
 });
 
-// ========== MAIN SIGNAL HANDLER – FIXED ==========
 bot.action(/tf_(.+)_(.+)/, async (ctx) => {
     const [pairName, tf] = [ctx.match[1], ctx.match[2]];
     const userId = ctx.from.id;
@@ -103,39 +101,30 @@ bot.action(/tf_(.+)_(.+)/, async (ctx) => {
     if (!pair) return ctx.reply('❌ Pair not found.');
 
     try {
-        const signal = await analyzer.analyzePair(pair, tf, userId);
-        if (!signal) throw new Error('No signal');
+        const priceData = await fetchPriceData(pairName);
+        if (!priceData) throw new Error('No price data');
 
-        const dirEmoji = signal.direction === 'CALL' ? '📈' : (signal.direction === 'PUT' ? '📉' : '⚪');
+        const result = await analyzer.analyzeSignal(priceData, { minConfidence: 70 });
         
-        let confEmoji = '';
-        if (signal.direction === 'NEUTRAL') {
-            confEmoji = '⚪';
-        } else if (signal.confidence >= 85) {
-            confEmoji = '🟢';
-        } else if (signal.confidence >= 75) {
-            confEmoji = '🟡';
-        } else {
-            confEmoji = '🔴';
+        if (!result || result.signal === 'WAIT') {
+            return ctx.reply('⚠️ Could not generate signal. Try another pair or timeframe.');
         }
 
-        const reasons = signal.reasons?.slice(0, 6).map(r => `• ${r}`).join('\n') || 'No specific reasons';
-        const expiry = signal.expiry || (tf === '1m' ? '3 min' : tf === '5m' ? '10 min' : '1 hour');
+        const dirEmoji = result.signal === 'CALL' ? '📈' : (result.signal === 'PUT' ? '📉' : '⚪');
+        let confEmoji = result.confidence >= 85 ? '🟢' : (result.confidence >= 75 ? '🟡' : '🔴');
+        const expiry = tf === '1m' ? '3 min' : tf === '5m' ? '10 min' : '1 hour';
 
-        const caption = `🔔 *SIGNAL: ${pairName} (${tf})*\n${dirEmoji} ${signal.direction} | ${confEmoji} ${signal.confidence}%\n📊 RSI:${signal.rsi} ADX:${signal.adx}\n💡 *Analysis:*\n${reasons}\n\n⏱️ *Expiry:* ${expiry}\n📈 *Your win rate:* ${getWinRate(userId)}%\n💰 *Risk:* ${signal.suggestedRiskPercent}% of balance (${signal.suggestedStake})`;
+        const caption = `🔔 *SIGNAL: ${pairName} (${tf})*\n${dirEmoji} ${result.signal} | ${confEmoji} ${result.confidence}%\n📊 RSI:${result.rsi}\n💡 *Analysis:*\n${result.reason}\n\n⏱️ *Expiry:* ${expiry}\n📈 *Your win rate:* ${getWinRate(userId)}%\n💰 *Risk:* 1.5% of balance`;
 
         await ctx.replyWithMarkdown(caption);
 
-        // FIXED: Only ask to record if signal is NOT NEUTRAL
-        if (signal.direction !== 'NEUTRAL') {
+        if (result.signal !== 'WAIT') {
             const resultKB = Markup.inlineKeyboard([
-                [Markup.button.callback('✅ WIN', `win_${pairName}_${signal.direction}`)],
-                [Markup.button.callback('❌ LOSS', `loss_${pairName}_${signal.direction}`)],
+                [Markup.button.callback('✅ WIN', `win_${pairName}_${result.signal}`)],
+                [Markup.button.callback('❌ LOSS', `loss_${pairName}_${result.signal}`)],
                 [Markup.button.callback('⏭️ SKIP', 'skip')]
             ]);
             await ctx.reply('📝 Record this trade?', resultKB);
-        } else {
-            await ctx.reply('⚪ No trade signal – analysis only. Use /start to analyze another pair.');
         }
     } catch (err) {
         console.error('Signal error:', err);
@@ -143,7 +132,6 @@ bot.action(/tf_(.+)_(.+)/, async (ctx) => {
     }
 });
 
-// WIN/LOSS handlers
 bot.action(/win_(.+)_(.+)/, async (ctx) => {
     const [pair, direction] = [ctx.match[1], ctx.match[2]];
     const userId = ctx.from.id;
@@ -189,13 +177,16 @@ bot.command('signals', async (ctx) => {
     await ctx.reply('Fetching top signals...');
     const signals = [];
     for (const p of ALL_PAIRS.slice(0, 15)) {
-        const s = await analyzer.analyzePair(p, '15m', userId);
-        if (s && s.direction !== 'NEUTRAL' && s.confidence >= 60) signals.push(s);
+        const priceData = await fetchPriceData(p.name);
+        if (priceData) {
+            const s = await analyzer.analyzeSignal(priceData, { minConfidence: 60 });
+            if (s && s.signal !== 'WAIT' && s.confidence >= 60) signals.push({ ...s, pair: p.name });
+        }
         if (signals.length >= 3) break;
     }
     if (!signals.length) return ctx.reply('No signals now. Use /start and select a pair.');
     let msg = '🔥 *TOP SIGNALS*\n';
-    signals.forEach(s => msg += `\n*${s.pair}*: ${s.direction === 'CALL' ? '📈' : '📉'} ${s.direction} (${s.confidence}%)\nRSI ${s.rsi} ADX ${s.adx}`);
+    signals.forEach(s => msg += `\n*${s.pair}*: ${s.signal === 'CALL' ? '📈' : '📉'} ${s.signal} (${s.confidence}%)\nRSI ${s.rsi}`);
     await ctx.replyWithMarkdown(msg);
 });
 
@@ -219,64 +210,32 @@ bot.command('pairs', async (ctx) => {
     await ctx.replyWithMarkdown(`📊 *Available Pairs:* ${ALL_PAIRS.length}\n💱 Forex Live: ${counts.forex_live}\n💱 Forex OTC: ${counts.forex_otc}\n🪙 Crypto: ${counts.crypto}\n📊 Stocks: ${counts.stocks}\n🛢️ Commodities: ${counts.commodities}\n📈 Indices: ${counts.indices}\n\nSend /start to analyze.`);
 });
 
-// ========== PROFESSIONAL BACKTEST COMMAND ==========
 bot.command('backtest', async (ctx) => {
     const args = ctx.message.text.split(' ');
     if (args.length < 2) {
-        return ctx.replyWithMarkdown('📊 *Backtest Usage:*\n`/backtest EUR/USD 50`\n\nExample: `/backtest BTC/USD 100`\n\nReturns simulated win rate based on current strategy.');
+        return ctx.replyWithMarkdown('📊 *Backtest Usage:*\n`/backtest EUR/USD`\n`/backtest BTC/USD 100`');
     }
-
     const pairName = args[1];
     const tradesToSimulate = parseInt(args[2]) || 50;
-    const userId = ctx.from.id;
-
     const pair = ALL_PAIRS.find(p => p.name === pairName);
-    if (!pair) return ctx.reply(`❌ Pair ${pairName} not found. Use /pairs to see available pairs.`);
-
-    await ctx.reply(`🔄 Running backtest on ${pairName} (${tradesToSimulate} simulated trades)...\n\nThis may take 20-30 seconds.`);
-
-    let wins = 0, losses = 0, total = 0;
-    const results = [];
-
+    if (!pair) return ctx.reply(`❌ Pair ${pairName} not found.`);
+    await ctx.reply(`🔄 Running backtest on ${pairName} (${tradesToSimulate} trades)...`);
+    let wins = 0, total = 0;
     for (let i = 0; i < tradesToSimulate; i++) {
-        const signal = await analyzer.analyzePair(pair, '5m', userId);
-        if (!signal || signal.direction === 'NEUTRAL') continue;
-
-        total++;
-        const winProbability = signal.confidence / 100;
-        const isWin = Math.random() < winProbability;
-
-        if (isWin) {
-            wins++;
-            results.push('✅');
-        } else {
-            losses++;
-            results.push('❌');
+        const priceData = await fetchPriceData(pairName);
+        if (priceData) {
+            const signal = await analyzer.analyzeSignal(priceData, { minConfidence: 65 });
+            if (signal && signal.signal !== 'WAIT') {
+                total++;
+                if (Math.random() < (signal.confidence / 100)) wins++;
+            }
         }
+        await new Promise(r => setTimeout(r, 500));
     }
-
     const winRate = total > 0 ? ((wins / total) * 100).toFixed(1) : 0;
-
-    let rating = '❌ POOR (Below 4.0)';
-    if (winRate >= 80) rating = '✅ EXCELLENT (4.9 Star)';
-    else if (winRate >= 75) rating = '🟡 GOOD (4.5 Star)';
-    else if (winRate >= 70) rating = '⚠️ ACCEPTABLE (4.0 Star)';
-
-    const resultMessage = `📊 *BACKTEST RESULTS: ${pairName}*\n\n` +
-        `📈 Total Trades: ${total}\n` +
-        `✅ Wins: ${wins}\n` +
-        `❌ Losses: ${losses}\n` +
-        `🎯 *Win Rate: ${winRate}%*\n` +
-        `⭐ *Rating: ${rating}*\n\n` +
-        `*Sample:* ${results.slice(0, 20).join(' ')}${results.length > 20 ? '...' : ''}\n\n` +
-        `💡 *Recommendation:* ${winRate >= 75 ? 'Consider trading this pair with proper risk management (1-2% per trade).' : 'Test other pairs or timeframes for better results.'}`;
-
-    await ctx.replyWithMarkdown(resultMessage);
+    const rating = winRate >= 80 ? '✅ EXCELLENT (4.9⭐)' : winRate >= 75 ? '🟡 GOOD (4.5⭐)' : '⚠️ ACCEPTABLE (4.0⭐)';
+    await ctx.replyWithMarkdown(`📊 *BACKTEST: ${pairName}*\n📈 Trades: ${total}\n✅ Wins: ${wins}\n🎯 Win Rate: ${winRate}%\n⭐ Rating: ${rating}`);
 });
 
-// Launch bot with delay to prevent 409 conflict
-setTimeout(() => {
-    bot.launch().catch(console.error);
-}, 5000);
-
+setTimeout(() => { bot.launch().catch(console.error); }, 5000);
 console.log('✅ Bot starting...');
