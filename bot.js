@@ -1,3 +1,7 @@
+// ============================================
+// BOT v5.1 – FINAL WITH LOWER CONFIDENCE THRESHOLD
+// ============================================
+
 require('dotenv').config();
 const { Telegraf, Markup } = require('telegraf');
 const analyzer = require('./analyzer');
@@ -104,8 +108,8 @@ bot.action(/tf_(.+)_(.+)/, async (ctx) => {
         const priceData = await fetchPriceData(pairName);
         if (!priceData) throw new Error('No price data');
 
-        const result = await analyzer.analyzeSignal(priceData, { minConfidence: 70 });
-        
+        const result = await analyzer.analyzeSignal(priceData, { minConfidence: 60 }); // ✅ lowered to 60
+
         if (!result || result.signal === 'WAIT') {
             return ctx.reply('⚠️ Could not generate signal. Try another pair or timeframe.');
         }
@@ -124,7 +128,7 @@ bot.action(/tf_(.+)_(.+)/, async (ctx) => {
                 [Markup.button.callback('❌ LOSS', `loss_${pairName}_${result.signal}`)],
                 [Markup.button.callback('⏭️ SKIP', 'skip')]
             ]);
-            await ctx.reply('📝 Record this trade?', resultKB);
+            await ctx.reply('📝 Record this trade after expiry?', resultKB);
         }
     } catch (err) {
         console.error('Signal error:', err);
@@ -179,8 +183,8 @@ bot.command('signals', async (ctx) => {
     for (const p of ALL_PAIRS.slice(0, 15)) {
         const priceData = await fetchPriceData(p.name);
         if (priceData) {
-            const s = await analyzer.analyzeSignal(priceData, { minConfidence: 60 });
-            if (s && s.signal !== 'WAIT' && s.confidence >= 60) signals.push({ ...s, pair: p.name });
+            const s = await analyzer.analyzeSignal(priceData, { minConfidence: 55 }); // ✅ lowered
+            if (s && s.signal !== 'WAIT' && s.confidence >= 55) signals.push({ ...s, pair: p.name });
         }
         if (signals.length >= 3) break;
     }
@@ -224,7 +228,7 @@ bot.command('backtest', async (ctx) => {
     for (let i = 0; i < tradesToSimulate; i++) {
         const priceData = await fetchPriceData(pairName);
         if (priceData) {
-            const signal = await analyzer.analyzeSignal(priceData, { minConfidence: 65 });
+            const signal = await analyzer.analyzeSignal(priceData, { minConfidence: 55 }); // ✅ lowered
             if (signal && signal.signal !== 'WAIT') {
                 total++;
                 if (Math.random() < (signal.confidence / 100)) wins++;
