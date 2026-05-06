@@ -1,12 +1,7 @@
-// ============================================
-// PRICEFETCHER v4.0 - PROFESSIONAL ENTERPRISE GRADE
-// Audit Rating: 4.9/5
-// ============================================
-
 const API_KEY = process.env.API_KEY;
 
 if (!API_KEY) {
-    console.error('❌ CRITICAL: API_KEY not set');
+    console.error('❌ API_KEY not set');
     process.exit(1);
 }
 
@@ -38,23 +33,20 @@ const rateLimiter = new RateLimiter();
 
 async function fetchPriceData(pair) {
     if (!rateLimiter.canRequest()) {
-        console.log(`⏳ Rate limit reached for ${pair}`);
+        console.log(`⏳ Rate limit for ${pair}`);
         return null;
     }
-    
     try {
         const url = `https://api.twelvedata.com/time_series?symbol=${pair}&interval=15min&outputsize=60&apikey=${API_KEY}`;
         console.log(`📡 Fetching ${pair}...`);
         const response = await fetch(url);
         const data = await response.json();
-        
         if (data.status === 'error' || !data.values) {
-            console.error(`⚠️ API error for ${pair}:`, data.message);
+            console.error(`⚠️ API error ${pair}:`, data.message);
             return null;
         }
-        
         rateLimiter.record();
-        console.log(`✅ Got data for ${pair} (${data.values.length} candles)`);
+        console.log(`✅ Got ${pair} (${data.values.length} candles)`);
         return data;
     } catch (err) {
         console.error(`❌ Error ${pair}:`, err.message);
