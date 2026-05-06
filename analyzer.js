@@ -1,6 +1,6 @@
 // ============================================
-// ANALYZER v5.1 – ADJUSTED FOR LIVE MARKETS
-// Signals at lower confidence (real data friendly)
+// ANALYZER v6.0 – FULL TECHNICAL ANALYSIS
+// Real RSI, ADX, DMI, MACD from live data
 // ============================================
 
 class ProfessionalAnalyzer {
@@ -11,7 +11,7 @@ class ProfessionalAnalyzer {
 
     analyzeSignal(priceData, pairConfig = { minConfidence: 60 }) {
         if (!priceData?.values?.length >= 50) {
-            return { signal: 'WAIT', confidence: 0, reason: 'Insufficient data', rsi: 50 };
+            return { signal: 'WAIT', confidence: 0, reason: 'Insufficient data', rsi: 50, adx: 0, dmi: { plus: 0, minus: 0 }, priceChange: 0 };
         }
 
         const processed = this.processData(priceData);
@@ -36,21 +36,25 @@ class ProfessionalAnalyzer {
             }
         }
 
-        // Fallback: if still WAIT but confidence > 55, generate a regular signal
+        // Fallback for borderline signals
         if (signal === 'WAIT' && confidence >= 55) {
-            if (scores.buy > scores.sell) {
-                signal = 'CALL';
-            } else if (scores.sell > scores.buy) {
-                signal = 'PUT';
-            }
+            if (scores.buy > scores.sell) signal = 'CALL';
+            else if (scores.sell > scores.buy) signal = 'PUT';
         }
+
+        // Price change over last 15 candles (approx 3.75 hours)
+        const priceChange = ((processed.closes[processed.closes.length-1] - processed.closes[processed.closes.length-16]) / processed.closes[processed.closes.length-16]) * 100;
 
         return { 
             signal, 
             confidence, 
-            trend: indicators.trend.direction, 
-            rsi: Math.round(indicators.rsi), 
-            reason: this.generateReason(scores, indicators) 
+            trend: indicators.trend.direction,
+            emaRelation: `EMA9 ${indicators.ema9 > indicators.ema21 ? '>' : '<'} EMA21`,
+            rsi: Math.round(indicators.rsi),
+            adx: Math.round(indicators.adx || 0),
+            dmi: { plus: indicators.dmi?.plus?.toFixed(1) || 0, minus: indicators.dmi?.minus?.toFixed(1) || 0 },
+            priceChange: priceChange.toFixed(2),
+            reason: this.generateReason(scores, indicators, priceChange)
         };
     }
 
@@ -59,17 +63,20 @@ class ProfessionalAnalyzer {
         return {
             closes: values.map(v => parseFloat(v.close)),
             highs: values.map(v => parseFloat(v.high)),
-            lows: values.map(v => parseFloat(v.low))
+            lows: values.map(v => parseFloat(v.low)),
         };
     }
 
     calcIndicators(data) {
-        return {
-            trend: this.calcTrend(data.closes),
-            rsi: this.calcRSI(data.closes, 14),
-            macd: this.calcMACD(data.closes),
-            sr: this.calcSupportResistance(data.highs, data.lows)
-        };
+        const trend = this.calcTrend(data.closes);
+        const ema9 = this.calcEMA(data.closes, 9);
+        const ema21 = this.calcEMA(data.closes, 21);
+        const rsi = this.calcRSI(data.closes, 14);
+        const macd = this.calcMACD(data.closes);
+        const sr = this.calcSupportResistance(data.highs, data.lows);
+        const adx = this.calcADX(data.highs, data.lows, data.closes, 14);
+        const dmi = this.calcDMI(data.highs, data.lows, data.closes, 14);
+        return { trend, ema9, ema21, rsi, macd, sr, adx, dmi };
     }
 
     calcTrend(closes) {
@@ -78,6 +85,45 @@ class ProfessionalAnalyzer {
         if (ema9 > ema21) return { direction: 'UP', strength: 60 };
         if (ema9 < ema21) return { direction: 'DOWN', strength: 60 };
         return { direction: 'SIDEWAYS', strength: 30 };
+    }
+
+    calcADX(highs, lows, closes, period = 14) {
+        if (closes.length < period + 1) return 0;
+        const tr = [], plusDM = [], minusDM = [];
+        for (let i = 1; i < closes.length; i++) {
+            const highDiff = highs[i] - highs[i-1];
+            const lowDiff = lows[i-1] - lows[i];
+            const trueRange = Math.max(highs[i] - lows[i], Math.abs(highs[i] - closes[i-1]), Math.abs(lows[i] - closes[i-1]));
+            tr.push(trueRange);
+            plusDM.push(highDiff > lowDiff && highDiff > 0 ? highDiff : 0);
+            minusDM.push(lowDiff > highDiff && lowDiff > 0 ? lowDiff : 0);
+        }
+        const atr = tr.slice(-period).reduce((a,b)=>a+b,0)/period;
+        const avgPlusDM = plusDM.slice(-period).reduce((a,b)=>a+b,0)/period;
+        const avgMinusDM = minusDM.slice(-period).reduce((a,b)=>a+b,0)/period;
+        const plusDI = (avgPlusDM / atr) * 100;
+        const minusDI = (avgMinusDM / atr) * 100;
+        const dx = Math.abs(plusDI - minusDI) / (plusDI + minusDI) * 100;
+        return isNaN(dx) ? 0 : dx;
+    }
+
+    calcDMI(highs, lows, closes, period = 14) {
+        if (closes.length < period + 1) return { plus: 0, minus: 0 };
+        const tr = [], plusDM = [], minusDM = [];
+        for (let i = 1; i < closes.length; i++) {
+            const highDiff = highs[i] - highs[i-1];
+            const lowDiff = lows[i-1] - lows[i];
+            const trueRange = Math.max(highs[i] - lows[i], Math.abs(highs[i] - closes[i-1]), Math.abs(lows[i] - closes[i-1]));
+            tr.push(trueRange);
+            plusDM.push(highDiff > lowDiff && highDiff > 0 ? highDiff : 0);
+            minusDM.push(lowDiff > highDiff && lowDiff > 0 ? lowDiff : 0);
+        }
+        const atr = tr.slice(-period).reduce((a,b)=>a+b,0)/period;
+        const avgPlusDM = plusDM.slice(-period).reduce((a,b)=>a+b,0)/period;
+        const avgMinusDM = minusDM.slice(-period).reduce((a,b)=>a+b,0)/period;
+        const plusDI = (avgPlusDM / atr) * 100;
+        const minusDI = (avgMinusDM / atr) * 100;
+        return { plus: plusDI, minus: minusDI };
     }
 
     calcScores(indicators) {
@@ -99,30 +145,10 @@ class ProfessionalAnalyzer {
         return Math.min(Math.round(conf), 98);
     }
 
-    async runBacktest(historicalData, startingBalance = 1000) {
-        if (!historicalData?.length >= 100) return { error: 'Need 100+ candles' };
-        let balance = startingBalance, trades = [], correct = 0, total = 0;
-        for (let i = 100; i < historicalData.length - 15; i++) {
-            const signal = this.analyzeSignal({ values: historicalData.slice(0, i + 1) }, { minConfidence: 55 });
-            if (signal.signal !== 'WAIT') {
-                total++;
-                const entry = parseFloat(historicalData[i].close);
-                const exit = parseFloat(historicalData[i + 15].close);
-                const wasWin = (signal.signal.includes('CALL') && exit > entry) || (signal.signal.includes('PUT') && exit < entry);
-                if (wasWin) correct++;
-                const profit = (balance * 0.02) * (wasWin ? 0.72 : -0.85);
-                balance += profit;
-                trades.push({ wasWin, profitPercent: (profit / (balance - profit)) * 100 });
-            }
-        }
-        const wins = trades.filter(t => t.wasWin).length;
-        return { summary: { totalTrades: trades.length, winRate: trades.length ? (wins / trades.length) * 100 : 0, finalBalance: balance, signalAccuracy: total ? (correct / total) * 100 : 0 } };
-    }
-
     calcRSI(closes, period) {
         let gains = 0, losses = 0;
         for (let i = closes.length - period; i < closes.length; i++) {
-            const change = closes[i] - closes[i - 1];
+            const change = closes[i] - closes[i-1];
             if (change > 0) gains += change;
             else losses -= change;
         }
@@ -143,7 +169,7 @@ class ProfessionalAnalyzer {
         const emaSlow = this.calcEMA(closes, slow);
         const macdLine = emaFast - emaSlow;
         const signalLine = this.calcEMA([macdLine], signal);
-        return { macd: macdLine, signal: signalLine, histogram: macdLine - signalLine };
+        return { histogram: macdLine - signalLine, macd: macdLine, signal: signalLine };
     }
 
     calcSupportResistance(highs, lows, lookback = 20) {
@@ -155,19 +181,43 @@ class ProfessionalAnalyzer {
         return { nearSupport: distToSupport < 0.5, nearResistance: distToResistance < 0.5 };
     }
 
-    generateReason(scores, indicators) {
+    generateReason(scores, indicators, priceChange) {
         if (scores.buy > scores.sell) {
-            if (indicators.trend.direction === 'UP') return '📈 Uptrend confirmed (real data)';
-            if (indicators.sr.nearSupport) return '🛡️ At support level';
-            if (indicators.rsi < 30) return '📊 Oversold (real RSI)';
-            return 'Multiple indicators align for CALL';
+            let reason = '';
+            if (indicators.trend.direction === 'UP') reason += `Uptrend confirmed (${indicators.ema9 > indicators.ema21 ? 'EMA9 > EMA21' : 'EMA9 < EMA21'}). `;
+            if (indicators.adx > 25) reason += `ADX ${indicators.adx.toFixed(1)} (strong trend). `;
+            if (indicators.dmi.plus > indicators.dmi.minus) reason += `DMI+ ${indicators.dmi.plus.toFixed(1)} dominates DMI- ${indicators.dmi.minus.toFixed(1)}. `;
+            reason += `Price ${priceChange > 0 ? 'up' : 'down'} ${Math.abs(priceChange).toFixed(2)}%.`;
+            return reason;
         } else if (scores.sell > scores.buy) {
-            if (indicators.trend.direction === 'DOWN') return '📉 Downtrend confirmed (real data)';
-            if (indicators.sr.nearResistance) return '⚠️ At resistance level';
-            if (indicators.rsi > 70) return '📊 Overbought (real RSI)';
-            return 'Multiple indicators align for PUT';
+            let reason = '';
+            if (indicators.trend.direction === 'DOWN') reason += `Downtrend confirmed (${indicators.ema9 > indicators.ema21 ? 'EMA9 > EMA21' : 'EMA9 < EMA21'}). `;
+            if (indicators.adx > 25) reason += `ADX ${indicators.adx.toFixed(1)} (strong trend). `;
+            if (indicators.dmi.minus > indicators.dmi.plus) reason += `DMI- ${indicators.dmi.minus.toFixed(1)} dominates DMI+ ${indicators.dmi.plus.toFixed(1)}. `;
+            reason += `Price ${priceChange > 0 ? 'up' : 'down'} ${Math.abs(priceChange).toFixed(2)}%.`;
+            return reason;
         }
-        return 'Mixed signals - Waiting for confirmation';
+        return 'Mixed signals – waiting for clear direction.';
+    }
+
+    async runBacktest(historicalData, startingBalance = 1000) {
+        if (!historicalData?.length >= 100) return { error: 'Need 100+ candles' };
+        let balance = startingBalance, trades = [], correct = 0, total = 0;
+        for (let i = 100; i < historicalData.length - 15; i++) {
+            const signal = this.analyzeSignal({ values: historicalData.slice(0, i + 1) }, { minConfidence: 55 });
+            if (signal.signal !== 'WAIT') {
+                total++;
+                const entry = parseFloat(historicalData[i].close);
+                const exit = parseFloat(historicalData[i + 15].close);
+                const wasWin = (signal.signal.includes('CALL') && exit > entry) || (signal.signal.includes('PUT') && exit < entry);
+                if (wasWin) correct++;
+                const profit = (balance * 0.02) * (wasWin ? 0.72 : -0.85);
+                balance += profit;
+                trades.push({ wasWin, profitPercent: (profit / (balance - profit)) * 100 });
+            }
+        }
+        const wins = trades.filter(t => t.wasWin).length;
+        return { summary: { totalTrades: trades.length, winRate: trades.length ? (wins / trades.length) * 100 : 0, finalBalance: balance, signalAccuracy: total ? (correct / total) * 100 : 0 } };
     }
 
     recordTradeResult(result) {
