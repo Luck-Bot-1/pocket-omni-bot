@@ -1,6 +1,6 @@
 // ============================================
-// ANALYZER v5.0 - REAL SIGNAL CALCULATION
-// Works with live market data from Twelve Data
+// ANALYZER v5.1 – ADJUSTED FOR LIVE MARKETS
+// Signals at lower confidence (real data friendly)
 // ============================================
 
 class ProfessionalAnalyzer {
@@ -9,7 +9,7 @@ class ProfessionalAnalyzer {
         this.performance = { winRate: 0.65, totalTrades: 0, consecutiveWins: 0, consecutiveLosses: 0, totalPnL: 0 };
     }
 
-    analyzeSignal(priceData, pairConfig = { minConfidence: 70 }) {
+    analyzeSignal(priceData, pairConfig = { minConfidence: 60 }) {
         if (!priceData?.values?.length >= 50) {
             return { signal: 'WAIT', confidence: 0, reason: 'Insufficient data', rsi: 50 };
         }
@@ -23,16 +23,25 @@ class ProfessionalAnalyzer {
         
         if (scores.buy > scores.sell && confidence >= pairConfig.minConfidence) {
             if (!indicators.trend.direction.includes('DOWN')) {
-                signal = confidence >= 85 ? 'STRONG_CALL' : 'CALL';
+                signal = confidence >= 80 ? 'STRONG_CALL' : 'CALL';
             } else {
-                confidence = Math.round(confidence * 0.5);
+                confidence = Math.round(confidence * 0.6);
             }
         } 
         else if (scores.sell > scores.buy && confidence >= pairConfig.minConfidence) {
             if (!indicators.trend.direction.includes('UP')) {
-                signal = confidence >= 85 ? 'STRONG_PUT' : 'PUT';
+                signal = confidence >= 80 ? 'STRONG_PUT' : 'PUT';
             } else {
-                confidence = Math.round(confidence * 0.5);
+                confidence = Math.round(confidence * 0.6);
+            }
+        }
+
+        // Fallback: if still WAIT but confidence > 55, generate a regular signal
+        if (signal === 'WAIT' && confidence >= 55) {
+            if (scores.buy > scores.sell) {
+                signal = 'CALL';
+            } else if (scores.sell > scores.buy) {
+                signal = 'PUT';
             }
         }
 
@@ -94,7 +103,7 @@ class ProfessionalAnalyzer {
         if (!historicalData?.length >= 100) return { error: 'Need 100+ candles' };
         let balance = startingBalance, trades = [], correct = 0, total = 0;
         for (let i = 100; i < historicalData.length - 15; i++) {
-            const signal = this.analyzeSignal({ values: historicalData.slice(0, i + 1) }, { minConfidence: 65 });
+            const signal = this.analyzeSignal({ values: historicalData.slice(0, i + 1) }, { minConfidence: 55 });
             if (signal.signal !== 'WAIT') {
                 total++;
                 const entry = parseFloat(historicalData[i].close);
