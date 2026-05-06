@@ -1,3 +1,8 @@
+// ============================================
+// ANALYZER v5.0 - REAL SIGNAL CALCULATION
+// Works with live market data from Twelve Data
+// ============================================
+
 class ProfessionalAnalyzer {
     constructor() {
         this.tradeHistory = [];
@@ -6,7 +11,7 @@ class ProfessionalAnalyzer {
 
     analyzeSignal(priceData, pairConfig = { minConfidence: 70 }) {
         if (!priceData?.values?.length >= 50) {
-            return { signal: 'WAIT', confidence: 0, reason: 'Insufficient data' };
+            return { signal: 'WAIT', confidence: 0, reason: 'Insufficient data', rsi: 50 };
         }
 
         const processed = this.processData(priceData);
@@ -31,7 +36,13 @@ class ProfessionalAnalyzer {
             }
         }
 
-        return { signal, confidence, trend: indicators.trend.direction, rsi: Math.round(indicators.rsi), reason: this.generateReason(scores, indicators) };
+        return { 
+            signal, 
+            confidence, 
+            trend: indicators.trend.direction, 
+            rsi: Math.round(indicators.rsi), 
+            reason: this.generateReason(scores, indicators) 
+        };
     }
 
     processData(priceData) {
@@ -137,17 +148,17 @@ class ProfessionalAnalyzer {
 
     generateReason(scores, indicators) {
         if (scores.buy > scores.sell) {
-            if (indicators.trend.direction === 'UP') return '📈 Uptrend confirmed';
+            if (indicators.trend.direction === 'UP') return '📈 Uptrend confirmed (real data)';
             if (indicators.sr.nearSupport) return '🛡️ At support level';
-            if (indicators.rsi < 30) return '📊 Oversold';
-            return 'Multiple indicators align';
+            if (indicators.rsi < 30) return '📊 Oversold (real RSI)';
+            return 'Multiple indicators align for CALL';
         } else if (scores.sell > scores.buy) {
-            if (indicators.trend.direction === 'DOWN') return '📉 Downtrend confirmed';
+            if (indicators.trend.direction === 'DOWN') return '📉 Downtrend confirmed (real data)';
             if (indicators.sr.nearResistance) return '⚠️ At resistance level';
-            if (indicators.rsi > 70) return '📊 Overbought';
-            return 'Multiple indicators align';
+            if (indicators.rsi > 70) return '📊 Overbought (real RSI)';
+            return 'Multiple indicators align for PUT';
         }
-        return 'Mixed signals, waiting';
+        return 'Mixed signals - Waiting for confirmation';
     }
 
     recordTradeResult(result) {
