@@ -1,7 +1,13 @@
+// ============================================
+// PRICEFETCHER v6.0 - REAL TWELVE DATA API
+// Live market data | Professional rate limiting
+// ============================================
+
 const API_KEY = process.env.API_KEY;
 
 if (!API_KEY) {
-    console.error('❌ API_KEY not set');
+    console.error('❌ CRITICAL: TWELVE DATA API_KEY not set in Railway variables');
+    console.error('➡️ Go to Railway → Variables → Add API_KEY = your_twelvedata_key');
     process.exit(1);
 }
 
@@ -24,32 +30,51 @@ class RateLimiter {
             this.requests = 0;
             this.lastReset = now;
         }
-        return this.requests < 7;
+        return this.requests < 7; // Twelve Data free tier: 8 requests/minute
     }
     record() { this.requests++; }
 }
 
 const rateLimiter = new RateLimiter();
+const cache = new Map();
+const CACHE_TTL = 60000; // 1 minute
 
 async function fetchPriceData(pair) {
-    if (!rateLimiter.canRequest()) {
-        console.log(`⏳ Rate limit for ${pair}`);
-        return null;
+    // Check cache first
+    const cached = cache.get(pair);
+    if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+        console.log(`📦 Cache hit for ${pair}`);
+        return cached.data;
     }
+
+    if (!rateLimiter.canRequest()) {
+        console.log(`⏳ Rate limit reached for ${pair}, waiting...`);
+        await new Promise(r => setTimeout(r, 8000));
+    }
+
     try {
         const url = `https://api.twelvedata.com/time_series?symbol=${pair}&interval=15min&outputsize=60&apikey=${API_KEY}`;
-        console.log(`📡 Fetching ${pair}...`);
+        console.log(`📡 Fetching REAL live data for ${pair}...`);
         const response = await fetch(url);
         const data = await response.json();
-        if (data.status === 'error' || !data.values) {
-            console.error(`⚠️ API error ${pair}:`, data.message);
+
+        if (data.status === 'error') {
+            console.error(`⚠️ API error for ${pair}:`, data.message);
             return null;
         }
+
+        if (!data.values || data.values.length < 30) {
+            console.warn(`⚠️ Insufficient data for ${pair}: ${data.values?.length || 0} candles`);
+            return null;
+        }
+
+        // Update cache
+        cache.set(pair, { data, timestamp: Date.now() });
         rateLimiter.record();
-        console.log(`✅ Got ${pair} (${data.values.length} candles)`);
+        console.log(`✅ Got REAL data for ${pair} (${data.values.length} candles)`);
         return data;
     } catch (err) {
-        console.error(`❌ Error ${pair}:`, err.message);
+        console.error(`❌ Network error for ${pair}:`, err.message);
         return null;
     }
 }
@@ -59,7 +84,7 @@ async function fetchAllPairs() {
     for (const pair of TRADING_UNIVERSE.filter(p => p.enabled)) {
         const data = await fetchPriceData(pair.symbol);
         if (data) results.push({ pair: pair.symbol, data });
-        await new Promise(r => setTimeout(r, 8000));
+        await new Promise(r => setTimeout(r, 9000)); // 9 sec between pairs
     }
     return results;
 }
