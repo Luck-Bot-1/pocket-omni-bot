@@ -12,11 +12,11 @@ if (!API_KEY) {
 }
 
 const TRADING_UNIVERSE = [
-    { symbol: 'EUR/USD', enabled: true, minConfidence: 70 },
-    { symbol: 'GBP/USD', enabled: true, minConfidence: 70 },
-    { symbol: 'USD/JPY', enabled: true, minConfidence: 70 },
-    { symbol: 'XAU/USD', enabled: true, minConfidence: 75 },
-    { symbol: 'BTC/USD', enabled: true, minConfidence: 75 }
+    { symbol: 'EUR/USD', enabled: true, minConfidence: 60 },
+    { symbol: 'GBP/USD', enabled: true, minConfidence: 60 },
+    { symbol: 'USD/JPY', enabled: true, minConfidence: 60 },
+    { symbol: 'XAU/USD', enabled: true, minConfidence: 65 },
+    { symbol: 'BTC/USD', enabled: true, minConfidence: 65 }
 ];
 
 class RateLimiter {
@@ -30,17 +30,16 @@ class RateLimiter {
             this.requests = 0;
             this.lastReset = now;
         }
-        return this.requests < 7; // Twelve Data free tier: 8 requests/minute
+        return this.requests < 7;
     }
     record() { this.requests++; }
 }
 
 const rateLimiter = new RateLimiter();
 const cache = new Map();
-const CACHE_TTL = 60000; // 1 minute
+const CACHE_TTL = 60000;
 
 async function fetchPriceData(pair) {
-    // Check cache first
     const cached = cache.get(pair);
     if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
         console.log(`📦 Cache hit for ${pair}`);
@@ -48,7 +47,7 @@ async function fetchPriceData(pair) {
     }
 
     if (!rateLimiter.canRequest()) {
-        console.log(`⏳ Rate limit reached for ${pair}, waiting...`);
+        console.log(`⏳ Rate limit for ${pair}, waiting...`);
         await new Promise(r => setTimeout(r, 8000));
     }
 
@@ -64,11 +63,10 @@ async function fetchPriceData(pair) {
         }
 
         if (!data.values || data.values.length < 30) {
-            console.warn(`⚠️ Insufficient data for ${pair}: ${data.values?.length || 0} candles`);
+            console.warn(`⚠️ Insufficient data for ${pair}`);
             return null;
         }
 
-        // Update cache
         cache.set(pair, { data, timestamp: Date.now() });
         rateLimiter.record();
         console.log(`✅ Got REAL data for ${pair} (${data.values.length} candles)`);
@@ -84,7 +82,7 @@ async function fetchAllPairs() {
     for (const pair of TRADING_UNIVERSE.filter(p => p.enabled)) {
         const data = await fetchPriceData(pair.symbol);
         if (data) results.push({ pair: pair.symbol, data });
-        await new Promise(r => setTimeout(r, 9000)); // 9 sec between pairs
+        await new Promise(r => setTimeout(r, 9000));
     }
     return results;
 }
