@@ -1,16 +1,7 @@
-// ============================================
-// ANALYZER v4.0 - PROFESSIONAL ENTERPRISE GRADE
-// Audit Rating: 4.9/5 | Signal Quality: 4.9/5
-// Includes: Professional Backtest, Performance Tracking
-// ============================================
-
 class ProfessionalAnalyzer {
     constructor() {
         this.tradeHistory = [];
-        this.performance = {
-            winRate: 0.65, totalTrades: 0, consecutiveWins: 0,
-            consecutiveLosses: 0, totalPnL: 0, avgWin: 0, avgLoss: 0
-        };
+        this.performance = { winRate: 0.65, totalTrades: 0, consecutiveWins: 0, consecutiveLosses: 0, totalPnL: 0 };
     }
 
     analyzeSignal(priceData, pairConfig = { minConfidence: 70 }) {
@@ -25,13 +16,11 @@ class ProfessionalAnalyzer {
         
         let signal = 'WAIT';
         
-        // TREND CONFIRMATION - Critical for preventing wrong signals
         if (scores.buy > scores.sell && confidence >= pairConfig.minConfidence) {
             if (!indicators.trend.direction.includes('DOWN')) {
                 signal = confidence >= 85 ? 'STRONG_CALL' : 'CALL';
             } else {
                 confidence = Math.round(confidence * 0.5);
-                console.log(`⚠️ Skipping CALL - Trend is ${indicators.trend.direction}`);
             }
         } 
         else if (scores.sell > scores.buy && confidence >= pairConfig.minConfidence) {
@@ -39,17 +28,10 @@ class ProfessionalAnalyzer {
                 signal = confidence >= 85 ? 'STRONG_PUT' : 'PUT';
             } else {
                 confidence = Math.round(confidence * 0.5);
-                console.log(`⚠️ Skipping PUT - Trend is ${indicators.trend.direction}`);
             }
         }
 
-        return {
-            signal: signal,
-            confidence: confidence,
-            trend: indicators.trend.direction,
-            rsi: Math.round(indicators.rsi),
-            reason: this.generateReason(scores, indicators)
-        };
+        return { signal, confidence, trend: indicators.trend.direction, rsi: Math.round(indicators.rsi), reason: this.generateReason(scores, indicators) };
     }
 
     processData(priceData) {
@@ -73,11 +55,6 @@ class ProfessionalAnalyzer {
     calcTrend(closes) {
         const ema9 = this.calcEMA(closes, 9);
         const ema21 = this.calcEMA(closes, 21);
-        const ema50 = this.calcEMA(closes, 50);
-        const slope = ((closes[closes.length-1] - closes[closes.length-20]) / closes[closes.length-20]) * 100;
-        
-        if (ema9 > ema21 && ema21 > ema50 && slope > 0) return { direction: 'STRONG_UP', strength: 100 };
-        if (ema9 < ema21 && ema21 < ema50 && slope < 0) return { direction: 'STRONG_DOWN', strength: 100 };
         if (ema9 > ema21) return { direction: 'UP', strength: 60 };
         if (ema9 < ema21) return { direction: 'DOWN', strength: 60 };
         return { direction: 'SIDEWAYS', strength: 30 };
@@ -85,129 +62,43 @@ class ProfessionalAnalyzer {
 
     calcScores(indicators) {
         let buy = 0, sell = 0;
-        
-        // Trend (40% weight) - HIGHEST PRIORITY
-        if (indicators.trend.direction.includes('UP')) buy += 40;
-        else if (indicators.trend.direction.includes('DOWN')) sell += 40;
-        
-        // Support/Resistance (25% weight)
+        if (indicators.trend.direction === 'UP') buy += 40;
+        else if (indicators.trend.direction === 'DOWN') sell += 40;
         if (indicators.sr.nearSupport) buy += 25;
         if (indicators.sr.nearResistance) sell += 25;
-        
-        // RSI (20% weight)
         if (indicators.rsi < 30) buy += 20;
         else if (indicators.rsi > 70) sell += 20;
-        
-        // MACD (15% weight)
         if (indicators.macd.histogram > 0) buy += 15;
         else if (indicators.macd.histogram < 0) sell += 15;
-        
-        return { buy: buy, sell: sell };
+        return { buy, sell };
     }
 
     calcConfidence(scores, indicators) {
         let conf = Math.max(scores.buy, scores.sell);
-        // Circuit breaker for loss streaks
         if (this.performance.consecutiveLosses >= 3) conf *= 0.7;
-        if (this.performance.consecutiveWins >= 3) conf *= 1.05;
         return Math.min(Math.round(conf), 98);
     }
 
-    // ============ PROFESSIONAL BACKTEST ============
-    async runBacktest(historicalData, startingBalance = 1000, options = {}) {
-        const { riskPerTrade = 0.02, minConfidence = 65 } = options;
-        
-        if (!historicalData?.length >= 100) {
-            return { error: 'Need at least 100 candles for backtest' };
-        }
-
-        let balance = startingBalance;
-        let trades = [];
-        let equity = [startingBalance];
-        let correctSignals = 0;
-        let totalSignals = 0;
-
+    async runBacktest(historicalData, startingBalance = 1000) {
+        if (!historicalData?.length >= 100) return { error: 'Need 100+ candles' };
+        let balance = startingBalance, trades = [], correct = 0, total = 0;
         for (let i = 100; i < historicalData.length - 15; i++) {
-            const slice = { values: historicalData.slice(0, i + 1) };
-            const signal = this.analyzeSignal(slice, { minConfidence });
-            
+            const signal = this.analyzeSignal({ values: historicalData.slice(0, i + 1) }, { minConfidence: 65 });
             if (signal.signal !== 'WAIT') {
-                totalSignals++;
-                const entryPrice = parseFloat(historicalData[i].close);
-                const exitPrice = parseFloat(historicalData[i + 15].close);
-                let wasWin = false;
-                
-                if (signal.signal.includes('CALL')) wasWin = exitPrice > entryPrice;
-                else if (signal.signal.includes('PUT')) wasWin = exitPrice < entryPrice;
-                
-                if (wasWin) correctSignals++;
-                
-                const tradeAmount = balance * riskPerTrade;
-                const profitPercent = wasWin ? 0.72 : -0.85;
-                const profit = tradeAmount * profitPercent;
+                total++;
+                const entry = parseFloat(historicalData[i].close);
+                const exit = parseFloat(historicalData[i + 15].close);
+                const wasWin = (signal.signal.includes('CALL') && exit > entry) || (signal.signal.includes('PUT') && exit < entry);
+                if (wasWin) correct++;
+                const profit = (balance * 0.02) * (wasWin ? 0.72 : -0.85);
                 balance += profit;
-                
-                trades.push({
-                    signal: signal.signal,
-                    confidence: signal.confidence,
-                    wasWin: wasWin,
-                    profitPercent: profitPercent * 100
-                });
+                trades.push({ wasWin, profitPercent: (profit / (balance - profit)) * 100 });
             }
-            equity.push(balance);
         }
-        
-        const totalTrades = trades.length;
         const wins = trades.filter(t => t.wasWin).length;
-        const winRate = totalTrades > 0 ? (wins / totalTrades) * 100 : 0;
-        const totalProfit = balance - startingBalance;
-        
-        let peak = startingBalance;
-        let maxDrawdown = 0;
-        for (const v of equity) {
-            if (v > peak) peak = v;
-            const dd = (peak - v) / peak * 100;
-            if (dd > maxDrawdown) maxDrawdown = dd;
-        }
-        
-        const signalAccuracy = totalSignals > 0 ? (correctSignals / totalSignals) * 100 : 0;
-
-        return {
-            summary: {
-                startingBalance,
-                finalBalance: balance,
-                totalProfit,
-                totalProfitPercent: (totalProfit / startingBalance) * 100,
-                totalTrades,
-                winningTrades: wins,
-                losingTrades: totalTrades - wins,
-                winRate,
-                maxDrawdown,
-                signalAccuracy
-            },
-            trades: trades.slice(-50),
-            quality: this.assessQuality(winRate, maxDrawdown, signalAccuracy)
-        };
+        return { summary: { totalTrades: trades.length, winRate: trades.length ? (wins / trades.length) * 100 : 0, finalBalance: balance, signalAccuracy: total ? (correct / total) * 100 : 0 } };
     }
 
-    assessQuality(winRate, maxDrawdown, signalAccuracy) {
-        let score = 0;
-        if (winRate >= 65) score += 40;
-        else if (winRate >= 55) score += 25;
-        else score += 10;
-        
-        if (maxDrawdown <= 15) score += 30;
-        else if (maxDrawdown <= 25) score += 15;
-        else score += 5;
-        
-        if (signalAccuracy >= 70) score += 30;
-        else if (signalAccuracy >= 60) score += 15;
-        else score += 5;
-        
-        return { score, rating: score >= 80 ? 'EXCELLENT' : score >= 60 ? 'GOOD' : 'NEEDS_IMPROVEMENT' };
-    }
-
-    // ============ INDICATOR CALCULATIONS ============
     calcRSI(closes, period) {
         let gains = 0, losses = 0;
         for (let i = closes.length - period; i < closes.length; i++) {
@@ -217,8 +108,7 @@ class ProfessionalAnalyzer {
         }
         const avgGain = gains / period, avgLoss = losses / period;
         if (avgLoss === 0) return 100;
-        const rs = avgGain / avgLoss;
-        return 100 - (100 / (1 + rs));
+        return 100 - (100 / (1 + (avgGain / avgLoss)));
     }
 
     calcEMA(data, period) {
@@ -242,55 +132,48 @@ class ProfessionalAnalyzer {
         const support = Math.min(...recentLows), resistance = Math.max(...recentHighs);
         const distToSupport = ((currentPrice - support) / currentPrice) * 100;
         const distToResistance = ((resistance - currentPrice) / currentPrice) * 100;
-        return {
-            nearSupport: distToSupport < 0.5,
-            nearResistance: distToResistance < 0.5
-        };
+        return { nearSupport: distToSupport < 0.5, nearResistance: distToResistance < 0.5 };
     }
 
     generateReason(scores, indicators) {
-        const reasons = [];
         if (scores.buy > scores.sell) {
-            if (indicators.trend.direction.includes('UP')) reasons.push('📈 Uptrend confirmed');
-            if (indicators.sr.nearSupport) reasons.push('🛡️ At support level');
-            if (indicators.rsi < 30) reasons.push('📊 Oversold');
+            if (indicators.trend.direction === 'UP') return '📈 Uptrend confirmed';
+            if (indicators.sr.nearSupport) return '🛡️ At support level';
+            if (indicators.rsi < 30) return '📊 Oversold';
+            return 'Multiple indicators align';
         } else if (scores.sell > scores.buy) {
-            if (indicators.trend.direction.includes('DOWN')) reasons.push('📉 Downtrend confirmed');
-            if (indicators.sr.nearResistance) reasons.push('⚠️ At resistance level');
-            if (indicators.rsi > 70) reasons.push('📊 Overbought');
+            if (indicators.trend.direction === 'DOWN') return '📉 Downtrend confirmed';
+            if (indicators.sr.nearResistance) return '⚠️ At resistance level';
+            if (indicators.rsi > 70) return '📊 Overbought';
+            return 'Multiple indicators align';
         }
-        return reasons.join(', ') || 'Mixed signals';
+        return 'Mixed signals, waiting';
     }
 
     recordTradeResult(result) {
         this.tradeHistory.push(result);
-        const recentTrades = this.tradeHistory.slice(-50);
-        const wins = recentTrades.filter(t => t.wasWin).length;
-        this.performance.winRate = recentTrades.length > 0 ? wins / recentTrades.length : 0.65;
+        const recent = this.tradeHistory.slice(-50);
+        const wins = recent.filter(t => t.wasWin).length;
+        this.performance.winRate = recent.length ? wins / recent.length : 0.65;
         this.performance.totalTrades = this.tradeHistory.length;
-        
         if (result.wasWin) {
             this.performance.consecutiveWins++;
             this.performance.consecutiveLosses = 0;
-            this.performance.totalPnL += result.profit;
         } else {
             this.performance.consecutiveLosses++;
             this.performance.consecutiveWins = 0;
-            this.performance.totalPnL -= Math.abs(result.profit);
         }
         return this.performance;
     }
 
-    getPerformanceStats() {
-        return this.performance;
-    }
+    getPerformanceStats() { return this.performance; }
 }
 
 const analyzer = new ProfessionalAnalyzer();
 
 module.exports = {
     analyzeSignal: (data, config) => analyzer.analyzeSignal(data, config),
-    runBacktest: (data, balance, options) => analyzer.runBacktest(data, balance, options),
+    runBacktest: (data, balance) => analyzer.runBacktest(data, balance),
     recordTradeResult: (result) => analyzer.recordTradeResult(result),
     getPerformanceStats: () => analyzer.getPerformanceStats()
 };
