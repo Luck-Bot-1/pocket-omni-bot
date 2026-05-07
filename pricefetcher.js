@@ -4,8 +4,13 @@ const TWELVE_DATA_API_KEY = process.env.TWELVE_DATA_API_KEY || '';
 const USE_REAL_API = !!(TWELVE_DATA_API_KEY && TWELVE_DATA_API_KEY !== 'your_api_key_here');
 
 function getSymbol(pairName) {
-    let symbol = pairName.replace(' OTC', '').replace('/', '');
-    if (pairName.includes('BTC') || pairName.includes('ETH')) return pairName.replace(' ', '');
+    // Remove ' OTC' suffix if present, but keep slash for forex
+    let symbol = pairName.replace(' OTC', '');
+    // For crypto, remove space (e.g., "BTC/USD" -> "BTC/USD" unchanged)
+    if (symbol.includes('BTC') || symbol.includes('ETH')) {
+        return symbol.replace(' ', '');
+    }
+    // For forex, keep the slash – Twelve Data requires "EUR/USD"
     return symbol;
 }
 
@@ -60,7 +65,7 @@ async function fetchRealData(pairName, limit = 200) {
                 close: parseFloat(candle.close),
                 volume: parseInt(candle.volume) || 0
             }));
-            formatted.reverse();
+            formatted.reverse(); // oldest first
             return { values: formatted };
         }
         throw new Error('Invalid API response');
