@@ -1,7 +1,3 @@
-// ============================================
-// PRICEFETCHER v7.5 – FINAL (with mock fallback & warning)
-// ============================================
-
 const axios = require('axios');
 
 const TWELVE_DATA_API_KEY = process.env.TWELVE_DATA_API_KEY || '';
@@ -64,7 +60,7 @@ async function fetchRealData(pairName, limit = 200) {
                 close: parseFloat(candle.close),
                 volume: parseInt(candle.volume) || 0
             }));
-            formatted.reverse(); // ensure oldest first
+            formatted.reverse();
             return { values: formatted };
         }
         throw new Error('Invalid API response');
