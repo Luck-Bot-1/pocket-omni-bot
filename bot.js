@@ -95,6 +95,7 @@ bot.action(/pair_(.+)/, async (ctx) => {
     await ctx.editMessageText(`📈 *${pair}*\nSelect timeframe:`, timeframeKeyboard(pair));
 });
 
+// ========== MAIN SIGNAL HANDLER – WITH TREND ALIGNMENT ==========
 bot.action(/tf_(.+)_(.+)/, async (ctx) => {
     const [pairName, tf] = [ctx.match[1], ctx.match[2]];
     const userId = ctx.from.id;
