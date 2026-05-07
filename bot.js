@@ -1,5 +1,5 @@
 // ============================================
-// BOT v7.5 – FINAL (no changes needed)
+// BOT v7.5 – FINAL AUDITED VERSION
 // ============================================
 
 require('dotenv').config();
