@@ -1,5 +1,5 @@
 // ============================================
-// BOT v7.4 – FINAL AUDITED
+// BOT v7.5 – FINAL (no changes needed)
 // ============================================
 
 require('dotenv').config();
@@ -80,7 +80,7 @@ function timeframeKeyboard(pairName) {
 
 bot.start(async (ctx) => {
     const userId = ctx.from.id;
-    await ctx.replyWithMarkdown(`🚀 *PULSE OMNI BOT v7.4* – Final Audited\nActive pairs: ${ALL_PAIRS.length}\nYour win rate: ${getWinRate(userId)}%\nSelect asset category:`, await categoryKeyboard());
+    await ctx.replyWithMarkdown(`🚀 *PULSE OMNI BOT v7.5* – Final Audited\nActive pairs: ${ALL_PAIRS.length}\nYour win rate: ${getWinRate(userId)}%\nSelect asset category:`, await categoryKeyboard());
 });
 
 bot.action(/cat_(.+)/, async (ctx) => {
@@ -271,4 +271,4 @@ bot.command('backtest', async (ctx) => {
 });
 
 setTimeout(() => { bot.launch().catch(console.error); }, 5000);
-console.log('✅ Bot v7.4 started – Final Audited Version');
+console.log('✅ Bot v7.5 started – Final Audited Version');
