@@ -1,5 +1,7 @@
 // ============================================
-// ANALYZER v7.5 – DMI GATEKEEPER + PROFESSIONAL BACKTEST
+// ANALYZER v7.7 – FINAL AUDITED
+// Fast trend (8 candles) | DMI gatekeeper
+// No restrictive filters | Professional backtest
 // ============================================
 
 class ProfessionalAnalyzer {
@@ -26,7 +28,6 @@ class ProfessionalAnalyzer {
         let confidence = this.calcConfidence(scores, indicators);
 
         let signal = 'WAIT';
-
         const dmiBullish = indicators.dmi.plus > indicators.dmi.minus;
         const dmiBearish = indicators.dmi.minus > indicators.dmi.plus;
 
@@ -93,7 +94,8 @@ class ProfessionalAnalyzer {
         const ema9 = this.calcEMA(closes, 9);
         const ema21 = this.calcEMA(closes, 21);
         const ema50 = this.calcEMA(closes, 50);
-        const slope = ((closes[closes.length-1] - closes[closes.length-20]) / closes[closes.length-20]) * 100;
+        // FAST TREND: slope over last 8 candles (reacts to reversals within ~2h on 15m)
+        const slope = ((closes[closes.length-1] - closes[closes.length-8]) / closes[closes.length-8]) * 100;
         if (ema9 > ema21 && ema21 > ema50 && slope > 0.1) return { direction: 'STRONG_UP', strength: Math.min(Math.abs(slope) * 10, 100) };
         if (ema9 < ema21 && ema21 < ema50 && slope < -0.1) return { direction: 'STRONG_DOWN', strength: Math.min(Math.abs(slope) * 10, 100) };
         if (ema9 > ema21) return { direction: 'UP', strength: 60 };
