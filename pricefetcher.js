@@ -1,5 +1,5 @@
 // ============================================
-// PRICEFETCHER v7.4 – FINAL (with mock fallback & warning)
+// PRICEFETCHER v7.5 – FINAL (with mock fallback & warning)
 // ============================================
 
 const axios = require('axios');
@@ -64,7 +64,7 @@ async function fetchRealData(pairName, limit = 200) {
                 close: parseFloat(candle.close),
                 volume: parseInt(candle.volume) || 0
             }));
-            formatted.reverse();
+            formatted.reverse(); // ensure oldest first
             return { values: formatted };
         }
         throw new Error('Invalid API response');
