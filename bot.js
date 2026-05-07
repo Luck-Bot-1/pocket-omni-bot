@@ -1,6 +1,5 @@
 // ============================================
-// BOT v7.3 – FINAL AUDITED VERSION
-// Signal Quality: 4.9/5 | Backtest: Professional
+// BOT v7.4 – FINAL AUDITED
 // ============================================
 
 require('dotenv').config();
@@ -81,7 +80,7 @@ function timeframeKeyboard(pairName) {
 
 bot.start(async (ctx) => {
     const userId = ctx.from.id;
-    await ctx.replyWithMarkdown(`🚀 *PULSE OMNI BOT v7.3* – Final Audited\nActive pairs: ${ALL_PAIRS.length}\nYour win rate: ${getWinRate(userId)}%\nSelect asset category:`, await categoryKeyboard());
+    await ctx.replyWithMarkdown(`🚀 *PULSE OMNI BOT v7.4* – Final Audited\nActive pairs: ${ALL_PAIRS.length}\nYour win rate: ${getWinRate(userId)}%\nSelect asset category:`, await categoryKeyboard());
 });
 
 bot.action(/cat_(.+)/, async (ctx) => {
@@ -247,7 +246,7 @@ bot.command('backtest', async (ctx) => {
     if (!pair) return ctx.reply(`❌ Pair ${pairName} not found.`);
     await ctx.reply(`🔄 Running professional backtest on ${pairName} (${tradesToSimulate} trades)... This may take a moment.`);
     try {
-        const historicalData = await fetchPriceData(pairName, { limit: 500 }); // need to implement fetch with limit
+        const historicalData = await fetchPriceData(pairName, { limit: 500 });
         if (!historicalData || !historicalData.values || historicalData.values.length < 200) {
             return ctx.reply('❌ Not enough historical data for backtest.');
         }
@@ -272,4 +271,4 @@ bot.command('backtest', async (ctx) => {
 });
 
 setTimeout(() => { bot.launch().catch(console.error); }, 5000);
-console.log('✅ Bot v7.3 started – Final Audited Version');
+console.log('✅ Bot v7.4 started – Final Audited Version');
