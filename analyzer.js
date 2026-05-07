@@ -1,5 +1,5 @@
 // ============================================
-// ANALYZER v7.4 – DMI SCORING + CONTRADICTION PENALTY
+// ANALYZER v7.5 – DMI GATEKEEPER (no contradictions)
 // Signal Quality: 4.9/5 | Professional backtest
 // ============================================
 
@@ -27,13 +27,20 @@ class ProfessionalAnalyzer {
         let confidence = this.calcConfidence(scores, indicators);
 
         let signal = 'WAIT';
+
+        // GATEKEEPER: DMI must agree with direction
+        const dmiBullish = indicators.dmi.plus > indicators.dmi.minus;
+        const dmiBearish = indicators.dmi.minus > indicators.dmi.plus;
+
         if (scores.buy > scores.sell && confidence >= pairConfig.minConfidence) {
-            if (!indicators.trend.direction.includes('DOWN')) {
+            // CALL allowed only if DMI is bullish (and trend not down)
+            if (!indicators.trend.direction.includes('DOWN') && dmiBullish) {
                 signal = confidence >= 85 ? 'STRONG_CALL' : 'CALL';
             }
         }
         else if (scores.sell > scores.buy && confidence >= pairConfig.minConfidence) {
-            if (!indicators.trend.direction.includes('UP')) {
+            // PUT allowed only if DMI is bearish (and trend not up)
+            if (!indicators.trend.direction.includes('UP') && dmiBearish) {
                 signal = confidence >= 85 ? 'STRONG_PUT' : 'PUT';
             }
         }
@@ -98,7 +105,6 @@ class ProfessionalAnalyzer {
         return { direction: 'SIDEWAYS', strength: 30 };
     }
 
-    // *** DMI now affects scores ***
     calcScores(indicators) {
         let buy = 0, sell = 0;
         if (indicators.trend.direction.includes('UP')) buy += 40;
@@ -113,7 +119,6 @@ class ProfessionalAnalyzer {
             if (indicators.trend.direction.includes('UP')) buy += 10;
             else if (indicators.trend.direction.includes('DOWN')) sell += 10;
         }
-        // DMI domination
         if (indicators.dmi.plus > indicators.dmi.minus) buy += 15;
         else if (indicators.dmi.minus > indicators.dmi.plus) sell += 15;
         return { buy, sell };
@@ -128,7 +133,6 @@ class ProfessionalAnalyzer {
         else if (indicators.rsi > 30 && indicators.rsi < 70) conf *= 0.9;
         if (indicators.trend.strength > 70) conf *= 1.1;
         else if (indicators.trend.strength < 30) conf *= 0.9;
-        // Penalty if DMI contradicts EMA trend
         const emaBullish = indicators.ema9 > indicators.ema21;
         const dmiBullish = indicators.dmi.plus > indicators.dmi.minus;
         if (emaBullish !== dmiBullish) conf *= 0.85;
