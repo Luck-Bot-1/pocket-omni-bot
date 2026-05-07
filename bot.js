@@ -1,5 +1,5 @@
 // ============================================
-// BOT v6.0 – FINAL WITH FULL TECHNICAL DISPLAY
+// BOT v7.1 – FINAL WITH TREND ALIGNMENT DISPLAY
 // ============================================
 
 require('dotenv').config();
@@ -65,7 +65,7 @@ async function pairsKeyboard(catId) {
     const kb = [];
     for (let i = 0; i < filtered.length; i += 2) {
         const row = [Markup.button.callback(filtered[i].name, `pair_${filtered[i].name}`)];
-        if (filtered[i+1]) row.push(Markup.button.callback(filtered[i+1].name, `pair_${filtered[i+1].name}`));
+        if (filtered[i + 1]) row.push(Markup.button.callback(filtered[i + 1].name, `pair_${filtered[i + 1].name}`));
         kb.push(row);
     }
     kb.push([Markup.button.callback('🔙 Back', 'back_cats')]);
@@ -80,7 +80,7 @@ function timeframeKeyboard(pairName) {
 
 bot.start(async (ctx) => {
     const userId = ctx.from.id;
-    await ctx.replyWithMarkdown(`🚀 *PULSE OMNI BOT v6.0* – Legendary (4.9⭐)\nActive pairs: ${ALL_PAIRS.length}\nYour win rate: ${getWinRate(userId)}%\nSelect asset category:`, await categoryKeyboard());
+    await ctx.replyWithMarkdown(`🚀 *PULSE OMNI BOT v7.1* – Legendary (4.9⭐)\nActive pairs: ${ALL_PAIRS.length}\nYour win rate: ${getWinRate(userId)}%\nSelect asset category:`, await categoryKeyboard());
 });
 
 bot.action(/cat_(.+)/, async (ctx) => {
@@ -118,7 +118,7 @@ bot.action(/tf_(.+)_(.+)/, async (ctx) => {
         let confEmoji = result.confidence >= 85 ? '🟢' : (result.confidence >= 75 ? '🟡' : '🔴');
         const expiry = tf === '1m' ? '3 min' : tf === '5m' ? '10 min' : '1 hour';
 
-        // Full analysis text
+        // Build rich analysis text
         let analysisText = `*Analysis:*\n`;
         analysisText += `- Trade Direction: ${result.trend === 'UP' ? 'Upward' : 'Downward'} (${tf})\n`;
         analysisText += `- ${result.emaRelation}\n`;
@@ -127,7 +127,10 @@ bot.action(/tf_(.+)_(.+)/, async (ctx) => {
         if (result.adx > 25) analysisText += `- ADX ${result.adx} (strong trend) – higher probability\n`;
         analysisText += `- Confidence: ${result.confidence}%`;
 
-        const caption = `🔔 *SIGNAL: ${pairName} (${tf})*\n${dirEmoji} ${result.signal} | ${confEmoji} ${result.confidence}%\n📊 RSI: ${result.rsi}  ADX: ${result.adx}\n\n${analysisText}\n\n⏱️ *Expiry:* ${expiry}\n📈 *Your win rate:* ${getWinRate(userId)}%\n💰 *Risk:* 1.5% of balance`;
+        // Trend alignment line
+        const trendLine = `📌 *Trend Alignment:* ${result.trendAlignment}`;
+
+        const caption = `🔔 *SIGNAL: ${pairName} (${tf})*\n${dirEmoji} ${result.signal} | ${confEmoji} ${result.confidence}%\n📊 RSI: ${result.rsi}  ADX: ${result.adx}\n\n${analysisText}\n\n${trendLine}\n\n⏱️ *Expiry:* ${expiry}\n📈 *Your win rate:* ${getWinRate(userId)}%\n💰 *Risk:* 1.5% of balance`;
 
         await ctx.replyWithMarkdown(caption);
 
@@ -199,7 +202,7 @@ bot.command('signals', async (ctx) => {
     }
     if (!signals.length) return ctx.reply('No signals now. Use /start and select a pair.');
     let msg = '🔥 *TOP SIGNALS*\n';
-    signals.forEach(s => msg += `\n*${s.pair}*: ${s.signal === 'CALL' ? '📈' : '📉'} ${s.signal} (${s.confidence}%)\nRSI ${s.rsi} ADX ${s.adx}`);
+    signals.forEach(s => msg += `\n*${s.pair}*: ${s.signal === 'CALL' ? '📈' : '📉'} ${s.signal} (${s.confidence}%)\nRSI ${s.rsi} ADX ${s.adx} | ${s.trendAlignment}`);
     await ctx.replyWithMarkdown(msg);
 });
 
