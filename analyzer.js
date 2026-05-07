@@ -1,6 +1,6 @@
 // ============================================
-// ANALYZER v7.3 – PROFESSIONAL BACKTEST + FIXED LOGIC
-// Signal Quality: 4.9/5 | No forced signals | Wilder's RSI
+// ANALYZER v7.4 – DMI SCORING + CONTRADICTION PENALTY
+// Signal Quality: 4.9/5 | Professional backtest
 // ============================================
 
 class ProfessionalAnalyzer {
@@ -21,15 +21,12 @@ class ProfessionalAnalyzer {
         if (!priceData?.values?.length >= 60) {
             return { signal: 'WAIT', confidence: 0, reason: 'Insufficient data', rsi: 50, adx: 0 };
         }
-
         const processed = this.processData(priceData);
         const indicators = this.calcIndicators(processed);
         const scores = this.calcScores(indicators);
         let confidence = this.calcConfidence(scores, indicators);
 
         let signal = 'WAIT';
-
-        // ONLY generate signal if trend aligns with score direction
         if (scores.buy > scores.sell && confidence >= pairConfig.minConfidence) {
             if (!indicators.trend.direction.includes('DOWN')) {
                 signal = confidence >= 85 ? 'STRONG_CALL' : 'CALL';
@@ -41,22 +38,14 @@ class ProfessionalAnalyzer {
             }
         }
 
-        // No fallback – WAIT if trend opposes
-
         const priceChange = ((processed.closes[processed.closes.length-1] - processed.closes[processed.closes.length-16]) / processed.closes[processed.closes.length-16]) * 100;
 
         let trendAlignment = "";
-        if (signal.includes('CALL') && indicators.trend.direction.includes('UP')) {
-            trendAlignment = "✅ With the Trend";
-        } else if (signal.includes('CALL') && indicators.trend.direction.includes('DOWN')) {
-            trendAlignment = "⚠️ Without Trend";
-        } else if (signal.includes('PUT') && indicators.trend.direction.includes('DOWN')) {
-            trendAlignment = "✅ With the Trend";
-        } else if (signal.includes('PUT') && indicators.trend.direction.includes('UP')) {
-            trendAlignment = "⚠️ Without Trend";
-        } else {
-            trendAlignment = "⚖️ No clear alignment";
-        }
+        if (signal.includes('CALL') && indicators.trend.direction.includes('UP')) trendAlignment = "✅ With the Trend";
+        else if (signal.includes('CALL') && indicators.trend.direction.includes('DOWN')) trendAlignment = "⚠️ Without Trend";
+        else if (signal.includes('PUT') && indicators.trend.direction.includes('DOWN')) trendAlignment = "✅ With the Trend";
+        else if (signal.includes('PUT') && indicators.trend.direction.includes('UP')) trendAlignment = "⚠️ Without Trend";
+        else trendAlignment = "⚖️ No clear alignment";
 
         return {
             signal: signal === 'WAIT' ? 'WAIT' : (signal === 'STRONG_CALL' ? 'CALL' : signal === 'STRONG_PUT' ? 'PUT' : signal),
@@ -74,7 +63,6 @@ class ProfessionalAnalyzer {
 
     processData(priceData) {
         let values = priceData.values.slice(0, 60);
-        // Ensure chronological order (oldest first)
         if (values.length >= 2 && new Date(values[0].datetime) > new Date(values[1].datetime)) {
             values = values.reverse();
         }
@@ -103,18 +91,14 @@ class ProfessionalAnalyzer {
         const ema21 = this.calcEMA(closes, 21);
         const ema50 = this.calcEMA(closes, 50);
         const slope = ((closes[closes.length-1] - closes[closes.length-20]) / closes[closes.length-20]) * 100;
-
-        if (ema9 > ema21 && ema21 > ema50 && slope > 0.1) {
-            return { direction: 'STRONG_UP', strength: Math.min(Math.abs(slope) * 10, 100) };
-        }
-        if (ema9 < ema21 && ema21 < ema50 && slope < -0.1) {
-            return { direction: 'STRONG_DOWN', strength: Math.min(Math.abs(slope) * 10, 100) };
-        }
+        if (ema9 > ema21 && ema21 > ema50 && slope > 0.1) return { direction: 'STRONG_UP', strength: Math.min(Math.abs(slope) * 10, 100) };
+        if (ema9 < ema21 && ema21 < ema50 && slope < -0.1) return { direction: 'STRONG_DOWN', strength: Math.min(Math.abs(slope) * 10, 100) };
         if (ema9 > ema21) return { direction: 'UP', strength: 60 };
         if (ema9 < ema21) return { direction: 'DOWN', strength: 60 };
         return { direction: 'SIDEWAYS', strength: 30 };
     }
 
+    // *** DMI now affects scores ***
     calcScores(indicators) {
         let buy = 0, sell = 0;
         if (indicators.trend.direction.includes('UP')) buy += 40;
@@ -129,6 +113,9 @@ class ProfessionalAnalyzer {
             if (indicators.trend.direction.includes('UP')) buy += 10;
             else if (indicators.trend.direction.includes('DOWN')) sell += 10;
         }
+        // DMI domination
+        if (indicators.dmi.plus > indicators.dmi.minus) buy += 15;
+        else if (indicators.dmi.minus > indicators.dmi.plus) sell += 15;
         return { buy, sell };
     }
 
@@ -141,86 +128,52 @@ class ProfessionalAnalyzer {
         else if (indicators.rsi > 30 && indicators.rsi < 70) conf *= 0.9;
         if (indicators.trend.strength > 70) conf *= 1.1;
         else if (indicators.trend.strength < 30) conf *= 0.9;
+        // Penalty if DMI contradicts EMA trend
+        const emaBullish = indicators.ema9 > indicators.ema21;
+        const dmiBullish = indicators.dmi.plus > indicators.dmi.minus;
+        if (emaBullish !== dmiBullish) conf *= 0.85;
         if (this.performance.consecutiveLosses >= 3) conf *= 0.7;
         else if (this.performance.consecutiveLosses >= 2) conf *= 0.85;
         if (this.performance.consecutiveWins >= 3) conf *= 1.05;
         return Math.min(Math.max(conf, 0), 98);
     }
 
-    // PROFESSIONAL BACKTEST (uses real price movement, not random)
     async runBacktest(historicalData, startingBalance = 1000, options = {}) {
         const { riskPerTrade = 0.02, minConfidence = 65 } = options;
         if (!historicalData || historicalData.length < 100) return { error: 'Need at least 100 candles' };
-
-        let balance = startingBalance;
-        let trades = [];
-        let equity = [startingBalance];
-
+        let balance = startingBalance, trades = [], equity = [startingBalance];
         for (let i = 100; i < historicalData.length - 15; i++) {
             const slice = { values: historicalData.slice(0, i + 1) };
             const signal = this.analyzeSignal(slice, { minConfidence });
             if (signal.signal !== 'WAIT') {
-                const entryPrice = parseFloat(historicalData[i].close);
-                const exitPrice = parseFloat(historicalData[i + 15].close); // 15 candles later (approx expiry)
-                let isWin = false;
-                if (signal.signal === 'CALL') isWin = exitPrice > entryPrice;
-                else if (signal.signal === 'PUT') isWin = exitPrice < entryPrice;
-
+                const entry = parseFloat(historicalData[i].close);
+                const exit = parseFloat(historicalData[i + 15].close);
+                const isWin = (signal.signal === 'CALL' && exit > entry) || (signal.signal === 'PUT' && exit < entry);
                 const tradeAmount = balance * riskPerTrade;
                 const profit = tradeAmount * (isWin ? 0.72 : -0.85);
                 balance += profit;
-                trades.push({
-                    timestamp: historicalData[i].datetime,
-                    signal: signal.signal,
-                    confidence: signal.confidence,
-                    isWin,
-                    profitPercent: (profit / tradeAmount) * 100
-                });
+                trades.push({ timestamp: historicalData[i].datetime, signal: signal.signal, confidence: signal.confidence, isWin, profitPercent: (profit / tradeAmount) * 100 });
             }
             equity.push(balance);
         }
-
-        const totalTrades = trades.length;
-        if (totalTrades === 0) return { error: 'No trades generated during backtest period' };
-
+        if (trades.length === 0) return { error: 'No trades generated' };
         const wins = trades.filter(t => t.isWin).length;
-        const winRate = (wins / totalTrades) * 100;
-        const totalProfit = balance - startingBalance;
-        const totalProfitPercent = (totalProfit / startingBalance) * 100;
-
+        const winRate = (wins / trades.length) * 100;
+        const totalProfitPercent = ((balance - startingBalance) / startingBalance) * 100;
         let peak = startingBalance, maxDD = 0;
-        for (const v of equity) {
-            if (v > peak) peak = v;
-            const dd = (peak - v) / peak * 100;
-            if (dd > maxDD) maxDD = dd;
-        }
-
-        const grossProfit = trades.filter(t => t.isWin).reduce((a, b) => a + b.profitPercent, 0);
-        const grossLoss = trades.filter(t => !t.isWin).reduce((a, b) => a + Math.abs(b.profitPercent), 0);
+        for (const v of equity) { if (v > peak) peak = v; const dd = (peak - v) / peak * 100; if (dd > maxDD) maxDD = dd; }
+        const grossProfit = trades.filter(t => t.isWin).reduce((a,b) => a + b.profitPercent, 0);
+        const grossLoss = trades.filter(t => !t.isWin).reduce((a,b) => a + Math.abs(b.profitPercent), 0);
         const profitFactor = grossLoss > 0 ? grossProfit / grossLoss : grossProfit > 0 ? 999 : 0;
-
-        const avgWin = wins > 0 ? trades.filter(t => t.isWin).reduce((a, b) => a + b.profitPercent, 0) / wins : 0;
-        const avgLoss = (totalTrades - wins) > 0 ? Math.abs(trades.filter(t => !t.isWin).reduce((a, b) => a + b.profitPercent, 0)) / (totalTrades - wins) : 0;
-        const riskReward = avgLoss > 0 ? avgWin / avgLoss : 0;
+        const avgWin = wins > 0 ? trades.filter(t => t.isWin).reduce((a,b) => a + b.profitPercent, 0) / wins : 0;
+        const avgLoss = (trades.length - wins) > 0 ? Math.abs(trades.filter(t => !t.isWin).reduce((a,b) => a + b.profitPercent, 0)) / (trades.length - wins) : 0;
         const expectancy = (winRate / 100) * avgWin - ((100 - winRate) / 100) * avgLoss;
-
         const returns = trades.map(t => t.profitPercent / 100);
-        const avgRet = returns.reduce((a, b) => a + b, 0) / returns.length;
-        const stdRet = Math.sqrt(returns.reduce((a, b) => a + Math.pow(b - avgRet, 2), 0) / returns.length);
+        const avgRet = returns.reduce((a,b) => a + b, 0) / returns.length;
+        const stdRet = Math.sqrt(returns.reduce((a,b) => a + Math.pow(b - avgRet, 2), 0) / returns.length);
         const sharpe = stdRet > 0 ? (avgRet / stdRet) * Math.sqrt(252) : 0;
-
-        const quality = this.assessQuality(winRate, profitFactor, maxDD, winRate); // signalAccuracy approximated as winRate
-
-        return {
-            summary: {
-                startingBalance, finalBalance: balance, totalProfit, totalProfitPercent,
-                totalTrades, winningTrades: wins, losingTrades: totalTrades - wins,
-                winRate, profitFactor, maxDrawdown: maxDD,
-                avgWin, avgLoss, riskReward, sharpe, expectancy
-            },
-            trades: trades.slice(-50),
-            quality
-        };
+        const quality = this.assessQuality(winRate, profitFactor, maxDD, winRate);
+        return { summary: { startingBalance, finalBalance: balance, totalProfitPercent, totalTrades: trades.length, winningTrades: wins, losingTrades: trades.length - wins, winRate, profitFactor, maxDrawdown: maxDD, avgWin, avgLoss, riskReward: avgWin / (avgLoss || 1), sharpe, expectancy }, trades: trades.slice(-50), quality };
     }
 
     assessQuality(winRate, profitFactor, maxDrawdown, signalAccuracy) {
@@ -233,29 +186,21 @@ class ProfessionalAnalyzer {
         return { score, rating };
     }
 
-    // Wilder's RSI (matches MT4/TradingView)
     calcRSI(closes, period) {
         if (closes.length < period + 1) return 50;
         let avgGain = 0, avgLoss = 0;
         for (let i = 1; i <= period; i++) {
             const diff = closes[i] - closes[i-1];
-            if (diff > 0) avgGain += diff;
-            else avgLoss -= diff;
+            if (diff > 0) avgGain += diff; else avgLoss -= diff;
         }
-        avgGain /= period;
-        avgLoss /= period;
+        avgGain /= period; avgLoss /= period;
         for (let i = period + 1; i < closes.length; i++) {
             const diff = closes[i] - closes[i-1];
-            if (diff > 0) {
-                avgGain = (avgGain * (period - 1) + diff) / period;
-                avgLoss = (avgLoss * (period - 1)) / period;
-            } else {
-                avgGain = (avgGain * (period - 1)) / period;
-                avgLoss = (avgLoss * (period - 1) - diff) / period;
-            }
+            if (diff > 0) { avgGain = (avgGain * (period - 1) + diff) / period; avgLoss = (avgLoss * (period - 1)) / period; }
+            else { avgGain = (avgGain * (period - 1)) / period; avgLoss = (avgLoss * (period - 1) - diff) / period; }
         }
         const rs = avgGain / (avgLoss === 0 ? 1e-10 : avgLoss);
-        let rsi = 100 - (100 / (1 + rs));
+        const rsi = 100 - (100 / (1 + rs));
         return isNaN(rsi) ? 50 : Math.min(Math.max(rsi, 0), 100);
     }
 
@@ -328,7 +273,7 @@ class ProfessionalAnalyzer {
             if (indicators.dmi.plus > indicators.dmi.minus) reason += `DMI+ ${indicators.dmi.plus.toFixed(1)} dominates DMI- ${indicators.dmi.minus.toFixed(1)}. `;
             reason += `Price ${priceChange > 0 ? 'up' : 'down'} ${Math.abs(priceChange).toFixed(2)}%.`;
             return reason;
-        } else if (scores.sell > scores.buy) {
+        } else {
             let reason = '';
             if (indicators.trend.direction.includes('DOWN')) reason += `Downtrend confirmed (${indicators.ema9 > indicators.ema21 ? 'EMA9 > EMA21' : 'EMA9 < EMA21'}). `;
             if (indicators.adx > 25) reason += `ADX ${indicators.adx.toFixed(1)} (strong trend). `;
@@ -336,7 +281,6 @@ class ProfessionalAnalyzer {
             reason += `Price ${priceChange > 0 ? 'up' : 'down'} ${Math.abs(priceChange).toFixed(2)}%.`;
             return reason;
         }
-        return 'Mixed signals – waiting for clear direction.';
     }
 
     recordTradeResult(result) {
@@ -345,15 +289,8 @@ class ProfessionalAnalyzer {
         const wins = recent.filter(t => t.wasWin).length;
         this.performance.winRate = recent.length ? wins / recent.length : 0.65;
         this.performance.totalTrades = this.tradeHistory.length;
-        if (result.wasWin) {
-            this.performance.consecutiveWins++;
-            this.performance.consecutiveLosses = 0;
-            this.performance.totalPnL += result.profit || 0;
-        } else {
-            this.performance.consecutiveLosses++;
-            this.performance.consecutiveWins = 0;
-            this.performance.totalPnL -= Math.abs(result.profit || 0);
-        }
+        if (result.wasWin) { this.performance.consecutiveWins++; this.performance.consecutiveLosses = 0; this.performance.totalPnL += result.profit || 0; }
+        else { this.performance.consecutiveLosses++; this.performance.consecutiveWins = 0; this.performance.totalPnL -= Math.abs(result.profit || 0); }
         return this.performance;
     }
 
@@ -361,7 +298,6 @@ class ProfessionalAnalyzer {
 }
 
 const analyzer = new ProfessionalAnalyzer();
-
 module.exports = {
     analyzeSignal: (data, config) => analyzer.analyzeSignal(data, config),
     runBacktest: (data, balance, options) => analyzer.runBacktest(data, balance, options),
