@@ -1,53 +1,40 @@
 {
   "forex_live": [
-    {"name": "EUR/USD", "symbol": "EUR/USD", "type": "forex", "active": true},
-    {"name": "GBP/USD", "symbol": "GBP/USD", "type": "forex", "active": true},
-    {"name": "USD/JPY", "symbol": "USD/JPY", "type": "forex", "active": true},
-    {"name": "AUD/USD", "symbol": "AUD/USD", "type": "forex", "active": true},
-    {"name": "USD/CAD", "symbol": "USD/CAD", "type": "forex", "active": true},
-    {"name": "USD/CHF", "symbol": "USD/CHF", "type": "forex", "active": true},
-    {"name": "NZD/USD", "symbol": "NZD/USD", "type": "forex", "active": true},
-    {"name": "EUR/GBP", "symbol": "EUR/GBP", "type": "forex", "active": true},
-    {"name": "EUR/JPY", "symbol": "EUR/JPY", "type": "forex", "active": true},
-    {"name": "GBP/JPY", "symbol": "GBP/JPY", "type": "forex", "active": true},
-    {"name": "AUD/JPY", "symbol": "AUD/JPY", "type": "forex", "active": true},
-    {"name": "CHF/JPY", "symbol": "CHF/JPY", "type": "forex", "active": true},
-    {"name": "EUR/AUD", "symbol": "EUR/AUD", "type": "forex", "active": true},
-    {"name": "GBP/AUD", "symbol": "GBP/AUD", "type": "forex", "active": true},
-    {"name": "AUD/CAD", "symbol": "AUD/CAD", "type": "forex", "active": true},
-    {"name": "CAD/CHF", "symbol": "CAD/CHF", "type": "forex", "active": true},
-    {"name": "EUR/CAD", "symbol": "EUR/CAD", "type": "forex", "active": true},
-    {"name": "GBP/CAD", "symbol": "GBP/CAD", "type": "forex", "active": true},
-    {"name": "NZD/JPY", "symbol": "NZD/JPY", "type": "forex", "active": true},
-    {"name": "AUD/CHF", "symbol": "AUD/CHF", "type": "forex", "active": true}
+    { "name": "EUR/USD", "type": "forex", "active": true },
+    { "name": "GBP/USD", "type": "forex", "active": true },
+    { "name": "USD/JPY", "type": "forex", "active": true },
+    { "name": "USD/CAD", "type": "forex", "active": true },
+    { "name": "AUD/USD", "type": "forex", "active": true },
+    { "name": "NZD/USD", "type": "forex", "active": true },
+    { "name": "EUR/GBP", "type": "forex", "active": true },
+    { "name": "EUR/JPY", "type": "forex", "active": true },
+    { "name": "GBP/JPY", "type": "forex", "active": true },
+    { "name": "CHF/JPY", "type": "forex", "active": true }
   ],
-  "crypto_live": [
-    {"name": "BTC/USD", "symbol": "BTC/USD", "type": "crypto", "active": true},
-    {"name": "ETH/USD", "symbol": "ETH/USD", "type": "crypto", "active": true},
-    {"name": "SOL/USD", "symbol": "SOL/USD", "type": "crypto", "active": true},
-    {"name": "XRP/USD", "symbol": "XRP/USD", "type": "crypto", "active": true},
-    {"name": "ADA/USD", "symbol": "ADA/USD", "type": "crypto", "active": true},
-    {"name": "DOGE/USD", "symbol": "DOGE/USD", "type": "crypto", "active": true},
-    {"name": "LTC/USD", "symbol": "LTC/USD", "type": "crypto", "active": true},
-    {"name": "DOT/USD", "symbol": "DOT/USD", "type": "crypto", "active": true},
-    {"name": "AVAX/USD", "symbol": "AVAX/USD", "type": "crypto", "active": true},
-    {"name": "MATIC/USD", "symbol": "MATIC/USD", "type": "crypto", "active": true},
-    {"name": "LINK/USD", "symbol": "LINK/USD", "type": "crypto", "active": true}
+  "forex_otc": [
+    { "name": "EUR/CAD OTC", "type": "forex", "active": true },
+    { "name": "CAD/CHF OTC", "type": "forex", "active": true },
+    { "name": "EUR/AUD OTC", "type": "forex", "active": true },
+    { "name": "GBP/CAD OTC", "type": "forex", "active": true },
+    { "name": "AUD/CAD OTC", "type": "forex", "active": true }
   ],
-  "commodities_live": [
-    {"name": "XAU/USD", "symbol": "XAU/USD", "type": "commodity", "active": true},
-    {"name": "XAG/USD", "symbol": "XAG/USD", "type": "commodity", "active": true},
-    {"name": "WTI/USD", "symbol": "WTI/USD", "type": "commodity", "active": true},
-    {"name": "BRENT/USD", "symbol": "BRENT/USD", "type": "commodity", "active": true}
+  "crypto_otc": [
+    { "name": "BTC/USD", "type": "crypto", "active": true },
+    { "name": "ETH/USD", "type": "crypto", "active": true }
+  ],
+  "stocks_otc": [
+    { "name": "AAPL", "type": "stock", "active": true },
+    { "name": "GOOGL", "type": "stock", "active": true },
+    { "name": "MSFT", "type": "stock", "active": true }
+  ],
+  "commodities_otc": [
+    { "name": "Gold", "type": "commodity", "active": true },
+    { "name": "Silver", "type": "commodity", "active": true },
+    { "name": "Oil", "type": "commodity", "active": true }
   ],
   "indices": [
-    {"name": "SP500", "symbol": "SP500", "type": "index", "active": true},
-    {"name": "NAS100", "symbol": "NAS100", "type": "index", "active": true},
-    {"name": "US30", "symbol": "US30", "type": "index", "active": true},
-    {"name": "GER40", "symbol": "GER40", "type": "index", "active": true},
-    {"name": "UK100", "symbol": "UK100", "type": "index", "active": true},
-    {"name": "FRA40", "symbol": "FRA40", "type": "index", "active": true},
-    {"name": "AUS200", "symbol": "AUS200", "type": "index", "active": true},
-    {"name": "JPN225", "symbol": "JPN225", "type": "index", "active": true}
+    { "name": "SPX", "type": "index", "active": true },
+    { "name": "NDX", "type": "index", "active": true },
+    { "name": "DJI", "type": "index", "active": true }
   ]
 }
