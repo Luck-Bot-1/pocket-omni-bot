@@ -640,4 +640,74 @@ class ProfessionalAnalyzer {
         if (winRate >= 50 && profitFactor >= 1.0) {
             return "FAIR - Paper trade first, optimize parameters";
         }
-        return "POOR - Do not use
+        return "POOR - Do not use live. Need optimization or different pair";
+    }
+
+    assessQuality(winRate, profitFactor, maxDrawdown, signalAccuracy) {
+        let score = 0;
+        
+        if (winRate >= 68) score += 45;
+        else if (winRate >= 65) score += 42;
+        else if (winRate >= 62) score += 38;
+        else if (winRate >= 58) score += 32;
+        else if (winRate >= 55) score += 26;
+        else if (winRate >= 52) score += 20;
+        else score += 12;
+        
+        if (profitFactor >= 1.7) score += 30;
+        else if (profitFactor >= 1.5) score += 26;
+        else if (profitFactor >= 1.4) score += 22;
+        else if (profitFactor >= 1.3) score += 18;
+        else if (profitFactor >= 1.2) score += 14;
+        else if (profitFactor >= 1.1) score += 10;
+        else score += 5;
+        
+        if (maxDrawdown <= 10) score += 20;
+        else if (maxDrawdown <= 15) score += 16;
+        else if (maxDrawdown <= 20) score += 12;
+        else if (maxDrawdown <= 25) score += 8;
+        else score += 4;
+        
+        const rating = score >= 88 ? 'EXCELLENT' : 
+                      score >= 78 ? 'GOOD' : 
+                      score >= 68 ? 'FAIR' : 'POOR';
+        
+        return { score, rating };
+    }
+
+    recordTradeResult(result) {
+        if (this.backtestMode) return this.performance;
+        
+        this.tradeHistory.push(result);
+        const recent = this.tradeHistory.slice(-50);
+        const wins = recent.filter(t => t.wasWin).length;
+        this.performance.winRate = recent.length ? wins / recent.length : 0.60;
+        this.performance.totalTrades = this.tradeHistory.length;
+        
+        if (result.wasWin) {
+            this.performance.consecutiveWins++;
+            this.performance.consecutiveLosses = 0;
+            this.performance.totalPnL += result.profit || 0;
+        } else {
+            this.performance.consecutiveLosses++;
+            this.performance.consecutiveWins = 0;
+            this.performance.totalPnL -= Math.abs(result.profit || 0);
+        }
+        
+        this.performance.lastUpdateTime = Date.now();
+        return this.performance;
+    }
+
+    getPerformanceStats() {
+        return this.performance;
+    }
+}
+
+const analyzer = new ProfessionalAnalyzer();
+
+module.exports = {
+    analyzeSignal: (data, config) => analyzer.analyzeSignal(data, config),
+    runBacktest: (data, balance, options) => analyzer.runBacktest(data, balance, options),
+    recordTradeResult: (result) => analyzer.recordTradeResult(result),
+    getPerformanceStats: () => analyzer.getPerformanceStats()
+};
