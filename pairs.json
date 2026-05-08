@@ -9,32 +9,22 @@
     { "name": "EUR/GBP", "type": "forex", "active": true },
     { "name": "EUR/JPY", "type": "forex", "active": true },
     { "name": "GBP/JPY", "type": "forex", "active": true },
-    { "name": "CHF/JPY", "type": "forex", "active": true }
+    { "name": "CHF/JPY", "type": "forex", "active": true },
+    { "name": "AUD/JPY", "type": "forex", "active": true },
+    { "name": "NZD/JPY", "type": "forex", "active": true },
+    { "name": "EUR/CAD", "type": "forex", "active": true },
+    { "name": "GBP/CAD", "type": "forex", "active": true },
+    { "name": "AUD/CAD", "type": "forex", "active": true },
+    { "name": "CAD/JPY", "type": "forex", "active": true },
+    { "name": "USD/CHF", "type": "forex", "active": true },
+    { "name": "EUR/CHF", "type": "forex", "active": true },
+    { "name": "GBP/CHF", "type": "forex", "active": true },
+    { "name": "AUD/CHF", "type": "forex", "active": true },
+    { "name": "CAD/CHF", "type": "forex", "active": true }
   ],
-  "forex_otc": [
-    { "name": "EUR/CAD OTC", "type": "forex", "active": true },
-    { "name": "CAD/CHF OTC", "type": "forex", "active": true },
-    { "name": "EUR/AUD OTC", "type": "forex", "active": true },
-    { "name": "GBP/CAD OTC", "type": "forex", "active": true },
-    { "name": "AUD/CAD OTC", "type": "forex", "active": true }
-  ],
-  "crypto_otc": [
-    { "name": "BTC/USD", "type": "crypto", "active": true },
-    { "name": "ETH/USD", "type": "crypto", "active": true }
-  ],
-  "stocks_otc": [
-    { "name": "AAPL", "type": "stock", "active": true },
-    { "name": "GOOGL", "type": "stock", "active": true },
-    { "name": "MSFT", "type": "stock", "active": true }
-  ],
-  "commodities_otc": [
-    { "name": "Gold", "type": "commodity", "active": true },
-    { "name": "Silver", "type": "commodity", "active": true },
-    { "name": "Oil", "type": "commodity", "active": true }
-  ],
-  "indices": [
-    { "name": "SPX", "type": "index", "active": true },
-    { "name": "NDX", "type": "index", "active": true },
-    { "name": "DJI", "type": "index", "active": true }
-  ]
+  "forex_otc": [],
+  "crypto_otc": [],
+  "stocks_otc": [],
+  "commodities_otc": [],
+  "indices": []
 }
