@@ -1,7 +1,6 @@
 // ============================================
 // ANALYZER v11.0 – FINAL FORENSIC AUDITED
 // SIGNAL: 4.89/5 | QUALITY: 4.93/5
-// 100+ AUDITS PASSED – PRODUCTION READY
 // ============================================
 
 class ProfessionalAnalyzer {
@@ -20,7 +19,6 @@ class ProfessionalAnalyzer {
     }
 
     analyzeSignal(priceData, pairConfig = null) {
-        // Validation
         if (!priceData || !priceData.values || priceData.values.length < 60) {
             return { signal: 'WAIT', confidence: 0, reason: 'Insufficient data (need 60+ candles)', rsi: 50, adx: 0, rsi5: 50 };
         }
@@ -34,11 +32,9 @@ class ProfessionalAnalyzer {
         const scores = this.calcScores(indicators);
         let confidence = this.calcConfidence(scores, indicators, processed);
         
-        // Configuration
         const config = pairConfig || { minConfidence: 55 };
         const minConfidence = config.minConfidence || 55;
         
-        // Determine signal direction
         let signal = 'WAIT';
         const dmiBullish = indicators.dmi.plus > indicators.dmi.minus;
         const dmiBearish = indicators.dmi.minus > indicators.dmi.plus;
@@ -46,7 +42,6 @@ class ProfessionalAnalyzer {
         const isStrongUp = trendDirection === 'STRONG_UP' || trendDirection === 'UP';
         const isStrongDown = trendDirection === 'STRONG_DOWN' || trendDirection === 'DOWN';
         
-        // Priority 1: Divergence (most reliable)
         if (indicators.divergence.bullish && indicators.rsi14 < 50) {
             signal = 'CALL';
             confidence = Math.max(confidence, 72);
@@ -55,7 +50,6 @@ class ProfessionalAnalyzer {
             signal = 'PUT';
             confidence = Math.max(confidence, 72);
         }
-        // Priority 2: Strong trend with confirmation
         else if (scores.buy > scores.sell && isStrongUp && dmiBullish && indicators.adx >= 20) {
             signal = 'CALL';
             confidence = Math.max(confidence, 65);
@@ -64,7 +58,6 @@ class ProfessionalAnalyzer {
             signal = 'PUT';
             confidence = Math.max(confidence, 65);
         }
-        // Priority 3: RSI extreme
         else if (indicators.rsi14 < 30 && isStrongUp) {
             signal = 'CALL';
             confidence = Math.max(confidence, 60);
@@ -74,7 +67,6 @@ class ProfessionalAnalyzer {
             confidence = Math.max(confidence, 60);
         }
         
-        // Final confidence check
         if (signal === 'WAIT' || confidence < minConfidence) {
             return { 
                 signal: 'WAIT', 
@@ -87,7 +79,6 @@ class ProfessionalAnalyzer {
             };
         }
 
-        // Late entry prevention
         const priceMove = Math.abs(indicators.priceChange);
         if ((signal === 'CALL' && indicators.priceChange > 0.2) ||
             (signal === 'PUT' && indicators.priceChange < -0.2)) {
