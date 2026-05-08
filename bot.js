@@ -324,7 +324,7 @@ bot.command('backtest', async (ctx) => {
 });
 
 bot.launch().catch(console.error);
-console.log('✅ Bot v11.0 started – Final Forensic Audited Version');
+console.log('✅ Bot v12.0 started – Final Forensic Audited Version');
 
 process.once('SIGINT', () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM'));
