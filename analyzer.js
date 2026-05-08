@@ -1,7 +1,6 @@
 // ============================================
-// ANALYZER v10.0 – ULTIMATE FORENSIC AUDITED
-// SIGNAL: 4.94/5 | QUALITY: 4.96/5
-// 100+ AUDITS PASSED – NO FURTHER CHANGES
+// ANALYZER v10.1 – FIXED THRESHOLD
+// minConfidence: 60 (was 70)
 // ============================================
 
 class ProfessionalAnalyzer {
@@ -33,11 +32,12 @@ class ProfessionalAnalyzer {
         const scores = this.calcScores(indicators);
         let confidence = this.calcConfidence(scores, indicators, processed);
         
-        const config = pairConfig || { minConfidence: 70 };
-        const minConfidence = config.minConfidence || 70;
+        // FIXED: Lowered threshold from 70 to 60
+        const config = pairConfig || { minConfidence: 60 };
+        const minConfidence = config.minConfidence || 60;
         
         if (confidence < minConfidence) {
-            return { signal: 'WAIT', confidence, reason: 'Confidence below threshold', rsi: indicators.rsi14, adx: indicators.adx, rsi5: indicators.rsi5 };
+            return { signal: 'WAIT', confidence, reason: `Confidence below threshold (${confidence} < ${minConfidence})`, rsi: indicators.rsi14, adx: indicators.adx, rsi5: indicators.rsi5 };
         }
         
         let signal = 'WAIT';
@@ -50,20 +50,20 @@ class ProfessionalAnalyzer {
         const isRegularDown = trendDirection === 'DOWN';
         const isValidTrend = isStrongUp || isStrongDown || isRegularUp || isRegularDown;
         
-        if (indicators.divergence.bullish && indicators.rsi14 < 45 && confidence >= 75) {
+        if (indicators.divergence.bullish && indicators.rsi14 < 45 && confidence >= 65) {
             signal = 'CALL';
             confidence = Math.min(confidence + 8, 94);
         }
-        else if (indicators.divergence.bearish && indicators.rsi14 > 55 && confidence >= 75) {
+        else if (indicators.divergence.bearish && indicators.rsi14 > 55 && confidence >= 65) {
             signal = 'PUT';
             confidence = Math.min(confidence + 8, 94);
         }
-        else if (scores.buy > scores.sell && confidence >= 75) {
+        else if (scores.buy > scores.sell && confidence >= 65) {
             if ((isStrongUp || isRegularUp) && isValidTrend && dmiBullish && indicators.adx >= 25 && indicators.adx <= 55) {
                 signal = 'CALL';
             }
         }
-        else if (scores.sell > scores.buy && confidence >= 75) {
+        else if (scores.sell > scores.buy && confidence >= 65) {
             if ((isStrongDown || isRegularDown) && isValidTrend && dmiBearish && indicators.adx >= 25 && indicators.adx <= 55) {
                 signal = 'PUT';
             }
@@ -76,12 +76,12 @@ class ProfessionalAnalyzer {
         }
 
         const isCrypto = config.type === 'crypto';
-        const spreadThreshold = isCrypto ? 0.001 : 0.0003;
+        const spreadThreshold = isCrypto ? 0.002 : 0.0005; // Increased thresholds
         if (indicators.spread > spreadThreshold && signal !== 'WAIT') {
             return { signal: 'WAIT', confidence: confidence * 0.7, reason: 'Spread too high', rsi: indicators.rsi14, adx: indicators.adx, rsi5: indicators.rsi5 };
         }
 
-        if (indicators.atr < 0.00025 && signal !== 'WAIT') {
+        if (indicators.atr < 0.00015 && signal !== 'WAIT') { // Lowered from 0.00025
             return { signal: 'WAIT', confidence: confidence * 0.6, reason: 'Low volatility', rsi: indicators.rsi14, adx: indicators.adx, rsi5: indicators.rsi5 };
         }
 
@@ -383,7 +383,6 @@ class ProfessionalAnalyzer {
     calcConfidence(scores, indicators, data) {
         let rawConf = Math.max(scores.buy, scores.sell);
         let multiplier = 1.0;
-        let direction = scores.buy > scores.sell ? 'BUY' : 'SELL';
         
         if (indicators.adx >= 25 && indicators.adx <= 45) multiplier *= 1.12;
         else if (indicators.adx > 55) multiplier *= 0.75;
@@ -521,7 +520,7 @@ class ProfessionalAnalyzer {
     }
 
     async runBacktest(historicalData, startingBalance = 1000, options = {}) {
-        const { riskPerTrade = 0.02, minConfidence = 70, payoutPercent = 0.80, timeframeMinutes = 15 } = options;
+        const { riskPerTrade = 0.02, minConfidence = 60, payoutPercent = 0.80, timeframeMinutes = 15 } = options;
         
         if (!historicalData || historicalData.length < 150) {
             return { error: 'Need at least 150 candles for statistically valid backtest' };
@@ -641,74 +640,4 @@ class ProfessionalAnalyzer {
         if (winRate >= 50 && profitFactor >= 1.0) {
             return "FAIR - Paper trade first, optimize parameters";
         }
-        return "POOR - Do not use live. Need optimization or different pair";
-    }
-
-    assessQuality(winRate, profitFactor, maxDrawdown, signalAccuracy) {
-        let score = 0;
-        
-        if (winRate >= 68) score += 45;
-        else if (winRate >= 65) score += 42;
-        else if (winRate >= 62) score += 38;
-        else if (winRate >= 58) score += 32;
-        else if (winRate >= 55) score += 26;
-        else if (winRate >= 52) score += 20;
-        else score += 12;
-        
-        if (profitFactor >= 1.7) score += 30;
-        else if (profitFactor >= 1.5) score += 26;
-        else if (profitFactor >= 1.4) score += 22;
-        else if (profitFactor >= 1.3) score += 18;
-        else if (profitFactor >= 1.2) score += 14;
-        else if (profitFactor >= 1.1) score += 10;
-        else score += 5;
-        
-        if (maxDrawdown <= 10) score += 20;
-        else if (maxDrawdown <= 15) score += 16;
-        else if (maxDrawdown <= 20) score += 12;
-        else if (maxDrawdown <= 25) score += 8;
-        else score += 4;
-        
-        const rating = score >= 88 ? 'EXCELLENT' : 
-                      score >= 78 ? 'GOOD' : 
-                      score >= 68 ? 'FAIR' : 'POOR';
-        
-        return { score, rating };
-    }
-
-    recordTradeResult(result) {
-        if (this.backtestMode) return this.performance;
-        
-        this.tradeHistory.push(result);
-        const recent = this.tradeHistory.slice(-50);
-        const wins = recent.filter(t => t.wasWin).length;
-        this.performance.winRate = recent.length ? wins / recent.length : 0.60;
-        this.performance.totalTrades = this.tradeHistory.length;
-        
-        if (result.wasWin) {
-            this.performance.consecutiveWins++;
-            this.performance.consecutiveLosses = 0;
-            this.performance.totalPnL += result.profit || 0;
-        } else {
-            this.performance.consecutiveLosses++;
-            this.performance.consecutiveWins = 0;
-            this.performance.totalPnL -= Math.abs(result.profit || 0);
-        }
-        
-        this.performance.lastUpdateTime = Date.now();
-        return this.performance;
-    }
-
-    getPerformanceStats() {
-        return this.performance;
-    }
-}
-
-const analyzer = new ProfessionalAnalyzer();
-
-module.exports = {
-    analyzeSignal: (data, config) => analyzer.analyzeSignal(data, config),
-    runBacktest: (data, balance, options) => analyzer.runBacktest(data, balance, options),
-    recordTradeResult: (result) => analyzer.recordTradeResult(result),
-    getPerformanceStats: () => analyzer.getPerformanceStats()
-};
+        return "POOR - Do not use
