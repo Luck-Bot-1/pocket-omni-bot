@@ -1,22 +1,23 @@
+// ============================================
+// PRICE FETCHER v10.0 – Ultimate Version
+// ============================================
+
 const axios = require('axios');
 
 const TWELVE_DATA_API_KEY = process.env.TWELVE_DATA_API_KEY || '';
 const USE_REAL_API = !!(TWELVE_DATA_API_KEY && TWELVE_DATA_API_KEY !== 'your_api_key_here');
 
 function getSymbol(pairName) {
-    // Remove ' OTC' suffix if present, but keep slash for forex
     let symbol = pairName.replace(' OTC', '');
-    // For crypto, remove space (e.g., "BTC/USD" -> "BTC/USD" unchanged)
     if (symbol.includes('BTC') || symbol.includes('ETH')) {
         return symbol.replace(' ', '');
     }
-    // For forex, keep the slash – Twelve Data requires "EUR/USD"
     return symbol;
 }
 
 function generateMockData(pairName, limit = 200) {
     if (!global._mockWarningShown) {
-        console.warn(`⚠️⚠️⚠️ USING MOCK DATA for ${pairName}. Set TWELVE_DATA_API_KEY for live prices. ⚠️⚠️⚠️`);
+        console.warn(`⚠️ USING MOCK DATA for ${pairName}. Set TWELVE_DATA_API_KEY for live prices.`);
         global._mockWarningShown = true;
     }
     const values = [];
@@ -26,6 +27,7 @@ function generateMockData(pairName, limit = 200) {
     if (pairName.includes('GBP')) basePrice = 1.3000;
     if (pairName.includes('AUD')) basePrice = 0.6700;
     if (pairName.includes('CAD')) basePrice = 1.3500;
+    if (pairName.includes('CHF')) basePrice = 0.8900;
     if (pairName.includes('BTC')) basePrice = 60000;
     if (pairName.includes('ETH')) basePrice = 3000;
     if (pairName.includes('Gold')) basePrice = 2300;
@@ -65,7 +67,7 @@ async function fetchRealData(pairName, limit = 200) {
                 close: parseFloat(candle.close),
                 volume: parseInt(candle.volume) || 0
             }));
-            formatted.reverse(); // oldest first
+            formatted.reverse();
             return { values: formatted };
         }
         throw new Error('Invalid API response');
