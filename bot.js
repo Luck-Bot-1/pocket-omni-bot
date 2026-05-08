@@ -151,7 +151,7 @@ bot.action(/tf_(.+)_(.+)/, async (ctx) => {
         const priceData = await fetchPriceData(pairName);
         if (!priceData || !priceData.values || priceData.values.length < 60) throw new Error('Invalid price data');
 
-        const result = await analyzer.analyzeSignal(priceData, { minConfidence: 55, type: pair.type });
+        const result = await analyzer.analyzeSignal(priceData, { minConfidence: 50, type: pair.type });
 
         if (!result || result.signal === 'WAIT') {
             return ctx.reply(`⚠️ No high-confidence signal for ${pairName} on ${tf}.\n\nReason: ${result?.reason || 'Confidence too low'}\nRSI: ${result?.rsi || 'N/A'} | ADX: ${result?.adx || 'N/A'}`);
