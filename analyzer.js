@@ -33,8 +33,8 @@ class ProfessionalAnalyzer {
         let confidence = this.calcConfidence(scores, indicators, processed);
         
         // FIXED: Lowered threshold from 70 to 60
-        const config = pairConfig || { minConfidence: 60 };
-        const minConfidence = config.minConfidence || 60;
+        const config = pairConfig || { minConfidence: 55 };
+        const minConfidence = config.minConfidence || 55;
         
         if (confidence < minConfidence) {
             return { signal: 'WAIT', confidence, reason: `Confidence below threshold (${confidence} < ${minConfidence})`, rsi: indicators.rsi14, adx: indicators.adx, rsi5: indicators.rsi5 };
