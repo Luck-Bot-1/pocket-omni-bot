@@ -1,6 +1,6 @@
 // ============================================
-// BOT v14.2 – NON‑BLOCKING, CONCURRENT SIGNALS
-// Multiple pending trades, no waiting
+// BOT v14.3 – NON‑BLOCKING, CONCURRENT SIGNALS
+// Works with analyzer v14.3 (VWAP included)
 // ============================================
 
 require('dotenv').config();
@@ -24,7 +24,6 @@ function addTrade(pair, direction, result, userId) {
     const trades = loadTrades();
     trades.push({ pair, direction, result, userId, timestamp: Date.now() });
     saveTrades(trades);
-    // Also update analyzer performance (optional)
     try { analyzer.recordTradeResult({ wasWin: result === 'win', profit: result === 'win' ? 0.8 : -1 }); } catch(e) {}
 }
 function getWinRate(userId) {
@@ -35,7 +34,7 @@ function getWinRate(userId) {
 }
 
 // ------------------------- Pending Trades (non‑blocking) -------------------------
-const pendingTrades = {}; // { tradeId: { pair, signal, timestamp } }
+const pendingTrades = {};
 
 function getExpiryFromTimeframe(tf) {
     const map = { '1m':'2m', '5m':'5m', '15m':'15m', '30m':'30m', '1h':'1h', '4h':'2h', '1d':'12h' };
@@ -103,7 +102,7 @@ function timeframeKeyboard(pairName) {
 // ------------------------- Bot Actions -------------------------
 bot.start(async (ctx) => {
     const userId = ctx.from.id;
-    await ctx.replyWithMarkdown(`🚀 *PULSE OMNI BOT v14.2* – High Quality, Non‑Blocking\nActive pairs: ${ALL_PAIRS.length}\nYour win rate: ${getWinRate(userId)}%\nSelect asset category:`, await categoryKeyboard());
+    await ctx.replyWithMarkdown(`🚀 *PULSE OMNI BOT v14.3* – High Quality, Non‑Blocking\nActive pairs: ${ALL_PAIRS.length}\nYour win rate: ${getWinRate(userId)}%\nSelect asset category:`, await categoryKeyboard());
 });
 
 bot.action(/cat_(.+)/, async (ctx) => {
@@ -211,7 +210,7 @@ bot.action('cancel', async (ctx) => {
     await ctx.reply('Cancelled. Send /start again.');
 });
 
-// Simple commands (optional, keep your existing)
+// Simple commands
 bot.command('stats', async (ctx) => {
     const userId = ctx.from.id;
     const trades = loadTrades().filter(t => t.userId === userId);
@@ -230,7 +229,7 @@ bot.command('pairs', async (ctx) => {
     };
     await ctx.replyWithMarkdown(`📊 *Available Pairs:* ${ALL_PAIRS.length}\n💱 Live Forex: ${counts.forex_live}\n💱 OTC Forex: ${counts.forex_otc}\n🪙 Crypto: ${counts.crypto}\n📊 Stocks: ${counts.stocks}\n🛢️ Commodities: ${counts.commodities}\n📈 Indices: ${counts.indices}\n\nSend /start to analyze.`);
 });
-bot.command('backtest', async (ctx) => { /* optional – keep your existing */ });
+bot.command('backtest', async (ctx) => { /* optional – keep your existing backtest command if you have one */ });
 
 bot.launch().catch(console.error);
-console.log('✅ Bot v14.2 started – Non‑blocking, Concurrent Trades');
+console.log('✅ Bot v14.3 started – Non‑blocking, Concurrent Trades, VWAP ready');
