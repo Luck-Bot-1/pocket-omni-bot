@@ -150,21 +150,16 @@ function analyzeSingleTF(priceData, tf) {
     let trend = 'Sideways';
     const emaRelation = ema9 > ema21 ? 'EMA9 > EMA21' : 'EMA9 < EMA21';
     
-    // Primary trend‑following signals
     if (ema9 > ema21 && plusDI > minusDI && currentPrice > vwap) { signal = 'CALL'; trend = 'Upward'; }
     else if (ema9 < ema21 && minusDI > plusDI && currentPrice < vwap) { signal = 'PUT'; trend = 'Downward'; }
     else if (ema9 > ema21 && plusDI > minusDI) { signal = 'CALL'; trend = 'Upward'; }
     else if (ema9 < ema21 && minusDI > plusDI) { signal = 'PUT'; trend = 'Downward'; }
-    // Overbought/Oversold reversal signals (FIXED)
     else if (rsi > 75 || stochK > 80) { signal = 'PUT'; trend = 'Overbought → Sell'; }
     else if (rsi < 25 || stochK < 20) { signal = 'CALL'; trend = 'Oversold → Buy'; }
     else signal = 'WAIT';
     
-    // Divergence veto
     if (signal === 'CALL' && divergence === 'Bearish') signal = 'WAIT';
     if (signal === 'PUT' && divergence === 'Bullish') signal = 'WAIT';
-    
-    // Extreme trend – wait for pullback
     if (adx > 45 && signal !== 'WAIT') signal = 'WAIT';
     
     return { signal, trend, emaRelation, vwap: vwap.toFixed(5), vwapPosition, rsi: rsi.toFixed(1), stochK: stochK.toFixed(1), adx: adx.toFixed(0), dmi: { plus: plusDI, minus: minusDI }, priceChange: priceChange.toFixed(2), divergence };
