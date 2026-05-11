@@ -167,7 +167,6 @@ function getHigherTF(tf) {
     return map[tf] || '1h';
 }
 
-// ✅ Candle‑open restriction REMOVED – always allow entry
 function isCandleOpen(timeframeMinutes, currentDate = new Date()) {
     return true;
 }
