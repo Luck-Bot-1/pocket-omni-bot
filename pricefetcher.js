@@ -1,25 +1,39 @@
 // ============================================
-// PRICE FETCHER v10.0 – Ultimate Version
+// PRICE FETCHER v11.0 – Multi‑Timeframe + Caching + VWAP support
 // ============================================
 
 const axios = require('axios');
+const NodeCache = require('node-cache'); // npm install node-cache
+const cache = new NodeCache({ stdTTL: 300 }); // 5 minutes cache
 
 const TWELVE_DATA_API_KEY = process.env.TWELVE_DATA_API_KEY || '';
 const USE_REAL_API = !!(TWELVE_DATA_API_KEY && TWELVE_DATA_API_KEY !== 'your_api_key_here');
 
+// Map our timeframes to Twelve Data intervals
+const intervalMap = {
+    '1m': '1min',
+    '5m': '5min',
+    '15m': '15min',
+    '30m': '30min',
+    '1h': '1h',
+    '4h': '4h',
+    '1d': '1day'
+};
+
 function getSymbol(pairName) {
     let symbol = pairName.replace(' OTC', '');
-    if (symbol.includes('BTC') || symbol.includes('ETH')) {
-        return symbol.replace(' ', '');
-    }
+    // Handle crypto
+    if (symbol.includes('/')) symbol = symbol.replace('/', '');
     return symbol;
 }
 
-function generateMockData(pairName, limit = 200) {
+// Improved mock data with realistic trends and volatility
+function generateMockData(pairName, timeframe, limit = 200) {
     if (!global._mockWarningShown) {
         console.warn(`⚠️ USING MOCK DATA for ${pairName}. Set TWELVE_DATA_API_KEY for live prices.`);
         global._mockWarningShown = true;
     }
+
     const values = [];
     const now = new Date();
     let basePrice = 1.1000;
@@ -32,13 +46,19 @@ function generateMockData(pairName, limit = 200) {
     if (pairName.includes('ETH')) basePrice = 3000;
     if (pairName.includes('Gold')) basePrice = 2300;
 
+    const intervalMinutes = parseInt(timeframe) || 15;
+    let trend = 0;
+    let volatility = 0.001;
+
     for (let i = limit; i > 0; i--) {
-        const timestamp = new Date(now.getTime() - i * 15 * 60 * 1000);
-        const change = (Math.random() - 0.5) * 0.002;
-        const open = basePrice + (Math.random() - 0.5) * 0.001;
+        const timestamp = new Date(now.getTime() - i * intervalMinutes * 60 * 1000);
+        // Random walk with occasional trend
+        if (Math.random() < 0.1) trend = (Math.random() - 0.5) * 0.0005;
+        const change = trend + (Math.random() - 0.5) * volatility;
+        const open = basePrice;
         const close = open + change;
-        const high = Math.max(open, close) + Math.random() * 0.001;
-        const low = Math.min(open, close) - Math.random() * 0.001;
+        const high = Math.max(open, close) + Math.random() * volatility * 2;
+        const low = Math.min(open, close) - Math.random() * volatility * 2;
         values.push({
             datetime: timestamp.toISOString(),
             open: parseFloat(open.toFixed(5)),
@@ -52,38 +72,52 @@ function generateMockData(pairName, limit = 200) {
     return { values };
 }
 
-async function fetchRealData(pairName, limit = 200) {
+async function fetchRealData(pairName, timeframe, limit = 200) {
     const symbol = getSymbol(pairName);
-    const interval = '15min';
+    const interval = intervalMap[timeframe];
+    if (!interval) throw new Error(`Unsupported timeframe: ${timeframe}`);
+
+    const cacheKey = `${pairName}_${timeframe}_${limit}`;
+    const cached = cache.get(cacheKey);
+    if (cached) return cached;
+
     const url = `https://api.twelvedata.com/time_series?symbol=${symbol}&interval=${interval}&outputsize=${limit}&apikey=${TWELVE_DATA_API_KEY}`;
-    try {
-        const response = await axios.get(url, { timeout: 10000 });
-        if (response.data && response.data.values) {
-            const formatted = response.data.values.map(candle => ({
-                datetime: candle.datetime,
-                open: parseFloat(candle.open),
-                high: parseFloat(candle.high),
-                low: parseFloat(candle.low),
-                close: parseFloat(candle.close),
-                volume: parseInt(candle.volume) || 0
-            }));
-            formatted.reverse();
-            return { values: formatted };
+    
+    for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+            const response = await axios.get(url, { timeout: 10000 });
+            if (response.data && response.data.values) {
+                const formatted = response.data.values.map(candle => ({
+                    datetime: candle.datetime,
+                    open: parseFloat(candle.open),
+                    high: parseFloat(candle.high),
+                    low: parseFloat(candle.low),
+                    close: parseFloat(candle.close),
+                    volume: parseInt(candle.volume) || 0
+                }));
+                formatted.reverse(); // oldest first
+                const result = { values: formatted };
+                cache.set(cacheKey, result);
+                return result;
+            }
+            throw new Error('Invalid API response');
+        } catch (error) {
+            console.error(`Twelve Data error (attempt ${attempt}) for ${pairName}:`, error.message);
+            if (attempt === 3) return null;
+            await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
         }
-        throw new Error('Invalid API response');
-    } catch (error) {
-        console.error(`Twelve Data error for ${pairName}:`, error.message);
-        return null;
     }
+    return null;
 }
 
-async function fetchPriceData(pairName, options = {}) {
+async function fetchPriceData(pairName, timeframe = '15m', options = {}) {
     const limit = options.limit || 200;
     if (USE_REAL_API) {
-        const data = await fetchRealData(pairName, limit);
-        if (data && data.values && data.values.length >= 60) return data;
+        const data = await fetchRealData(pairName, timeframe, limit);
+        if (data && data.values && data.values.length >= 30) return data;
+        console.warn(`Falling back to mock data for ${pairName} (${timeframe})`);
     }
-    return generateMockData(pairName, limit);
+    return generateMockData(pairName, timeframe, limit);
 }
 
 module.exports = { fetchPriceData };
