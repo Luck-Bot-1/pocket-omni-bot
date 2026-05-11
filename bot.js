@@ -1,6 +1,3 @@
-// ============================================
-// BOT v16.1 – FINAL (no external deps other than telegraf)
-// ============================================
 require('dotenv').config();
 const { Telegraf, Markup } = require('telegraf');
 const analyzer = require('./analyzer');
@@ -99,7 +96,7 @@ function timeframeKeyboard(pairName) {
 
 bot.start(async (ctx) => {
     const userId = ctx.from.id;
-    await ctx.replyWithMarkdown(`🚀 *PULSE OMNI BOT v16.1* – FINAL PRODUCTION\n✅ VWAP | Divergence Veto | Multi‑TF | Real Backtest\nActive pairs: ${ALL_PAIRS.length}\nYour win rate: ${getWinRate(userId)}%\nSelect asset category:`, await categoryKeyboard());
+    await ctx.replyWithMarkdown(`🚀 *PULSE OMNI BOT v17.0* – FINAL PRODUCTION\n✅ VWAP | Overbought→PUT | Oversold→CALL | Real Backtest\nActive pairs: ${ALL_PAIRS.length}\nYour win rate: ${getWinRate(userId)}%\nSelect asset category:`, await categoryKeyboard());
 });
 
 bot.action(/cat_(.+)/, async (ctx) => {
@@ -131,14 +128,7 @@ bot.action(/tf_(.+)_(.+)/, async (ctx) => {
         const mainData = await fetchPriceData(pairName, tf, { limit: 200 });
         if (!mainData || !mainData.values || mainData.values.length < 60) throw new Error('Insufficient data');
         
-        const higherTF = analyzer.getHigherTF(tf);
-        let higherData = null;
-        try {
-            higherData = await fetchPriceData(pairName, higherTF, { limit: 100 });
-            if (!higherData || !higherData.values || higherData.values.length < 30) higherData = null;
-        } catch(e) { console.warn(`Could not fetch higher TF ${higherTF}:`, e.message); }
-        
-        const result = await analyzer.analyzeSignal(mainData, { type: pair.type, pairName }, tf, higherData);
+        const result = await analyzer.analyzeSignal(mainData, { type: pair.type, pairName }, tf);
         
         if (!result || result.signal === 'WAIT') {
             const reason = result?.reason || 'Confidence too low or conflict detected';
@@ -152,7 +142,7 @@ bot.action(/tf_(.+)_(.+)/, async (ctx) => {
         let confEmoji = result.confidence >= 75 ? '🟢' : (result.confidence >= 60 ? '🟡' : '🔴');
         const expiry = getExpiryFromTimeframe(tf);
         
-        let analysisText = `*Analysis:*\n- Trade Direction: ${result.trend} (${tf})\n- ${result.emaRelation}\n- VWAP: ${result.vwapPosition} (${result.vwap})\n`;
+        let analysisText = `*Analysis:*\n- Trade Direction: ${result.trend}\n- ${result.emaRelation}\n- VWAP: ${result.vwapPosition}\n`;
         const dmiPlus = parseFloat(result.dmi.plus) || 0, dmiMinus = parseFloat(result.dmi.minus) || 0;
         if (dmiPlus > dmiMinus) analysisText += `- DMI+ dominates (${dmiPlus.toFixed(1)} > ${dmiMinus.toFixed(1)})\n`;
         else analysisText += `- DMI- dominates (${dmiMinus.toFixed(1)} > ${dmiPlus.toFixed(1)})\n`;
@@ -160,9 +150,8 @@ bot.action(/tf_(.+)_(.+)/, async (ctx) => {
         if (result.adx > 25) analysisText += `- ADX ${result.adx} (trending)\n`;
         analysisText += `- Divergence: ${result.divergence}\n`;
         analysisText += `- Confidence: ${result.confidence}% (backtested)\n`;
-        analysisText += `- Risk: 1.5% of balance`;
         
-        const caption = `🔔 *SIGNAL: ${pairName} (${tf})*\n${dirEmoji} ${result.signal} | ${confEmoji} ${result.confidence}%\n📊 RSI: ${result.rsi} | ADX: ${result.adx}\n${analysisText}\n\n📌 *Trend Alignment:* ${result.trendAlignment}\n\n⏱️ *Expiry:* ${expiry}\n📈 *Your win rate:* ${getWinRate(userId)}%`;
+        const caption = `🔔 *SIGNAL: ${pairName} (${tf})*\n${dirEmoji} ${result.signal} | ${confEmoji} ${result.confidence}%\n📊 RSI: ${result.rsi} | ADX: ${result.adx}\n${analysisText}\n\n📌 *Trend Alignment:* ${result.trendAlignment}\n\n⏱️ *Expiry:* ${expiry}\n📈 *Your win rate:* ${getWinRate(userId)}%\n💰 *Risk:* 1.5% of balance`;
         
         await ctx.replyWithMarkdown(caption);
         await ctx.reply('📝 Record this trade after expiry?', Markup.inlineKeyboard([
@@ -243,4 +232,4 @@ bot.command('pairs', async (ctx) => {
 });
 
 bot.launch().catch(console.error);
-console.log('✅ BOT v16.1 FINAL – Ready for production. No extra dependencies needed.');
+console.log('✅ BOT v17.0 FINAL – Production ready. No further changes needed.');
