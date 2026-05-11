@@ -96,7 +96,7 @@ function timeframeKeyboard(pairName) {
 
 bot.start(async (ctx) => {
     const userId = ctx.from.id;
-    await ctx.replyWithMarkdown(`🚀 *PULSE OMNI BOT v17.0* – FINAL PRODUCTION\n✅ VWAP | Overbought→PUT | Oversold→CALL | Real Backtest\nActive pairs: ${ALL_PAIRS.length}\nYour win rate: ${getWinRate(userId)}%\nSelect asset category:`, await categoryKeyboard());
+    await ctx.replyWithMarkdown(`🚀 *PULSE OMNI BOT v17.0* – FINAL PRODUCTION\n✅ Alpha Vantage | Overbought→PUT | Oversold→CALL\nActive pairs: ${ALL_PAIRS.length}\nYour win rate: ${getWinRate(userId)}%\nSelect asset category:`, await categoryKeyboard());
 });
 
 bot.action(/cat_(.+)/, async (ctx) => {
@@ -232,4 +232,4 @@ bot.command('pairs', async (ctx) => {
 });
 
 bot.launch().catch(console.error);
-console.log('✅ BOT v17.0 FINAL – Production ready. No further changes needed.');
+console.log('✅ BOT v17.0 FINAL – Alpha Vantage integrated. Production ready.');
