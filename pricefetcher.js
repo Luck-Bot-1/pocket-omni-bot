@@ -1,7 +1,11 @@
 const axios = require('axios');
 const TWELVE_DATA_API_KEY = process.env.TWELVE_DATA_API_KEY || '';
 const USE_REAL_API = !!(TWELVE_DATA_API_KEY && TWELVE_DATA_API_KEY !== 'your_api_key_here');
-const intervalMap = { '1m':'1min','5m':'5min','15m':'15min','30m':'30min','1h':'1h','4h':'4h','1d':'1day' };
+
+const intervalMap = {
+    '1m': '1min', '5m': '5min', '15m': '15min', '30m': '30min',
+    '1h': '1h', '4h': '4h', '1d': '1day'
+};
 const simpleCache = {};
 
 function getSymbol(pairName) {
