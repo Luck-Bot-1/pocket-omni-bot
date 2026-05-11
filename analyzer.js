@@ -1,5 +1,5 @@
 // ============================================
-// PROFESSIONAL ANALYZER v4.1 – No external deps
+// PROFESSIONAL ANALYZER v4.3 – NO candle‑open restriction
 // ============================================
 const fs = require('fs');
 const path = require('path');
@@ -170,11 +170,9 @@ function getHigherTF(tf) {
     return map[tf] || '1h';
 }
 
+// NO candle‑open restriction – always return true
 function isCandleOpen(timeframeMinutes, currentDate = new Date()) {
-    const minutes = currentDate.getMinutes();
-    const remainder = minutes % timeframeMinutes;
-    const graceMinutes = Math.max(1, Math.floor(timeframeMinutes * 0.1));
-    return remainder <= graceMinutes;
+    return true;
 }
 
 function isBadSession(pair, currentDate = new Date()) {
@@ -187,7 +185,7 @@ async function analyzeSignal(priceData, config, tf, higherPriceData = null) {
     const pair = config.pairName || 'UNKNOWN';
     const timeframeMinutes = parseInt(tf);
     if (isNaN(timeframeMinutes)) return { signal: 'WAIT', reason: 'Invalid timeframe' };
-    if (!isCandleOpen(timeframeMinutes)) return { signal: 'WAIT', reason: `Enter only within first 10% of ${tf} candle` };
+    // Optional: you can disable session filter by setting asianHours to [] in session.json
     if (isBadSession(pair)) return { signal: 'WAIT', reason: `Skipping ${pair} during Asian session` };
     const main = analyzeSingleTF(priceData, tf);
     if (main.signal === 'WAIT') {
