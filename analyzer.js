@@ -149,22 +149,25 @@ function analyzeSingleTF(priceData, tf) {
     let signal = null;
     let trend = 'Sideways';
     const emaRelation = ema9 > ema21 ? 'EMA9 > EMA21' : 'EMA9 < EMA21';
+    
+    // Primary trend‑following signals
     if (ema9 > ema21 && plusDI > minusDI && currentPrice > vwap) { signal = 'CALL'; trend = 'Upward'; }
     else if (ema9 < ema21 && minusDI > plusDI && currentPrice < vwap) { signal = 'PUT'; trend = 'Downward'; }
     else if (ema9 > ema21 && plusDI > minusDI) { signal = 'CALL'; trend = 'Upward'; }
     else if (ema9 < ema21 && minusDI > plusDI) { signal = 'PUT'; trend = 'Downward'; }
+    // Overbought/Oversold reversal signals (FIXED)
+    else if (rsi > 75 || stochK > 80) { signal = 'PUT'; trend = 'Overbought → Sell'; }
+    else if (rsi < 25 || stochK < 20) { signal = 'CALL'; trend = 'Oversold → Buy'; }
     else signal = 'WAIT';
+    
+    // Divergence veto
     if (signal === 'CALL' && divergence === 'Bearish') signal = 'WAIT';
     if (signal === 'PUT' && divergence === 'Bullish') signal = 'WAIT';
-    if (signal === 'CALL' && (rsi > 75 || stochK > 80)) signal = 'WAIT';
-    if (signal === 'PUT' && (rsi < 25 || stochK < 20)) signal = 'WAIT';
-    if (adx > 45) signal = 'WAIT';
+    
+    // Extreme trend – wait for pullback
+    if (adx > 45 && signal !== 'WAIT') signal = 'WAIT';
+    
     return { signal, trend, emaRelation, vwap: vwap.toFixed(5), vwapPosition, rsi: rsi.toFixed(1), stochK: stochK.toFixed(1), adx: adx.toFixed(0), dmi: { plus: plusDI, minus: minusDI }, priceChange: priceChange.toFixed(2), divergence };
-}
-
-function getHigherTF(tf) {
-    const map = { '1m':'5m', '5m':'15m', '15m':'1h', '30m':'1h', '1h':'4h', '4h':'1d', '1d':'1w' };
-    return map[tf] || '1h';
 }
 
 function isCandleOpen(timeframeMinutes, currentDate = new Date()) {
@@ -179,26 +182,23 @@ function isBadSession(pair, currentDate = new Date()) {
 
 async function analyzeSignal(priceData, config, tf, higherPriceData = null) {
     const pair = config.pairName || 'UNKNOWN';
-    const timeframeMinutes = parseInt(tf);
-    if (isNaN(timeframeMinutes)) return { signal: 'WAIT', reason: 'Invalid timeframe' };
     if (isBadSession(pair)) return { signal: 'WAIT', reason: `Skipping ${pair} during Asian session` };
+    
     const main = analyzeSingleTF(priceData, tf);
+    
     if (main.signal === 'WAIT') {
         let reason = main.divergence !== 'None' ? `${main.divergence} divergence` : 'No clear trend';
         if (main.adx > 45) reason = 'Extreme trend – waiting for pullback';
-        if (main.rsi > 75 || main.stochK > 80) reason = 'Overbought';
+        if (main.rsi > 75 || main.stochK > 80) reason = 'Overbought (no divergence) → WAIT';
+        if (main.rsi < 25 || main.stochK < 20) reason = 'Oversold (no divergence) → WAIT';
         return { signal: 'WAIT', reason };
     }
-    let trendAlignment = 'Single timeframe only';
-    if (higherPriceData) {
-        const higherTF = getHigherTF(tf);
-        const higher = analyzeSingleTF(higherPriceData, higherTF);
-        if (higher.signal !== main.signal) return { signal: 'WAIT', reason: `Higher timeframe (${higherTF}) shows ${higher.signal} – conflict` };
-        trendAlignment = `✅ Aligned with ${higherTF} (${higher.signal})`;
-    }
-    const patternId = `${main.emaRelation}_${main.dmi.plus > main.dmi.minus ? 'DMIplus' : 'DMIminus'}_${main.divergence}_vwap${main.vwapPosition.replace(' ','')}`;
+    
+    const trendAlignment = '✅ Single timeframe (higher TF disabled)';
+    const patternId = `${main.emaRelation}_${main.dmi.plus > main.dmi.minus ? 'DMIplus' : 'DMIminus'}_${main.divergence}_${main.trend.replace(/ /g,'')}`;
     const confidence = getRealConfidence(pair, tf, patternId);
+    
     return { signal: main.signal, confidence: Math.min(99, Math.max(1, confidence)), rsi: main.rsi, adx: main.adx, emaRelation: main.emaRelation, dmi: main.dmi, priceChange: main.priceChange, divergence: main.divergence, trend: main.trend, trendAlignment, vwap: main.vwap, vwapPosition: main.vwapPosition, patternId };
 }
 
-module.exports = { analyzeSignal, recordTradeOutcome, getHigherTF, isCandleOpen };
+module.exports = { analyzeSignal, recordTradeOutcome, isCandleOpen };
