@@ -20,11 +20,11 @@ function recordTradeOutcome(pair, tf, patternId, wasWin, profitPercent = 0) {
     saveStats(stats);
 }
 
-function getRealConfidence(pair, tf, patternId) {
+function getHistoricalWinRate(pair, tf, patternId) {
     const stats = loadStats();
     const key = `${pair}_${tf}_${patternId}`;
-    if (stats[key] && stats[key].total >= 10) return Math.min(99, Math.max(1, stats[key].winRate));
-    return 60;
+    if (stats[key] && stats[key].total >= 10) return stats[key].winRate;
+    return null;
 }
 
 function calculateEMA(values, period) {
@@ -70,11 +70,30 @@ function detectDivergence(price, indicator, lookback = 20) {
     return bearish ? 'Bearish' : (bullish ? 'Bullish' : 'None');
 }
 
+function getSignalIntensity(confidence) {
+    if (confidence >= 80) return '🔴🔴🔴 STRONG';
+    if (confidence >= 70) return '🟠🟠 MODERATE';
+    if (confidence >= 60) return '🟡 WEAK';
+    return '⚪ LOW';
+}
+
 async function analyzeSignal(priceData, config, tf, higherPriceData = null) {
     try {
         const candles = priceData.values;
         if (!candles || candles.length < 30) {
-            return { signal: 'WAIT', reason: 'Insufficient data' };
+            return {
+                signal: 'CALL',
+                confidence: 50,
+                intensity: '⚪ LOW',
+                rsi: '50',
+                emaRelation: 'Insufficient data',
+                priceChange: '0',
+                divergence: 'None',
+                trend: 'Limited data - direction uncertain',
+                strategyUsed: 'Fallback',
+                trendAlignment: '⚠️ Fallback direction (50% confidence)',
+                historicalWinRate: null
+            };
         }
         
         const closes = candles.map(c => c.close);
@@ -84,12 +103,11 @@ async function analyzeSignal(priceData, config, tf, higherPriceData = null) {
         const rsi = calculateRSI(closes, 14);
         const priceChange = ((closes[closes.length - 1] - closes[0]) / closes[0]) * 100;
         
-        const last5Closes = closes.slice(-5);
-        const isMakingHigherHighs = last5Closes[4] > last5Closes[3] && last5Closes[3] > last5Closes[2];
-        const isMakingLowerLows = last5Closes[4] < last5Closes[3] && last5Closes[3] < last5Closes[2];
+        const last3Closes = closes.slice(-3);
+        const isHigherHigh = last3Closes[2] > last3Closes[1];
+        const isLowerLow = last3Closes[2] < last3Closes[1];
         const priceAbove20Candles = currentPrice > Math.max(...closes.slice(-20));
         const priceBelow20Candles = currentPrice < Math.min(...closes.slice(-20));
-        const rangeSize = Math.max(...closes.slice(-20)) - Math.min(...closes.slice(-20));
         
         const rsiValues = [];
         for (let i = 0; i < closes.length; i++) {
@@ -100,102 +118,178 @@ async function analyzeSignal(priceData, config, tf, higherPriceData = null) {
         const divergence = detectDivergence(closes, rsiValues);
         
         let signal = null;
-        let trend = 'Sideways';
+        let trend = '';
         let strategyUsed = '';
-        const emaRelation = ema9 > ema21 ? 'EMA9 > EMA21' : 'EMA9 < EMA21';
+        let baseConfidence = 50;
+        const emaRelation = ema9 > ema21 ? 'EMA9 > EMA21 (Bullish)' : 'EMA9 < EMA21 (Bearish)';
         
-        const isUptrend = (ema9 > ema21 && priceAbove20Candles) || (ema9 > ema21 && isMakingHigherHighs);
-        const isDowntrend = (ema9 < ema21 && priceBelow20Candles) || (ema9 < ema21 && isMakingLowerLows);
+        // SIGNAL DETERMINATION WITH CONFIDENCE SCORES
         
-        if (isUptrend) {
+        // 1. TREND FOLLOWING (Highest confidence)
+        if (ema9 > ema21 && priceAbove20Candles) {
             signal = 'CALL';
-            trend = '📈 Uptrend';
+            trend = '📈 Strong Uptrend';
             strategyUsed = 'Trend Following';
+            baseConfidence = 80;
         }
-        else if (isDowntrend) {
+        else if (ema9 < ema21 && priceBelow20Candles) {
             signal = 'PUT';
-            trend = '📉 Downtrend';
+            trend = '📉 Strong Downtrend';
             strategyUsed = 'Trend Following';
+            baseConfidence = 80;
         }
-        else if (ema9 > ema21 && rsi < 45) {
+        
+        // 2. DIVERGENCE (High confidence reversal)
+        else if (divergence === 'Bullish') {
             signal = 'CALL';
-            trend = '📈 Pullback Buy';
-            strategyUsed = 'Pullback Entry';
+            trend = '🟢 Bullish Divergence';
+            strategyUsed = 'Divergence Reversal';
+            baseConfidence = 75;
         }
-        else if (ema9 < ema21 && rsi > 55) {
+        else if (divergence === 'Bearish') {
             signal = 'PUT';
-            trend = '📉 Pullback Sell';
-            strategyUsed = 'Pullback Entry';
+            trend = '🔴 Bearish Divergence';
+            strategyUsed = 'Divergence Reversal';
+            baseConfidence = 75;
         }
+        
+        // 3. RSI EXTREMES (Good reversal signal)
         else if (rsi > 75) {
             signal = 'PUT';
-            trend = '⚠️ Overbought → Sell';
-            strategyUsed = 'Reversal';
+            trend = '⚠️ Strongly Overbought (RSI ' + rsi.toFixed(0) + ')';
+            strategyUsed = 'RSI Extreme Reversal';
+            baseConfidence = 76;
         }
         else if (rsi < 25) {
             signal = 'CALL';
-            trend = '⚠️ Oversold → Buy';
-            strategyUsed = 'Reversal';
+            trend = '⚠️ Strongly Oversold (RSI ' + rsi.toFixed(0) + ')';
+            strategyUsed = 'RSI Extreme Reversal';
+            baseConfidence = 76;
         }
+        else if (rsi > 65) {
+            signal = 'PUT';
+            trend = '⚠️ Overbought (RSI ' + rsi.toFixed(0) + ')';
+            strategyUsed = 'RSI Reversal';
+            baseConfidence = 68;
+        }
+        else if (rsi < 35) {
+            signal = 'CALL';
+            trend = '⚠️ Oversold (RSI ' + rsi.toFixed(0) + ')';
+            strategyUsed = 'RSI Reversal';
+            baseConfidence = 68;
+        }
+        
+        // 4. EMA CROSS + Price Action
+        else if (ema9 > ema21 && isHigherHigh) {
+            signal = 'CALL';
+            trend = '📈 EMA Bullish + Higher High';
+            strategyUsed = 'EMA Cross';
+            baseConfidence = 70;
+        }
+        else if (ema9 < ema21 && isLowerLow) {
+            signal = 'PUT';
+            trend = '📉 EMA Bearish + Lower Low';
+            strategyUsed = 'EMA Cross';
+            baseConfidence = 70;
+        }
+        
+        // 5. MOMENTUM
         else if (priceChange > 0.15) {
             signal = 'CALL';
-            trend = '⚡ Up Momentum';
+            trend = '⚡ Strong Up Momentum (' + priceChange.toFixed(2) + '%)';
             strategyUsed = 'Momentum';
+            baseConfidence = 66;
         }
         else if (priceChange < -0.15) {
             signal = 'PUT';
-            trend = '⚡ Down Momentum';
+            trend = '⚡ Strong Down Momentum (' + Math.abs(priceChange).toFixed(2) + '%)';
             strategyUsed = 'Momentum';
+            baseConfidence = 66;
         }
-        else if (rangeSize < 0.005 && rsi > 65) {
-            signal = 'PUT';
-            trend = '📊 Range Top → Sell';
-            strategyUsed = 'Range Trading';
-        }
-        else if (rangeSize < 0.005 && rsi < 35) {
+        else if (priceChange > 0.08) {
             signal = 'CALL';
-            trend = '📊 Range Bottom → Buy';
-            strategyUsed = 'Range Trading';
+            trend = '⚡ Up Momentum (' + priceChange.toFixed(2) + '%)';
+            strategyUsed = 'Momentum';
+            baseConfidence = 60;
         }
+        else if (priceChange < -0.08) {
+            signal = 'PUT';
+            trend = '⚡ Down Momentum (' + Math.abs(priceChange).toFixed(2) + '%)';
+            strategyUsed = 'Momentum';
+            baseConfidence = 60;
+        }
+        
+        // 6. DEFAULT – EMA Bias (Lowest confidence)
         else {
-            signal = 'WAIT';
-            strategyUsed = 'No Setup';
+            if (ema9 > ema21) {
+                signal = 'CALL';
+                trend = '📈 Neutral - EMA Bullish Bias';
+                strategyUsed = 'Default (EMA Bias)';
+                baseConfidence = 55;
+            } else {
+                signal = 'PUT';
+                trend = '📉 Neutral - EMA Bearish Bias';
+                strategyUsed = 'Default (EMA Bias)';
+                baseConfidence = 55;
+            }
         }
         
-        if (signal === 'CALL' && divergence === 'Bearish') {
-            signal = 'WAIT';
-            trend = '🚨 Bearish Divergence';
-            strategyUsed = 'Divergence Veto';
-        }
-        if (signal === 'PUT' && divergence === 'Bullish') {
-            signal = 'WAIT';
-            trend = '🚨 Bullish Divergence';
-            strategyUsed = 'Divergence Veto';
+        // Adjust confidence based on RSI strength
+        if (signal === 'CALL' && rsi < 30) {
+            baseConfidence += 5;
+        } else if (signal === 'PUT' && rsi > 70) {
+            baseConfidence += 5;
         }
         
-        if (signal === 'WAIT') {
-            return { signal: 'WAIT', reason: trend };
+        // Adjust for divergence strength
+        if (divergence !== 'None') {
+            baseConfidence += 3;
         }
         
+        // Get historical win rate for this pattern
         const patternId = `${emaRelation}_${strategyUsed.replace(/ /g, '_')}_${divergence}`;
-        const confidence = getRealConfidence(config.pairName || 'UNKNOWN', tf, patternId);
+        const historicalWinRate = getHistoricalWinRate(config.pairName || 'UNKNOWN', tf, patternId);
+        
+        // Final confidence: weighted average of base confidence and historical win rate
+        let finalConfidence = baseConfidence;
+        if (historicalWinRate !== null) {
+            finalConfidence = Math.floor((baseConfidence * 0.6) + (historicalWinRate * 0.4));
+        }
+        
+        finalConfidence = Math.min(99, Math.max(50, finalConfidence));
+        const intensity = getSignalIntensity(finalConfidence);
         
         return {
             signal: signal,
-            confidence: Math.min(99, Math.max(1, confidence)),
+            confidence: finalConfidence,
+            intensity: intensity,
             rsi: rsi.toFixed(1),
             emaRelation: emaRelation,
             priceChange: priceChange.toFixed(2),
             divergence: divergence,
             trend: trend,
             strategyUsed: strategyUsed,
-            trendAlignment: `✅ ${strategyUsed} | RSI: ${rsi.toFixed(1)}`,
-            patternId: patternId
+            trendAlignment: `✅ ${strategyUsed} | ${intensity} (${finalConfidence}%) | Direction: ${signal === 'CALL' ? 'UP ⬆️' : 'DOWN ⬇️'}`,
+            patternId: patternId,
+            historicalWinRate: historicalWinRate ? historicalWinRate.toFixed(1) + '%' : 'Insufficient data'
         };
         
     } catch (error) {
         console.error('Analyzer error:', error);
-        return { signal: 'WAIT', reason: 'Analysis error' };
+        return {
+            signal: 'CALL',
+            confidence: 50,
+            intensity: '⚪ LOW',
+            rsi: '50',
+            emaRelation: 'Error',
+            priceChange: '0',
+            divergence: 'None',
+            trend: 'Analysis error - using fallback',
+            strategyUsed: 'Fallback',
+            trendAlignment: '⚠️ Fallback direction (50% confidence)',
+            patternId: 'error_fallback',
+            historicalWinRate: null
+        };
     }
 }
 
