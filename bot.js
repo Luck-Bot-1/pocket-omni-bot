@@ -96,7 +96,7 @@ function timeframeKeyboard(pairName) {
 
 bot.start(async (ctx) => {
     const userId = ctx.from.id;
-    await ctx.replyWithMarkdown(`🚀 *PULSE OMNI BOT v17.0* – FINAL PRODUCTION\n✅ Alpha Vantage | Overbought→PUT | Oversold→CALL\nActive pairs: ${ALL_PAIRS.length}\nYour win rate: ${getWinRate(userId)}%\nSelect asset category:`, await categoryKeyboard());
+    await ctx.replyWithMarkdown(`🚀 *PULSE OMNI BOT v23.0* – LIVE YAHOO FINANCE (NO API KEY)\n✅ 4-Strategy Logic | Overbought→PUT | Oversold→CALL | Divergence Veto\nActive pairs: ${ALL_PAIRS.length}\nYour win rate: ${getWinRate(userId)}%\nSelect asset category:`, await categoryKeyboard());
 });
 
 bot.action(/cat_(.+)/, async (ctx) => {
@@ -126,12 +126,12 @@ bot.action(/tf_(.+)_(.+)/, async (ctx) => {
 
     try {
         const mainData = await fetchPriceData(pairName, tf, { limit: 200 });
-        if (!mainData || !mainData.values || mainData.values.length < 60) throw new Error('Insufficient data');
+        if (!mainData || !mainData.values || mainData.values.length < 30) throw new Error('Insufficient data');
         
         const result = await analyzer.analyzeSignal(mainData, { type: pair.type, pairName }, tf);
         
         if (!result || result.signal === 'WAIT') {
-            const reason = result?.reason || 'Confidence too low or conflict detected';
+            const reason = result?.reason || 'No clear setup';
             return ctx.reply(`⚠️ WAIT – No trade for ${pairName} on ${tf}.\n\nReason: ${reason}`);
         }
         
@@ -142,7 +142,7 @@ bot.action(/tf_(.+)_(.+)/, async (ctx) => {
         let confEmoji = result.confidence >= 75 ? '🟢' : (result.confidence >= 60 ? '🟡' : '🔴');
         const expiry = getExpiryFromTimeframe(tf);
         
-        let analysisText = `*Analysis:*\n- Trade Direction: ${result.trend}\n- ${result.emaRelation}\n- VWAP: ${result.vwapPosition}\n`;
+        let analysisText = `*Analysis:*\n- Trade Direction: ${result.trend}\n- Strategy: ${result.strategyUsed}\n- ${result.emaRelation}\n- VWAP: ${result.vwapPosition}\n`;
         const dmiPlus = parseFloat(result.dmi.plus) || 0, dmiMinus = parseFloat(result.dmi.minus) || 0;
         if (dmiPlus > dmiMinus) analysisText += `- DMI+ dominates (${dmiPlus.toFixed(1)} > ${dmiMinus.toFixed(1)})\n`;
         else analysisText += `- DMI- dominates (${dmiMinus.toFixed(1)} > ${dmiPlus.toFixed(1)})\n`;
@@ -151,7 +151,7 @@ bot.action(/tf_(.+)_(.+)/, async (ctx) => {
         analysisText += `- Divergence: ${result.divergence}\n`;
         analysisText += `- Confidence: ${result.confidence}% (backtested)\n`;
         
-        const caption = `🔔 *SIGNAL: ${pairName} (${tf})*\n${dirEmoji} ${result.signal} | ${confEmoji} ${result.confidence}%\n📊 RSI: ${result.rsi} | ADX: ${result.adx}\n${analysisText}\n\n📌 *Trend Alignment:* ${result.trendAlignment}\n\n⏱️ *Expiry:* ${expiry}\n📈 *Your win rate:* ${getWinRate(userId)}%\n💰 *Risk:* 1.5% of balance`;
+        const caption = `🔔 *SIGNAL: ${pairName} (${tf})*\n${dirEmoji} ${result.signal} | ${confEmoji} ${result.confidence}%\n📊 RSI: ${result.rsi} | ADX: ${result.adx}\n${analysisText}\n\n📌 ${result.trendAlignment}\n\n⏱️ *Expiry:* ${expiry}\n📈 *Your win rate:* ${getWinRate(userId)}%\n💰 *Risk:* 1.5% of balance`;
         
         await ctx.replyWithMarkdown(caption);
         await ctx.reply('📝 Record this trade after expiry?', Markup.inlineKeyboard([
@@ -232,4 +232,4 @@ bot.command('pairs', async (ctx) => {
 });
 
 bot.launch().catch(console.error);
-console.log('✅ BOT v17.0 FINAL – Alpha Vantage integrated. Production ready.');
+console.log('✅ BOT v23.0 FINAL – LIVE Yahoo Finance. 4 Strategies: Trend/Pullback/Reversal/Range. Production ready.');
