@@ -153,24 +153,24 @@ function analyzeSingleTF(priceData, tf) {
     const isUptrend = ema9 > ema21 && plusDI > minusDI;
     const isDowntrend = ema9 < ema21 && minusDI > plusDI;
     
-    // STRATEGY 1: TREND FOLLOWING (ADX > 25)
-    if (adx > 25 && isUptrend && currentPrice > vwap) {
+    // STRATEGY 1: TREND FOLLOWING (ADX > 20)
+    if (adx > 20 && isUptrend && currentPrice > vwap) {
         signal = 'CALL';
         trend = 'Strong Uptrend';
         strategyUsed = 'Trend Following';
     }
-    else if (adx > 25 && isDowntrend && currentPrice < vwap) {
+    else if (adx > 20 && isDowntrend && currentPrice < vwap) {
         signal = 'PUT';
         trend = 'Strong Downtrend';
         strategyUsed = 'Trend Following';
     }
     // STRATEGY 2: PULLBACK ENTRY (Trending but oversold/overbought)
-    else if (adx > 25 && isUptrend && (rsi < 40 || stochK < 30)) {
+    else if (adx > 20 && isUptrend && (rsi < 40 || stochK < 30)) {
         signal = 'CALL';
         trend = 'Pullback Buy (Dip)';
         strategyUsed = 'Pullback Entry';
     }
-    else if (adx > 25 && isDowntrend && (rsi > 60 || stochK > 70)) {
+    else if (adx > 20 && isDowntrend && (rsi > 60 || stochK > 70)) {
         signal = 'PUT';
         trend = 'Pullback Sell (Bounce)';
         strategyUsed = 'Pullback Entry';
