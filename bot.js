@@ -96,7 +96,7 @@ function timeframeKeyboard(pairName) {
 
 bot.start(async (ctx) => {
     const userId = ctx.from.id;
-    await ctx.replyWithMarkdown(`🚀 *PULSE OMNI BOT v27.0* – FINAL\n✅ Yahoo Finance | Multi-Strategy | No ADX\nActive pairs: ${ALL_PAIRS.length}\nYour win rate: ${getWinRate(userId)}%\nSelect asset category:`, await categoryKeyboard());
+    await ctx.replyWithMarkdown(`🚀 *PULSE OMNI BOT v28.0* – FINAL PRODUCTION\n✅ ALWAYS generates CALL/PUT with confidence %\n✅ Signal intensity: 🔴🔴🔴 STRONG | 🟠🟠 MODERATE | 🟡 WEAK | ⚪ LOW\nActive pairs: ${ALL_PAIRS.length}\nYour win rate: ${getWinRate(userId)}%\nSelect asset category:`, await categoryKeyboard());
 });
 
 bot.action(/cat_(.+)/, async (ctx) => {
@@ -130,31 +130,37 @@ bot.action(/tf_(.+)_(.+)/, async (ctx) => {
         
         const result = await analyzer.analyzeSignal(mainData, { type: pair.type, pairName }, tf);
         
-        if (!result || result.signal === 'WAIT') {
-            const reason = result?.reason || 'No clear setup';
-            return ctx.reply(`⚠️ WAIT – No trade for ${pairName} on ${tf}.\n\nReason: ${reason}`);
-        }
-        
-        const tradeId = `${pairName}_${Date.now()}_${Math.random().toString(36).substr(2,6)}`;
-        pendingTrades[tradeId] = { pair: pairName, signal: result.signal, patternId: result.patternId, tf };
-        
         const dirEmoji = result.signal === 'CALL' ? '📈' : '📉';
-        let confEmoji = result.confidence >= 75 ? '🟢' : (result.confidence >= 60 ? '🟡' : '🔴');
-        const expiry = getExpiryFromTimeframe(tf);
+        
+        // Map confidence to visual intensity
+        let intensityBar = '';
+        if (result.confidence >= 80) intensityBar = '🔴🔴🔴🔴🔴';
+        else if (result.confidence >= 70) intensityBar = '🟠🟠🟠🟠⚪';
+        else if (result.confidence >= 60) intensityBar = '🟡🟡🟡⚪⚪';
+        else intensityBar = '⚪⚪⚪⚪⚪';
         
         let analysisText = `*Analysis:*\n- Trade Direction: ${result.trend}\n- Strategy: ${result.strategyUsed}\n- ${result.emaRelation}\n`;
         analysisText += `- Price ${result.priceChange >= 0 ? 'up' : 'down'} ${Math.abs(result.priceChange)}%\n`;
         analysisText += `- Divergence: ${result.divergence}\n`;
-        analysisText += `- Confidence: ${result.confidence}% (backtested)\n`;
+        analysisText += `- Historical Win Rate: ${result.historicalWinRate}\n`;
+        analysisText += `- Signal Intensity: ${result.intensity}\n`;
+        analysisText += `- Confidence: ${result.confidence}% ${intensityBar}\n`;
         
-        const caption = `🔔 *SIGNAL: ${pairName} (${tf})*\n${dirEmoji} ${result.signal} | ${confEmoji} ${result.confidence}%\n📊 RSI: ${result.rsi}\n${analysisText}\n\n📌 ${result.trendAlignment}\n\n⏱️ *Expiry:* ${expiry}\n📈 *Your win rate:* ${getWinRate(userId)}%\n💰 *Risk:* 1.5% of balance`;
+        const expiry = getExpiryFromTimeframe(tf);
+        
+        const caption = `🔔 *SIGNAL: ${pairName} (${tf})*\n${dirEmoji} *${result.signal}* | ${result.intensity} (${result.confidence}%)\n📊 RSI: ${result.rsi}\n${analysisText}\n\n📌 ${result.trendAlignment}\n\n⏱️ *Expiry:* ${expiry}\n📈 *Your win rate:* ${getWinRate(userId)}%\n💰 *Risk:* 1.5% of balance\n\n⚠️ *Decision is yours* – Trade only if confidence ≥ 70% for good probability.`;
         
         await ctx.replyWithMarkdown(caption);
+        
+        const tradeId = `${pairName}_${Date.now()}_${Math.random().toString(36).substr(2,6)}`;
+        pendingTrades[tradeId] = { pair: pairName, signal: result.signal, patternId: result.patternId, tf };
+        
         await ctx.reply('📝 Record this trade after expiry?', Markup.inlineKeyboard([
             [Markup.button.callback('✅ WIN', `win_${tradeId}`)],
             [Markup.button.callback('❌ LOSS', `loss_${tradeId}`)],
             [Markup.button.callback('⏭️ SKIP', `skip_${tradeId}`)]
         ]));
+        
     } catch (err) {
         console.error('Signal error:', err);
         await ctx.reply('⚠️ Could not generate signal. Try another pair or timeframe.');
@@ -228,4 +234,4 @@ bot.command('pairs', async (ctx) => {
 });
 
 bot.launch().catch(console.error);
-console.log('✅ BOT v27.0 FINAL – Yahoo Finance. Multi-Strategy. Production ready.');
+console.log('✅ BOT v28.0 FINAL – Always generates CALL/PUT with confidence intensity. Production ready.');
