@@ -148,23 +148,80 @@ function analyzeSingleTF(priceData, tf) {
     const divergence = detectDivergence(closes, rsiValues);
     let signal = null;
     let trend = 'Sideways';
+    let strategyUsed = '';
     const emaRelation = ema9 > ema21 ? 'EMA9 > EMA21' : 'EMA9 < EMA21';
+    const isUptrend = ema9 > ema21 && plusDI > minusDI;
+    const isDowntrend = ema9 < ema21 && minusDI > plusDI;
     
-    // Trend signals
-    if (ema9 > ema21 && plusDI > minusDI) { signal = 'CALL'; trend = 'Upward'; }
-    else if (ema9 < ema21 && minusDI > plusDI) { signal = 'PUT'; trend = 'Downward'; }
-    // Overbought/Oversold reversal
-    else if (rsi > 70 || stochK > 80) { signal = 'PUT'; trend = 'Overbought → Sell'; }
-    else if (rsi < 30 || stochK < 20) { signal = 'CALL'; trend = 'Oversold → Buy'; }
-    else signal = 'WAIT';
+    // STRATEGY 1: TREND FOLLOWING (ADX > 25)
+    if (adx > 25 && isUptrend && currentPrice > vwap) {
+        signal = 'CALL';
+        trend = 'Strong Uptrend';
+        strategyUsed = 'Trend Following';
+    }
+    else if (adx > 25 && isDowntrend && currentPrice < vwap) {
+        signal = 'PUT';
+        trend = 'Strong Downtrend';
+        strategyUsed = 'Trend Following';
+    }
+    // STRATEGY 2: PULLBACK ENTRY (Trending but oversold/overbought)
+    else if (adx > 25 && isUptrend && (rsi < 40 || stochK < 30)) {
+        signal = 'CALL';
+        trend = 'Pullback Buy (Dip)';
+        strategyUsed = 'Pullback Entry';
+    }
+    else if (adx > 25 && isDowntrend && (rsi > 60 || stochK > 70)) {
+        signal = 'PUT';
+        trend = 'Pullback Sell (Bounce)';
+        strategyUsed = 'Pullback Entry';
+    }
+    // STRATEGY 3: REVERSAL (Overbought/Oversold)
+    else if (rsi > 75 || stochK > 80) {
+        signal = 'PUT';
+        trend = 'Overbought Reversal → Sell';
+        strategyUsed = 'Reversal (Overbought)';
+    }
+    else if (rsi < 25 || stochK < 20) {
+        signal = 'CALL';
+        trend = 'Oversold Reversal → Buy';
+        strategyUsed = 'Reversal (Oversold)';
+    }
+    // STRATEGY 4: RANGE TRADING (ADX < 25)
+    else if (adx < 25 && rsi > 70) {
+        signal = 'PUT';
+        trend = 'Range Top → Sell';
+        strategyUsed = 'Range Trading';
+    }
+    else if (adx < 25 && rsi < 30) {
+        signal = 'CALL';
+        trend = 'Range Bottom → Buy';
+        strategyUsed = 'Range Trading';
+    }
+    else {
+        signal = 'WAIT';
+        strategyUsed = 'No Setup';
+    }
     
-    // Divergence veto
-    if (signal === 'CALL' && divergence === 'Bearish') signal = 'WAIT';
-    if (signal === 'PUT' && divergence === 'Bullish') signal = 'WAIT';
-    // Only extreme trend (ADX > 50) waits for pullback
-    if (adx > 50 && signal !== 'WAIT') signal = 'WAIT';
+    // DIVERGENCE VETO (Overrides all strategies)
+    if (signal === 'CALL' && divergence === 'Bearish') {
+        signal = 'WAIT';
+        trend = 'Bearish divergence overrides CALL';
+        strategyUsed = 'Divergence Veto';
+    }
+    if (signal === 'PUT' && divergence === 'Bullish') {
+        signal = 'WAIT';
+        trend = 'Bullish divergence overrides PUT';
+        strategyUsed = 'Divergence Veto';
+    }
     
-    return { signal, trend, emaRelation, vwap: vwap.toFixed(5), vwapPosition, rsi: rsi.toFixed(1), stochK: stochK.toFixed(1), adx: adx.toFixed(0), dmi: { plus: plusDI, minus: minusDI }, priceChange: priceChange.toFixed(2), divergence };
+    // EXTREME TREND FILTER (ADX > 55 = wait for pullback)
+    if (adx > 55 && signal !== 'WAIT') {
+        signal = 'WAIT';
+        trend = 'Extreme trend – waiting for pullback';
+        strategyUsed = 'Extreme Trend Filter';
+    }
+    
+    return { signal, trend, strategyUsed, emaRelation, vwap: vwap.toFixed(5), vwapPosition, rsi: rsi.toFixed(1), stochK: stochK.toFixed(1), adx: adx.toFixed(0), dmi: { plus: plusDI, minus: minusDI }, priceChange: priceChange.toFixed(2), divergence };
 }
 
 function isCandleOpen(timeframeMinutes, currentDate = new Date()) {
@@ -184,18 +241,30 @@ async function analyzeSignal(priceData, config, tf, higherPriceData = null) {
     const main = analyzeSingleTF(priceData, tf);
     
     if (main.signal === 'WAIT') {
-        let reason = main.divergence !== 'None' ? `${main.divergence} divergence` : 'No clear trend';
-        if (main.adx > 50) reason = 'Extreme trend – waiting for pullback';
-        else if (main.rsi > 70 || main.stochK > 80) reason = 'Overbought – waiting for divergence confirmation';
-        else if (main.rsi < 30 || main.stochK < 20) reason = 'Oversold – waiting for divergence confirmation';
+        let reason = main.trend;
+        if (main.divergence !== 'None') reason = `${main.divergence} divergence`;
         return { signal: 'WAIT', reason };
     }
     
-    const trendAlignment = '✅ Single timeframe (works with daily data)';
-    const patternId = `${main.emaRelation}_${main.dmi.plus > main.dmi.minus ? 'DMIplus' : 'DMIminus'}_${main.divergence}_${main.trend.replace(/ /g,'')}`;
+    const patternId = `${main.emaRelation}_${main.dmi.plus > main.dmi.minus ? 'DMIplus' : 'DMIminus'}_${main.divergence}_${main.strategyUsed.replace(/ /g,'')}`;
     const confidence = getRealConfidence(pair, tf, patternId);
     
-    return { signal: main.signal, confidence: Math.min(99, Math.max(1, confidence)), rsi: main.rsi, adx: main.adx, emaRelation: main.emaRelation, dmi: main.dmi, priceChange: main.priceChange, divergence: main.divergence, trend: main.trend, trendAlignment, vwap: main.vwap, vwapPosition: main.vwapPosition, patternId };
+    return {
+        signal: main.signal,
+        confidence: Math.min(99, Math.max(1, confidence)),
+        rsi: main.rsi,
+        adx: main.adx,
+        emaRelation: main.emaRelation,
+        dmi: main.dmi,
+        priceChange: main.priceChange,
+        divergence: main.divergence,
+        trend: main.trend,
+        strategyUsed: main.strategyUsed,
+        trendAlignment: `✅ LIVE Yahoo Finance | Strategy: ${main.strategyUsed} | VWAP: ${main.vwapPosition}`,
+        vwap: main.vwap,
+        vwapPosition: main.vwapPosition,
+        patternId
+    };
 }
 
 module.exports = { analyzeSignal, recordTradeOutcome, isCandleOpen };
