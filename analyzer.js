@@ -77,145 +77,143 @@ function detectDivergence(price, indicator, lookback = 20) {
 }
 
 // ============================================
-// CORE SIGNAL GENERATION (NO ADX)
-// ============================================
-function analyzeSingleTF(priceData, tf) {
-    const candles = priceData.values;
-    const closes = candles.map(c => c.close);
-    const currentPrice = closes[closes.length - 1];
-    const ema9 = calculateEMA(closes, 9);
-    const ema21 = calculateEMA(closes, 21);
-    const rsi = calculateRSI(closes, 14);
-    const priceChange = ((closes[closes.length - 1] - closes[0]) / closes[0]) * 100;
-    
-    // Calculate Higher Highs / Lower Lows for trend detection
-    const last5Closes = closes.slice(-5);
-    const last10Closes = closes.slice(-10);
-    const isMakingHigherHighs = last5Closes[4] > last5Closes[3] && last5Closes[3] > last5Closes[2];
-    const isMakingLowerLows = last5Closes[4] < last5Closes[3] && last5Closes[3] < last5Closes[2];
-    const priceAbove20Candles = currentPrice > Math.max(...closes.slice(-20));
-    const priceBelow20Candles = currentPrice < Math.min(...closes.slice(-20));
-    
-    // RSI values for divergence
-    const rsiValues = [];
-    for (let i = 0; i < closes.length; i++) {
-        const slice = closes.slice(0, i + 1);
-        if (slice.length < 14) rsiValues.push(50);
-        else rsiValues.push(calculateRSI(slice, 14));
-    }
-    const divergence = detectDivergence(closes, rsiValues);
-    
-    let signal = null;
-    let trend = 'Sideways';
-    let strategyUsed = '';
-    const emaRelation = ema9 > ema21 ? 'EMA9 > EMA21 (Bullish)' : 'EMA9 < EMA21 (Bearish)';
-    
-    // STRATEGY 1: TREND FOLLOWING (EMA + Price Action)
-    const isUptrend = (ema9 > ema21 && priceAbove20Candles) || (ema9 > ema21 && isMakingHigherHighs);
-    const isDowntrend = (ema9 < ema21 && priceBelow20Candles) || (ema9 < ema21 && isMakingLowerLows);
-    
-    if (isUptrend) {
-        signal = 'CALL';
-        trend = '📈 Uptrend Detected';
-        strategyUsed = 'Trend Following (EMA + Price Action)';
-    }
-    else if (isDowntrend) {
-        signal = 'PUT';
-        trend = '📉 Downtrend Detected';
-        strategyUsed = 'Trend Following (EMA + Price Action)';
-    }
-    // STRATEGY 2: PULLBACK IN TREND
-    else if (ema9 > ema21 && rsi < 45) {
-        signal = 'CALL';
-        trend = '📈 Pullback Buy in Uptrend';
-        strategyUsed = 'Pullback Entry';
-    }
-    else if (ema9 < ema21 && rsi > 55) {
-        signal = 'PUT';
-        trend = '📉 Pullback Sell in Downtrend';
-        strategyUsed = 'Pullback Entry';
-    }
-    // STRATEGY 3: REVERSAL (Overbought/Oversold)
-    else if (rsi > 75) {
-        signal = 'PUT';
-        trend = '⚠️ Overbought → Sell';
-        strategyUsed = 'Reversal (RSI > 75)';
-    }
-    else if (rsi < 25) {
-        signal = 'CALL';
-        trend = '⚠️ Oversold → Buy';
-        strategyUsed = 'Reversal (RSI < 25)';
-    }
-    // STRATEGY 4: MOMENTUM
-    else if (priceChange > 0.15) {
-        signal = 'CALL';
-        trend = '⚡ Strong Up Momentum';
-        strategyUsed = 'Momentum Entry';
-    }
-    else if (priceChange < -0.15) {
-        signal = 'PUT';
-        trend = '⚡ Strong Down Momentum';
-        strategyUsed = 'Momentum Entry';
-    }
-    // STRATEGY 5: RANGE TRADING
-    else if (Math.max(...closes.slice(-20)) - Math.min(...closes.slice(-20)) < 0.005 && rsi > 65) {
-        signal = 'PUT';
-        trend = '📊 Range Top → Sell';
-        strategyUsed = 'Range Trading';
-    }
-    else if (Math.max(...closes.slice(-20)) - Math.min(...closes.slice(-20)) < 0.005 && rsi < 35) {
-        signal = 'CALL';
-        trend = '📊 Range Bottom → Buy';
-        strategyUsed = 'Range Trading';
-    }
-    else {
-        signal = 'WAIT';
-        strategyUsed = 'No Setup';
-    }
-    
-    // DIVERGENCE VETO (Overrides all strategies)
-    if (signal === 'CALL' && divergence === 'Bearish') {
-        signal = 'WAIT';
-        trend = '🚨 Bearish divergence overrides CALL';
-        strategyUsed = 'Divergence Veto';
-    }
-    if (signal === 'PUT' && divergence === 'Bullish') {
-        signal = 'WAIT';
-        trend = '🚨 Bullish divergence overrides PUT';
-        strategyUsed = 'Divergence Veto';
-    }
-    
-    return { signal, trend, strategyUsed, emaRelation, rsi: rsi.toFixed(1), priceChange: priceChange.toFixed(2), divergence };
-}
-
-// ============================================
-// MAIN EXPORTED FUNCTION
+// MAIN SIGNAL GENERATION
 // ============================================
 async function analyzeSignal(priceData, config, tf, higherPriceData = null) {
-    const pair = config.pairName || 'UNKNOWN';
-    const main = analyzeSingleTF(priceData, tf);
-    
-    if (main.signal === 'WAIT') {
-        let reason = main.trend;
-        if (main.divergence !== 'None') reason = `${main.divergence} divergence`;
-        return { signal: 'WAIT', reason };
+    try {
+        const candles = priceData.values;
+        if (!candles || candles.length < 30) {
+            return { signal: 'WAIT', reason: 'Insufficient data' };
+        }
+        
+        const closes = candles.map(c => c.close);
+        const currentPrice = closes[closes.length - 1];
+        const ema9 = calculateEMA(closes, 9);
+        const ema21 = calculateEMA(closes, 21);
+        const rsi = calculateRSI(closes, 14);
+        const priceChange = ((closes[closes.length - 1] - closes[0]) / closes[0]) * 100;
+        
+        // Price Action Trend Detection
+        const last5Closes = closes.slice(-5);
+        const isMakingHigherHighs = last5Closes[4] > last5Closes[3] && last5Closes[3] > last5Closes[2];
+        const isMakingLowerLows = last5Closes[4] < last5Closes[3] && last5Closes[3] < last5Closes[2];
+        const priceAbove20Candles = currentPrice > Math.max(...closes.slice(-20));
+        const priceBelow20Candles = currentPrice < Math.min(...closes.slice(-20));
+        const rangeSize = Math.max(...closes.slice(-20)) - Math.min(...closes.slice(-20));
+        
+        // RSI values for divergence
+        const rsiValues = [];
+        for (let i = 0; i < closes.length; i++) {
+            const slice = closes.slice(0, i + 1);
+            if (slice.length < 14) rsiValues.push(50);
+            else rsiValues.push(calculateRSI(slice, 14));
+        }
+        const divergence = detectDivergence(closes, rsiValues);
+        
+        let signal = null;
+        let trend = 'Sideways';
+        let strategyUsed = '';
+        const emaRelation = ema9 > ema21 ? 'EMA9 > EMA21' : 'EMA9 < EMA21';
+        
+        // STRATEGY 1: TREND FOLLOWING (EMA + Price Action)
+        const isUptrend = (ema9 > ema21 && priceAbove20Candles) || (ema9 > ema21 && isMakingHigherHighs);
+        const isDowntrend = (ema9 < ema21 && priceBelow20Candles) || (ema9 < ema21 && isMakingLowerLows);
+        
+        if (isUptrend) {
+            signal = 'CALL';
+            trend = '📈 Uptrend';
+            strategyUsed = 'Trend Following';
+        }
+        else if (isDowntrend) {
+            signal = 'PUT';
+            trend = '📉 Downtrend';
+            strategyUsed = 'Trend Following';
+        }
+        // STRATEGY 2: PULLBACK ENTRY
+        else if (ema9 > ema21 && rsi < 45) {
+            signal = 'CALL';
+            trend = '📈 Pullback Buy';
+            strategyUsed = 'Pullback Entry';
+        }
+        else if (ema9 < ema21 && rsi > 55) {
+            signal = 'PUT';
+            trend = '📉 Pullback Sell';
+            strategyUsed = 'Pullback Entry';
+        }
+        // STRATEGY 3: REVERSAL
+        else if (rsi > 75) {
+            signal = 'PUT';
+            trend = '⚠️ Overbought → Sell';
+            strategyUsed = 'Reversal';
+        }
+        else if (rsi < 25) {
+            signal = 'CALL';
+            trend = '⚠️ Oversold → Buy';
+            strategyUsed = 'Reversal';
+        }
+        // STRATEGY 4: MOMENTUM
+        else if (priceChange > 0.15) {
+            signal = 'CALL';
+            trend = '⚡ Up Momentum';
+            strategyUsed = 'Momentum';
+        }
+        else if (priceChange < -0.15) {
+            signal = 'PUT';
+            trend = '⚡ Down Momentum';
+            strategyUsed = 'Momentum';
+        }
+        // STRATEGY 5: RANGE TRADING
+        else if (rangeSize < 0.005 && rsi > 65) {
+            signal = 'PUT';
+            trend = '📊 Range Top → Sell';
+            strategyUsed = 'Range Trading';
+        }
+        else if (rangeSize < 0.005 && rsi < 35) {
+            signal = 'CALL';
+            trend = '📊 Range Bottom → Buy';
+            strategyUsed = 'Range Trading';
+        }
+        else {
+            signal = 'WAIT';
+            strategyUsed = 'No Setup';
+        }
+        
+        // DIVERGENCE VETO
+        if (signal === 'CALL' && divergence === 'Bearish') {
+            signal = 'WAIT';
+            trend = '🚨 Bearish Divergence';
+            strategyUsed = 'Divergence Veto';
+        }
+        if (signal === 'PUT' && divergence === 'Bullish') {
+            signal = 'WAIT';
+            trend = '🚨 Bullish Divergence';
+            strategyUsed = 'Divergence Veto';
+        }
+        
+        if (signal === 'WAIT') {
+            return { signal: 'WAIT', reason: trend };
+        }
+        
+        const patternId = `${emaRelation}_${strategyUsed.replace(/ /g, '_')}_${divergence}`;
+        const confidence = getRealConfidence(config.pairName || 'UNKNOWN', tf, patternId);
+        
+        return {
+            signal: signal,
+            confidence: Math.min(99, Math.max(1, confidence)),
+            rsi: rsi.toFixed(1),
+            emaRelation: emaRelation,
+            priceChange: priceChange.toFixed(2),
+            divergence: divergence,
+            trend: trend,
+            strategyUsed: strategyUsed,
+            trendAlignment: `✅ ${strategyUsed} | RSI: ${rsi.toFixed(1)}`,
+            patternId: patternId
+        };
+        
+    } catch (error) {
+        console.error('Analyzer error:', error);
+        return { signal: 'WAIT', reason: 'Analysis error' };
     }
-    
-    const patternId = `${main.emaRelation}_${main.strategyUsed.replace(/ /g, '_')}_${main.divergence}`;
-    const confidence = getRealConfidence(pair, tf, patternId);
-    
-    return {
-        signal: main.signal,
-        confidence: Math.min(99, Math.max(1, confidence)),
-        rsi: main.rsi,
-        emaRelation: main.emaRelation,
-        priceChange: main.priceChange,
-        divergence: main.divergence,
-        trend: main.trend,
-        strategyUsed: main.strategyUsed,
-        trendAlignment: `✅ Strategy: ${main.strategyUsed} | RSI: ${main.rsi} | Signal: ${main.signal}`,
-        patternId
-    };
 }
 
 module.exports = { analyzeSignal, recordTradeOutcome };
