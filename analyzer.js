@@ -2,9 +2,6 @@ const fs = require('fs');
 const path = require('path');
 const BACKTEST_FILE = path.join(__dirname, 'backtest_stats.json');
 
-// ============================================
-// PROFESSIONAL BACKTEST
-// ============================================
 function loadStats() {
     if (!fs.existsSync(BACKTEST_FILE)) return {};
     try { return JSON.parse(fs.readFileSync(BACKTEST_FILE, 'utf8')); } catch(e) { return {}; }
@@ -30,9 +27,6 @@ function getRealConfidence(pair, tf, patternId) {
     return 60;
 }
 
-// ============================================
-// TECHNICAL INDICATORS
-// ============================================
 function calculateEMA(values, period) {
     const k = 2 / (period + 1);
     let ema = values[0];
@@ -76,9 +70,6 @@ function detectDivergence(price, indicator, lookback = 20) {
     return bearish ? 'Bearish' : (bullish ? 'Bullish' : 'None');
 }
 
-// ============================================
-// MAIN SIGNAL GENERATION
-// ============================================
 async function analyzeSignal(priceData, config, tf, higherPriceData = null) {
     try {
         const candles = priceData.values;
@@ -93,7 +84,6 @@ async function analyzeSignal(priceData, config, tf, higherPriceData = null) {
         const rsi = calculateRSI(closes, 14);
         const priceChange = ((closes[closes.length - 1] - closes[0]) / closes[0]) * 100;
         
-        // Price Action Trend Detection
         const last5Closes = closes.slice(-5);
         const isMakingHigherHighs = last5Closes[4] > last5Closes[3] && last5Closes[3] > last5Closes[2];
         const isMakingLowerLows = last5Closes[4] < last5Closes[3] && last5Closes[3] < last5Closes[2];
@@ -101,7 +91,6 @@ async function analyzeSignal(priceData, config, tf, higherPriceData = null) {
         const priceBelow20Candles = currentPrice < Math.min(...closes.slice(-20));
         const rangeSize = Math.max(...closes.slice(-20)) - Math.min(...closes.slice(-20));
         
-        // RSI values for divergence
         const rsiValues = [];
         for (let i = 0; i < closes.length; i++) {
             const slice = closes.slice(0, i + 1);
@@ -115,7 +104,6 @@ async function analyzeSignal(priceData, config, tf, higherPriceData = null) {
         let strategyUsed = '';
         const emaRelation = ema9 > ema21 ? 'EMA9 > EMA21' : 'EMA9 < EMA21';
         
-        // STRATEGY 1: TREND FOLLOWING (EMA + Price Action)
         const isUptrend = (ema9 > ema21 && priceAbove20Candles) || (ema9 > ema21 && isMakingHigherHighs);
         const isDowntrend = (ema9 < ema21 && priceBelow20Candles) || (ema9 < ema21 && isMakingLowerLows);
         
@@ -129,7 +117,6 @@ async function analyzeSignal(priceData, config, tf, higherPriceData = null) {
             trend = '📉 Downtrend';
             strategyUsed = 'Trend Following';
         }
-        // STRATEGY 2: PULLBACK ENTRY
         else if (ema9 > ema21 && rsi < 45) {
             signal = 'CALL';
             trend = '📈 Pullback Buy';
@@ -140,7 +127,6 @@ async function analyzeSignal(priceData, config, tf, higherPriceData = null) {
             trend = '📉 Pullback Sell';
             strategyUsed = 'Pullback Entry';
         }
-        // STRATEGY 3: REVERSAL
         else if (rsi > 75) {
             signal = 'PUT';
             trend = '⚠️ Overbought → Sell';
@@ -151,7 +137,6 @@ async function analyzeSignal(priceData, config, tf, higherPriceData = null) {
             trend = '⚠️ Oversold → Buy';
             strategyUsed = 'Reversal';
         }
-        // STRATEGY 4: MOMENTUM
         else if (priceChange > 0.15) {
             signal = 'CALL';
             trend = '⚡ Up Momentum';
@@ -162,7 +147,6 @@ async function analyzeSignal(priceData, config, tf, higherPriceData = null) {
             trend = '⚡ Down Momentum';
             strategyUsed = 'Momentum';
         }
-        // STRATEGY 5: RANGE TRADING
         else if (rangeSize < 0.005 && rsi > 65) {
             signal = 'PUT';
             trend = '📊 Range Top → Sell';
@@ -178,7 +162,6 @@ async function analyzeSignal(priceData, config, tf, higherPriceData = null) {
             strategyUsed = 'No Setup';
         }
         
-        // DIVERGENCE VETO
         if (signal === 'CALL' && divergence === 'Bearish') {
             signal = 'WAIT';
             trend = '🚨 Bearish Divergence';
