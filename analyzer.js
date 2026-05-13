@@ -229,9 +229,7 @@ function isCandleOpen(timeframeMinutes, currentDate = new Date()) {
 }
 
 function isBadSession(pair, currentDate = new Date()) {
-    const hour = currentDate.getHours();
-    const shouldSkip = sessionConfig.skipAsianFor.some(currency => pair.includes(currency));
-    return shouldSkip && sessionConfig.asianHours.includes(hour);
+    return false;
 }
 
 async function analyzeSignal(priceData, config, tf, higherPriceData = null) {
