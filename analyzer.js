@@ -150,17 +150,19 @@ function analyzeSingleTF(priceData, tf) {
     let trend = 'Sideways';
     const emaRelation = ema9 > ema21 ? 'EMA9 > EMA21' : 'EMA9 < EMA21';
     
-    if (ema9 > ema21 && plusDI > minusDI && currentPrice > vwap) { signal = 'CALL'; trend = 'Upward'; }
-    else if (ema9 < ema21 && minusDI > plusDI && currentPrice < vwap) { signal = 'PUT'; trend = 'Downward'; }
-    else if (ema9 > ema21 && plusDI > minusDI) { signal = 'CALL'; trend = 'Upward'; }
+    // Trend signals
+    if (ema9 > ema21 && plusDI > minusDI) { signal = 'CALL'; trend = 'Upward'; }
     else if (ema9 < ema21 && minusDI > plusDI) { signal = 'PUT'; trend = 'Downward'; }
-    else if (rsi > 75 || stochK > 80) { signal = 'PUT'; trend = 'Overbought → Sell'; }
-    else if (rsi < 25 || stochK < 20) { signal = 'CALL'; trend = 'Oversold → Buy'; }
+    // Overbought/Oversold reversal
+    else if (rsi > 70 || stochK > 80) { signal = 'PUT'; trend = 'Overbought → Sell'; }
+    else if (rsi < 30 || stochK < 20) { signal = 'CALL'; trend = 'Oversold → Buy'; }
     else signal = 'WAIT';
     
+    // Divergence veto
     if (signal === 'CALL' && divergence === 'Bearish') signal = 'WAIT';
     if (signal === 'PUT' && divergence === 'Bullish') signal = 'WAIT';
-    if (adx > 45 && signal !== 'WAIT') signal = 'WAIT';
+    // Only extreme trend (ADX > 50) waits for pullback
+    if (adx > 50 && signal !== 'WAIT') signal = 'WAIT';
     
     return { signal, trend, emaRelation, vwap: vwap.toFixed(5), vwapPosition, rsi: rsi.toFixed(1), stochK: stochK.toFixed(1), adx: adx.toFixed(0), dmi: { plus: plusDI, minus: minusDI }, priceChange: priceChange.toFixed(2), divergence };
 }
@@ -183,13 +185,13 @@ async function analyzeSignal(priceData, config, tf, higherPriceData = null) {
     
     if (main.signal === 'WAIT') {
         let reason = main.divergence !== 'None' ? `${main.divergence} divergence` : 'No clear trend';
-        if (main.adx > 45) reason = 'Extreme trend – waiting for pullback';
-        if (main.rsi > 75 || main.stochK > 80) reason = 'Overbought (no divergence) → WAIT';
-        if (main.rsi < 25 || main.stochK < 20) reason = 'Oversold (no divergence) → WAIT';
+        if (main.adx > 50) reason = 'Extreme trend – waiting for pullback';
+        else if (main.rsi > 70 || main.stochK > 80) reason = 'Overbought – waiting for divergence confirmation';
+        else if (main.rsi < 30 || main.stochK < 20) reason = 'Oversold – waiting for divergence confirmation';
         return { signal: 'WAIT', reason };
     }
     
-    const trendAlignment = '✅ Single timeframe (higher TF disabled)';
+    const trendAlignment = '✅ Single timeframe (works with daily data)';
     const patternId = `${main.emaRelation}_${main.dmi.plus > main.dmi.minus ? 'DMIplus' : 'DMIminus'}_${main.divergence}_${main.trend.replace(/ /g,'')}`;
     const confidence = getRealConfidence(pair, tf, patternId);
     
