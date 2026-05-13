@@ -229,7 +229,7 @@ function isCandleOpen(timeframeMinutes, currentDate = new Date()) {
 }
 
 function isBadSession(pair, currentDate = new Date()) {
-    return false;
+    return false;  // NEVER skip any session - trade 24/7
 }
 
 async function analyzeSignal(priceData, config, tf, higherPriceData = null) {
