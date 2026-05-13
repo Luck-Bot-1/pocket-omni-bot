@@ -4,9 +4,9 @@ const BACKTEST_FILE = path.join(__dirname, 'backtest_stats.json');
 const SESSION_CONFIG_FILE = path.join(__dirname, 'session.json');
 
 let sessionConfig = {
-    skipAsianFor: ['JPY', 'AUD', 'NZD'],
-    asianHours: [1, 2, 3, 4, 5, 6, 7],
-    newsSkipMinutes: 30
+    skipAsianFor: [],
+    asianHours: [],
+    newsSkipMinutes: 0
 };
 if (fs.existsSync(SESSION_CONFIG_FILE)) {
     try { sessionConfig = JSON.parse(fs.readFileSync(SESSION_CONFIG_FILE, 'utf8')); } catch(e) {}
@@ -139,6 +139,7 @@ function analyzeSingleTF(priceData, tf) {
     const stochK = calculateStochastic(highs, lows, closes, 14);
     const { adx, plusDI, minusDI } = calculateADX(highs, lows, closes, 14);
     const priceChange = ((closes[closes.length-1] - closes[0]) / closes[0]) * 100;
+    
     const rsiValues = [];
     for (let i = 0; i < closes.length; i++) {
         const slice = closes.slice(0, i+1);
@@ -153,24 +154,24 @@ function analyzeSingleTF(priceData, tf) {
     const isUptrend = ema9 > ema21 && plusDI > minusDI;
     const isDowntrend = ema9 < ema21 && minusDI > plusDI;
     
-    // STRATEGY 1: TREND FOLLOWING (ADX > 20)
-    if (adx > 20 && isUptrend && currentPrice > vwap) {
+    // STRATEGY 1: TREND FOLLOWING (ADX > 18) - LOWERED FOR MORE SIGNALS
+    if (adx > 18 && isUptrend && currentPrice > vwap) {
         signal = 'CALL';
         trend = 'Strong Uptrend';
         strategyUsed = 'Trend Following';
     }
-    else if (adx > 20 && isDowntrend && currentPrice < vwap) {
+    else if (adx > 18 && isDowntrend && currentPrice < vwap) {
         signal = 'PUT';
         trend = 'Strong Downtrend';
         strategyUsed = 'Trend Following';
     }
-    // STRATEGY 2: PULLBACK ENTRY (Trending but oversold/overbought)
-    else if (adx > 20 && isUptrend && (rsi < 40 || stochK < 30)) {
+    // STRATEGY 2: PULLBACK ENTRY (ADX > 18)
+    else if (adx > 18 && isUptrend && (rsi < 40 || stochK < 30)) {
         signal = 'CALL';
         trend = 'Pullback Buy (Dip)';
         strategyUsed = 'Pullback Entry';
     }
-    else if (adx > 20 && isDowntrend && (rsi > 60 || stochK > 70)) {
+    else if (adx > 18 && isDowntrend && (rsi > 60 || stochK > 70)) {
         signal = 'PUT';
         trend = 'Pullback Sell (Bounce)';
         strategyUsed = 'Pullback Entry';
@@ -186,18 +187,19 @@ function analyzeSingleTF(priceData, tf) {
         trend = 'Oversold Reversal → Buy';
         strategyUsed = 'Reversal (Oversold)';
     }
-    // STRATEGY 4: RANGE TRADING (ADX < 25)
-    else if (adx < 25 && rsi > 70) {
+    // STRATEGY 4: RANGE TRADING (ADX < 18)
+    else if (adx < 18 && rsi > 70) {
         signal = 'PUT';
         trend = 'Range Top → Sell';
         strategyUsed = 'Range Trading';
     }
-    else if (adx < 25 && rsi < 30) {
+    else if (adx < 18 && rsi < 30) {
         signal = 'CALL';
         trend = 'Range Bottom → Buy';
         strategyUsed = 'Range Trading';
     }
     else {
+        // NO FORCED SIGNALS - legitimate WAIT only
         signal = 'WAIT';
         strategyUsed = 'No Setup';
     }
@@ -214,7 +216,7 @@ function analyzeSingleTF(priceData, tf) {
         strategyUsed = 'Divergence Veto';
     }
     
-    // EXTREME TREND FILTER (ADX > 55 = wait for pullback)
+    // EXTREME TREND FILTER (ADX > 55)
     if (adx > 55 && signal !== 'WAIT') {
         signal = 'WAIT';
         trend = 'Extreme trend – waiting for pullback';
@@ -229,13 +231,11 @@ function isCandleOpen(timeframeMinutes, currentDate = new Date()) {
 }
 
 function isBadSession(pair, currentDate = new Date()) {
-    return false;  // NEVER skip any session - trade 24/7
+    return false;
 }
 
 async function analyzeSignal(priceData, config, tf, higherPriceData = null) {
     const pair = config.pairName || 'UNKNOWN';
-    if (isBadSession(pair)) return { signal: 'WAIT', reason: `Skipping ${pair} during Asian session` };
-    
     const main = analyzeSingleTF(priceData, tf);
     
     if (main.signal === 'WAIT') {
@@ -258,7 +258,7 @@ async function analyzeSignal(priceData, config, tf, higherPriceData = null) {
         divergence: main.divergence,
         trend: main.trend,
         strategyUsed: main.strategyUsed,
-        trendAlignment: `✅ LIVE Yahoo Finance | Strategy: ${main.strategyUsed} | VWAP: ${main.vwapPosition}`,
+        trendAlignment: `✅ Strategy: ${main.strategyUsed} | ADX: ${main.adx} | VWAP: ${main.vwapPosition}`,
         vwap: main.vwap,
         vwapPosition: main.vwapPosition,
         patternId
