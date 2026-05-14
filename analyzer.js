@@ -124,7 +124,67 @@ function getADXStrength(adx) {
 }
 
 // ============================================
-// STRATEGY 1: ICHIMOKU CLOUD (100% FUNCTIONAL)
+// ADVANCED DIVERGENCE DETECTION
+// ============================================
+function getRSIValues(closes) {
+    const rsiVals = [];
+    for (let i = 0; i < closes.length; i++) {
+        const slice = closes.slice(0, i + 1);
+        rsiVals.push(slice.length < 14 ? 50 : calculateRSI(slice, 14));
+    }
+    return rsiVals;
+}
+
+function detectDivergence(price, indicator, lookback = 100, minBars = 8) {
+    if (!price || !indicator || price.length < lookback) {
+        return 'None';
+    }
+    
+    const priceSwings = { highs: [], lows: [] };
+    const indicatorSwings = { highs: [], lows: [] };
+    
+    for (let i = minBars; i < price.length - minBars; i++) {
+        let isHigh = true, isLow = true;
+        for (let j = -minBars; j <= minBars; j++) {
+            if (j === 0) continue;
+            if (price[i] <= price[i + j]) isHigh = false;
+            if (price[i] >= price[i + j]) isLow = false;
+        }
+        if (isHigh) {
+            priceSwings.highs.push({ index: i, value: price[i] });
+            indicatorSwings.highs.push({ index: i, value: indicator[i] });
+        }
+        if (isLow) {
+            priceSwings.lows.push({ index: i, value: price[i] });
+            indicatorSwings.lows.push({ index: i, value: indicator[i] });
+        }
+    }
+    
+    let bearishDiv = false, bullishDiv = false;
+    
+    if (priceSwings.highs.length >= 2 && indicatorSwings.highs.length >= 2) {
+        const lastPH = priceSwings.highs[priceSwings.highs.length - 1];
+        const prevPH = priceSwings.highs[priceSwings.highs.length - 2];
+        const lastIH = indicatorSwings.highs[indicatorSwings.highs.length - 1];
+        const prevIH = indicatorSwings.highs[indicatorSwings.highs.length - 2];
+        if (lastPH.value > prevPH.value && lastIH.value < prevIH.value) bearishDiv = true;
+    }
+    
+    if (priceSwings.lows.length >= 2 && indicatorSwings.lows.length >= 2) {
+        const lastPL = priceSwings.lows[priceSwings.lows.length - 1];
+        const prevPL = priceSwings.lows[priceSwings.lows.length - 2];
+        const lastIL = indicatorSwings.lows[indicatorSwings.lows.length - 1];
+        const prevIL = indicatorSwings.lows[indicatorSwings.lows.length - 2];
+        if (lastPL.value < prevPL.value && lastIL.value > prevIL.value) bullishDiv = true;
+    }
+    
+    if (bearishDiv) return 'Bearish';
+    if (bullishDiv) return 'Bullish';
+    return 'None';
+}
+
+// ============================================
+// LEGENDARY STRATEGIES
 // ============================================
 function getIchimokuSignal(highs, lows, closes) {
     if (!highs || !lows || !closes || highs.length < 52) return null;
@@ -146,9 +206,6 @@ function getIchimokuSignal(highs, lows, closes) {
     } catch(e) { return null; }
 }
 
-// ============================================
-// STRATEGY 2: MACD WITH HISTOGRAM (100% FUNCTIONAL)
-// ============================================
 function getMACDSignal(closes) {
     if (!closes || closes.length < 26) return null;
     try {
@@ -163,37 +220,6 @@ function getMACDSignal(closes) {
     } catch(e) { return null; }
 }
 
-function getMACDDivergence(closes) {
-    if (!closes || closes.length < 50) return 'None';
-    try {
-        const macdValues = [];
-        for (let i = 0; i < closes.length; i++) {
-            const slice = closes.slice(0, i + 1);
-            if (slice.length < 26) macdValues.push(0);
-            else {
-                const ema12 = calculateEMA(slice, 12);
-                const ema26 = calculateEMA(slice, 26);
-                macdValues.push(ema12 - ema26);
-            }
-        }
-        const lastPrice = closes[closes.length - 1];
-        const lastMacd = macdValues[macdValues.length - 1];
-        let bearish = false, bullish = false;
-        for (let i = 50; i > 0; i--) {
-            const idx = closes.length - 1 - i;
-            if (idx < 0) continue;
-            if (closes[idx] < lastPrice && macdValues[idx] > lastMacd) bullish = true;
-            if (closes[idx] > lastPrice && macdValues[idx] < lastMacd) bearish = true;
-        }
-        if (bearish) return 'Bearish';
-        if (bullish) return 'Bullish';
-        return 'None';
-    } catch(e) { return 'None'; }
-}
-
-// ============================================
-// STRATEGY 3: MARKET STRUCTURE (100% FUNCTIONAL)
-// ============================================
 function getStructureSignal(closes) {
     if (!closes || closes.length < 100) return null;
     try {
@@ -219,9 +245,6 @@ function getStructureSignal(closes) {
     } catch(e) { return null; }
 }
 
-// ============================================
-// STRATEGY 4: FIBONACCI RETRACEMENT (100% FUNCTIONAL)
-// ============================================
 function getFibonacciSignal(closes) {
     if (!closes || closes.length < 100) return null;
     try {
@@ -237,100 +260,6 @@ function getFibonacciSignal(closes) {
     } catch(e) { return null; }
 }
 
-// ============================================
-// RSI DIVERGENCE DETECTION (ENHANCED)
-// ============================================
-function getRSIValues(closes) {
-    const rsiVals = [];
-    for (let i = 0; i < closes.length; i++) {
-        const slice = closes.slice(0, i + 1);
-        rsiVals.push(slice.length < 14 ? 50 : calculateRSI(slice, 14));
-    }
-    return rsiVals;
-}
-
-function detectRSIDivergence(price, indicator, lookback = 100, minBars = 8) {
-    if (!price || !indicator || price.length < lookback) {
-        return { type: 'None', confidence: 0 };
-    }
-    const priceSwings = { highs: [], lows: [] };
-    const indicatorSwings = { highs: [], lows: [] };
-    for (let i = minBars; i < price.length - minBars; i++) {
-        let isHigh = true, isLow = true;
-        for (let j = -minBars; j <= minBars; j++) {
-            if (j === 0) continue;
-            if (price[i] <= price[i + j]) isHigh = false;
-            if (price[i] >= price[i + j]) isLow = false;
-        }
-        if (isHigh) {
-            priceSwings.highs.push({ index: i, value: price[i] });
-            indicatorSwings.highs.push({ index: i, value: indicator[i] });
-        }
-        if (isLow) {
-            priceSwings.lows.push({ index: i, value: price[i] });
-            indicatorSwings.lows.push({ index: i, value: indicator[i] });
-        }
-    }
-    let bearishDiv = false, bullishDiv = false;
-    if (priceSwings.highs.length >= 2 && indicatorSwings.highs.length >= 2) {
-        const lastPH = priceSwings.highs[priceSwings.highs.length - 1];
-        const prevPH = priceSwings.highs[priceSwings.highs.length - 2];
-        const lastIH = indicatorSwings.highs[indicatorSwings.highs.length - 1];
-        const prevIH = indicatorSwings.highs[indicatorSwings.highs.length - 2];
-        if (lastPH.value > prevPH.value && lastIH.value < prevIH.value) bearishDiv = true;
-    }
-    if (priceSwings.lows.length >= 2 && indicatorSwings.lows.length >= 2) {
-        const lastPL = priceSwings.lows[priceSwings.lows.length - 1];
-        const prevPL = priceSwings.lows[priceSwings.lows.length - 2];
-        const lastIL = indicatorSwings.lows[indicatorSwings.lows.length - 1];
-        const prevIL = indicatorSwings.lows[indicatorSwings.lows.length - 2];
-        if (lastPL.value < prevPL.value && lastIL.value > prevIL.value) bullishDiv = true;
-    }
-    if (bearishDiv) return { type: 'Bearish', confidence: 78 };
-    if (bullishDiv) return { type: 'Bullish', confidence: 78 };
-    return { type: 'None', confidence: 0 };
-}
-
-// ============================================
-// MULTI-TIMEFRAME DIVERGENCE
-// ============================================
-function analyzeMultiTimeframeDivergence(currentData, higherData, lowerData) {
-    const result = { higher: { rsi: 'None' }, current: { rsi: 'None' }, lower: { rsi: 'None' }, overall: 'None', confidence: 0 };
-    try {
-        if (higherData && higherData.values && higherData.values.length >= 50) {
-            const higherCloses = higherData.values.map(c => c.close);
-            const higherRSI = getRSIValues(higherCloses);
-            const higherDiv = detectRSIDivergence(higherCloses, higherRSI, 50, 8);
-            result.higher.rsi = higherDiv.type;
-        }
-        if (currentData && currentData.values && currentData.values.length >= 100) {
-            const currentCloses = currentData.values.map(c => c.close);
-            const currentRSI = getRSIValues(currentCloses);
-            const currentDiv = detectRSIDivergence(currentCloses, currentRSI, 100, 8);
-            result.current.rsi = currentDiv.type;
-        }
-        if (lowerData && lowerData.values && lowerData.values.length >= 30) {
-            const lowerCloses = lowerData.values.map(c => c.close);
-            const lowerRSI = getRSIValues(lowerCloses);
-            const lowerDiv = detectRSIDivergence(lowerCloses, lowerRSI, 50, 5);
-            result.lower.rsi = lowerDiv.type;
-        }
-        let bullishCount = 0, bearishCount = 0;
-        if (result.higher.rsi === 'Bullish') bullishCount += 2;
-        else if (result.higher.rsi === 'Bearish') bearishCount += 2;
-        if (result.current.rsi === 'Bullish') bullishCount += 2;
-        else if (result.current.rsi === 'Bearish') bearishCount += 2;
-        if (result.lower.rsi === 'Bullish') bullishCount += 1;
-        else if (result.lower.rsi === 'Bearish') bearishCount += 1;
-        if (bullishCount >= 4) { result.overall = 'Bullish'; result.confidence = Math.min(92, 70 + bullishCount * 5); }
-        else if (bearishCount >= 4) { result.overall = 'Bearish'; result.confidence = Math.min(92, 70 + bearishCount * 5); }
-    } catch(e) {}
-    return result;
-}
-
-// ============================================
-// HIGHER TIMEFRAME TREND
-// ============================================
 function getHigherTimeframeTrend(higherPriceData) {
     if (!higherPriceData || !higherPriceData.values || higherPriceData.values.length < 50) {
         return { trend: 'Neutral', direction: 0 };
@@ -346,9 +275,6 @@ function getHigherTimeframeTrend(higherPriceData) {
     } catch(e) { return { trend: 'Neutral', direction: 0 }; }
 }
 
-// ============================================
-// SESSION BONUS
-// ============================================
 function getSessionBonus(pair) {
     try {
         const hour = new Date().getHours();
@@ -376,7 +302,7 @@ function getSignalIntensity(conf) {
 }
 
 // ============================================
-// MAIN SIGNAL GENERATION
+// MAIN SIGNAL GENERATION - CORRECT PRIORITY
 // ============================================
 async function analyzeSignal(priceData, config, tf, higherPriceData = null, lowerPriceData = null) {
     try {
@@ -385,7 +311,8 @@ async function analyzeSignal(priceData, config, tf, higherPriceData = null, lowe
             return { 
                 signal: 'CALL', confidence: 50, intensity: '⚪ LOW', 
                 rsi: '50', adx: '20', adxStrength: 'Insufficient',
-                trendDirection: 'Unknown', ichimoku: 'N/A', macd: 'N/A', structure: 'N/A', fibonacci: 'N/A',
+                trendDirection: 'Unknown', divergence: 'None',
+                ichimoku: 'N/A', macd: 'N/A', structure: 'N/A', fibonacci: 'N/A',
                 recommendation: '⚠️ Need more data', shouldTrade: '⚠️ Skip'
             };
         }
@@ -418,114 +345,108 @@ async function analyzeSignal(priceData, config, tf, higherPriceData = null, lowe
             trendScore = -1;
         }
         
-        // ALL STRATEGIES (100% FUNCTIONAL)
+        // DIVERGENCE DETECTION
+        const rsiVals = getRSIValues(closes);
+        const divergence = detectDivergence(closes, rsiVals, 100, 8);
+        
+        // ALL STRATEGIES
         const ichimoku = getIchimokuSignal(highs, lows, closes);
         const macd = getMACDSignal(closes);
-        const macdDivergence = getMACDDivergence(closes);
         const structure = getStructureSignal(closes);
         const fibonacci = getFibonacciSignal(closes);
         const htf = getHigherTimeframeTrend(higherPriceData);
-        
-        // RSI DIVERGENCE
-        const rsiVals = getRSIValues(closes);
-        const rsiDivergence = detectRSIDivergence(closes, rsiVals, 100, 8);
-        
-        // MTF DIVERGENCE
-        const mtfDivergence = analyzeMultiTimeframeDivergence(priceData, higherPriceData, lowerPriceData);
-        
-        // SESSION BONUS
         const sessionBonus = getSessionBonus(config.pairName || '');
         
-        // VOTING SYSTEM (ALL STRATEGIES INTEGRATED)
+        // VOTING SYSTEM
         let bullish = 0, bearish = 0, strategies = 0;
-        let strategyDetails = [];
         
-        if (ichimoku === 'CALL') { bullish += 25; strategies++; strategyDetails.push('Ichimoku'); }
-        else if (ichimoku === 'PUT') { bearish += 25; strategies++; strategyDetails.push('Ichimoku'); }
+        if (ichimoku === 'CALL') { bullish += 25; strategies++; }
+        else if (ichimoku === 'PUT') { bearish += 25; strategies++; }
         
-        if (macd === 'CALL') { bullish += 20; strategies++; strategyDetails.push('MACD'); }
-        else if (macd === 'PUT') { bearish += 20; strategies++; strategyDetails.push('MACD'); }
+        if (macd === 'CALL') { bullish += 20; strategies++; }
+        else if (macd === 'PUT') { bearish += 20; strategies++; }
         
-        if (macdDivergence === 'Bullish') { bullish += 15; strategyDetails.push('MACD Div'); }
-        else if (macdDivergence === 'Bearish') { bearish += 15; strategyDetails.push('MACD Div'); }
+        if (structure === 'CALL') { bullish += 20; strategies++; }
+        else if (structure === 'PUT') { bearish += 20; strategies++; }
         
-        if (structure === 'CALL') { bullish += 20; strategies++; strategyDetails.push('Structure'); }
-        else if (structure === 'PUT') { bearish += 20; strategies++; strategyDetails.push('Structure'); }
+        if (fibonacci === 'CALL') { bullish += 15; strategies++; }
+        else if (fibonacci === 'PUT') { bearish += 15; strategies++; }
         
-        if (fibonacci === 'CALL') { bullish += 15; strategies++; strategyDetails.push('Fibonacci'); }
-        else if (fibonacci === 'PUT') { bearish += 15; strategies++; strategyDetails.push('Fibonacci'); }
+        if (htf.direction > 0) { bullish += 20; }
+        else if (htf.direction < 0) { bearish += 20; }
         
-        if (rsiDivergence.type === 'Bullish') { bullish += 15; strategyDetails.push('RSI Div'); }
-        else if (rsiDivergence.type === 'Bearish') { bearish += 15; strategyDetails.push('RSI Div'); }
+        if (price > vwap) { bullish += 10; }
+        else { bearish += 10; }
         
-        if (htf.direction > 0) { bullish += 20; strategyDetails.push('HTF'); }
-        else if (htf.direction < 0) { bearish += 20; strategyDetails.push('HTF'); }
-        
-        if (price > vwap) { bullish += 10; strategyDetails.push('VWAP'); }
-        else { bearish += 10; strategyDetails.push('VWAP'); }
-        
-        // SIGNAL DETERMINATION
-        let signal = null, baseConfidence = 55, strategyUsed = '', trendDesc = '';
+        // ============================================
+        // CORRECT STRATEGY PRIORITY
+        // PRIORITY 1: DIVERGENCE (HIGHEST - OVERRIDES ALL)
+        // PRIORITY 2: OVERSOLD/OVERBOUGHT
+        // PRIORITY 3: TREND FOLLOWING
+        // PRIORITY 4: VOTING CONSENSUS
+        // PRIORITY 5: DEFAULT VWAP
+        // ============================================
+        let signal = null;
+        let baseConfidence = 55;
+        let strategyUsed = '';
+        let trendDesc = '';
         
         const isOversold = rsi < 35;
         const isOverbought = rsi > 65;
         
-        // MTF DIVERGENCE PRIORITY
-        if (mtfDivergence.overall === 'Bullish') {
-            signal = 'CALL';
-            baseConfidence = mtfDivergence.confidence || 75;
-            strategyUsed = 'MTF Bullish Divergence';
-            trendDesc = `🟢 MTF DIVERGENCE: Higher(${mtfDivergence.higher.rsi}) Current(${mtfDivergence.current.rsi}) → STRONG BUY`;
-        }
-        else if (mtfDivergence.overall === 'Bearish') {
+        // PRIORITY 1: DIVERGENCE (HIGHEST PRIORITY)
+        if (divergence === 'Bearish') {
             signal = 'PUT';
-            baseConfidence = mtfDivergence.confidence || 75;
-            strategyUsed = 'MTF Bearish Divergence';
-            trendDesc = `🔴 MTF DIVERGENCE: Higher(${mtfDivergence.higher.rsi}) Current(${mtfDivergence.current.rsi}) → STRONG SELL`;
+            baseConfidence = 85;
+            strategyUsed = 'Bearish Divergence (PRIORITY #1)';
+            trendDesc = `🔴 BEARISH DIVERGENCE DETECTED → STRONG SELL SIGNAL 📉`;
         }
-        // OVERSOLD = BUY (CALL)
+        else if (divergence === 'Bullish') {
+            signal = 'CALL';
+            baseConfidence = 85;
+            strategyUsed = 'Bullish Divergence (PRIORITY #1)';
+            trendDesc = `🟢 BULLISH DIVERGENCE DETECTED → STRONG BUY SIGNAL 📈`;
+        }
+        // PRIORITY 2: OVERSOLD/OVERBOUGHT
         else if (isOversold) {
             signal = 'CALL';
             baseConfidence = 78;
             strategyUsed = 'Oversold Reversal';
             trendDesc = `⚠️ OVERSOLD (RSI: ${rsi.toFixed(0)}) → EXPECTING BOUNCE UP 📈`;
-            if (rsiDivergence.type === 'Bullish') baseConfidence += 8;
         }
-        // OVERBOUGHT = SELL (PUT)
         else if (isOverbought) {
             signal = 'PUT';
             baseConfidence = 78;
             strategyUsed = 'Overbought Reversal';
             trendDesc = `⚠️ OVERBOUGHT (RSI: ${rsi.toFixed(0)}) → EXPECTING PULLBACK DOWN 📉`;
-            if (rsiDivergence.type === 'Bearish') baseConfidence += 8;
         }
-        // RSI DIVERGENCE
-        else if (rsiDivergence.type === 'Bullish') {
-            signal = 'CALL';
-            baseConfidence = 72;
-            strategyUsed = 'Bullish Divergence';
-            trendDesc = `🟢 BULLISH DIVERGENCE → EXPECTING UP 📈`;
-        }
-        else if (rsiDivergence.type === 'Bearish') {
-            signal = 'PUT';
-            baseConfidence = 72;
-            strategyUsed = 'Bearish Divergence';
-            trendDesc = `🔴 BEARISH DIVERGENCE → EXPECTING DOWN 📉`;
-        }
-        // TREND FOLLOWING
+        // PRIORITY 3: TREND FOLLOWING
         else if (trendScore === 1) {
             signal = 'CALL';
-            baseConfidence = 65;
+            baseConfidence = 68;
             strategyUsed = 'Trend Following';
             trendDesc = `📈 UPTREND → FOLLOW TREND UP 📈`;
         }
         else if (trendScore === -1) {
             signal = 'PUT';
-            baseConfidence = 65;
+            baseConfidence = 68;
             strategyUsed = 'Trend Following';
             trendDesc = `📉 DOWNTREND → FOLLOW TREND DOWN 📉`;
         }
-        // DEFAULT VWAP
+        // PRIORITY 4: VOTING CONSENSUS
+        else if (bullish > bearish + 20 && strategies >= 2) {
+            signal = 'CALL';
+            baseConfidence = 65;
+            strategyUsed = `Bullish Consensus (${strategies} strategies)`;
+            trendDesc = `📈 BULLISH CONSENSUS → BUY`;
+        }
+        else if (bearish > bullish + 20 && strategies >= 2) {
+            signal = 'PUT';
+            baseConfidence = 65;
+            strategyUsed = `Bearish Consensus (${strategies} strategies)`;
+            trendDesc = `📉 BEARISH CONSENSUS → SELL`;
+        }
+        // PRIORITY 5: DEFAULT VWAP
         else {
             signal = price > vwap ? 'CALL' : 'PUT';
             baseConfidence = 55;
@@ -543,6 +464,7 @@ async function analyzeSignal(priceData, config, tf, higherPriceData = null, lowe
         if (volatilityPercent > 0.35) finalConfidence += 5;
         else if (volatilityPercent < 0.15) finalConfidence -= 10;
         
+        // Historical learning
         const patternId = `${signal}_${strategyUsed.replace(/ /g, '_')}`;
         const historical = getHistoricalWinRate(config.pairName || 'UNKNOWN', tf, patternId);
         if (historical !== null) {
@@ -551,11 +473,6 @@ async function analyzeSignal(priceData, config, tf, higherPriceData = null, lowe
         
         finalConfidence = Math.min(92, Math.max(45, finalConfidence));
         const intensity = getSignalIntensity(finalConfidence);
-        
-        let mtfDisplay = `${mtfDivergence.higher.rsi}/${mtfDivergence.current.rsi}/${mtfDivergence.lower.rsi}`;
-        if (mtfDivergence.overall !== 'None') {
-            mtfDisplay = `🟢 ${mtfDisplay} (${mtfDivergence.confidence}%)`;
-        }
         
         let recommendation = '';
         if (finalConfidence >= 85) recommendation = '✅✅✅ EXTREME HIGH PROBABILITY ✅✅✅';
@@ -574,18 +491,14 @@ async function analyzeSignal(priceData, config, tf, higherPriceData = null, lowe
             priceChange: change.toFixed(2),
             trendDirection: trendDirection,
             volatilityPercent: volatilityPercent.toFixed(2),
-            divergence: rsiDivergence.type,
-            macdDivergence: macdDivergence,
-            mtfDivergence: mtfDisplay,
+            divergence: divergence,
             ichimoku: ichimoku || 'Neutral',
             macd: macd || 'Neutral',
             structure: structure || 'Neutral',
             fibonacci: fibonacci || 'Neutral',
-            strategyCount: strategies,
             strategyUsed: strategyUsed,
-            strategyDetails: strategyDetails.slice(0, 5).join(', '),
             trend: trendDesc,
-            trendAlignment: `📊 RSI:${rsi.toFixed(0)} ADX:${adx.toFixed(0)}(${adxStrength}) Div:${rsiDivergence.type} | ${intensity} (${Math.round(finalConfidence)}%)`,
+            trendAlignment: `📊 Div:${divergence} RSI:${rsi.toFixed(0)} ADX:${adx.toFixed(0)}(${adxStrength}) | ${intensity} (${Math.round(finalConfidence)}%)`,
             patternId: patternId,
             historicalWinRate: historical ? historical.toFixed(1) + '%' : 'Learning...',
             recommendation: recommendation,
@@ -596,7 +509,8 @@ async function analyzeSignal(priceData, config, tf, higherPriceData = null, lowe
         return { 
             signal: 'CALL', confidence: 50, intensity: '⚪ LOW', 
             rsi: '50', adx: '20', adxStrength: 'Error',
-            trendDirection: 'Unknown', ichimoku: 'Error', macd: 'Error', structure: 'Error', fibonacci: 'Error',
+            trendDirection: 'Unknown', divergence: 'None',
+            ichimoku: 'Error', macd: 'Error', structure: 'Error', fibonacci: 'Error',
             recommendation: '⚠️ Error - skip', shouldTrade: '⚠️ Skip'
         };
     }
