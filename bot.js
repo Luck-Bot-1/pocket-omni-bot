@@ -96,7 +96,7 @@ function timeframeKeyboard(pairName) {
 
 bot.start(async (ctx) => {
     const userId = ctx.from.id;
-    await ctx.replyWithMarkdown(`🚀 *PULSE OMNI BOT v28.0* – FINAL PRODUCTION\n✅ ALWAYS generates CALL/PUT with confidence %\n✅ Signal intensity: 🔴🔴🔴 STRONG | 🟠🟠 MODERATE | 🟡 WEAK | ⚪ LOW\nActive pairs: ${ALL_PAIRS.length}\nYour win rate: ${getWinRate(userId)}%\nSelect asset category:`, await categoryKeyboard());
+    await ctx.replyWithMarkdown(`🚀 *PULSE OMNI BOT v32.0* – FINAL\n✅ Divergence Priority | ADX Visible | All Strategies\nActive pairs: ${ALL_PAIRS.length}\nYour win rate: ${getWinRate(userId)}%\nSelect asset category:`, await categoryKeyboard());
 });
 
 bot.action(/cat_(.+)/, async (ctx) => {
@@ -132,23 +132,21 @@ bot.action(/tf_(.+)_(.+)/, async (ctx) => {
         
         const dirEmoji = result.signal === 'CALL' ? '📈' : '📉';
         
-        // Map confidence to visual intensity
-        let intensityBar = '';
-        if (result.confidence >= 80) intensityBar = '🔴🔴🔴🔴🔴';
-        else if (result.confidence >= 70) intensityBar = '🟠🟠🟠🟠⚪';
-        else if (result.confidence >= 60) intensityBar = '🟡🟡🟡⚪⚪';
-        else intensityBar = '⚪⚪⚪⚪⚪';
+        let intensityDisplay = result.intensity || (result.confidence >= 85 ? '🔴🔴🔴🔴 EXTREME' : (result.confidence >= 75 ? '🔴🔴🔴 STRONG' : (result.confidence >= 65 ? '🟠🟠 MODERATE' : (result.confidence >= 55 ? '🟡 WEAK' : '⚪ LOW'))));
         
-        let analysisText = `*Analysis:*\n- Trade Direction: ${result.trend}\n- Strategy: ${result.strategyUsed}\n- ${result.emaRelation}\n`;
-        analysisText += `- Price ${result.priceChange >= 0 ? 'up' : 'down'} ${Math.abs(result.priceChange)}%\n`;
-        analysisText += `- Divergence: ${result.divergence}\n`;
-        analysisText += `- Historical Win Rate: ${result.historicalWinRate}\n`;
-        analysisText += `- Signal Intensity: ${result.intensity}\n`;
-        analysisText += `- Confidence: ${result.confidence}% ${intensityBar}\n`;
+        let analysisText = `*Analysis:*\n`;
+        analysisText += `- Trade Direction: ${result.trendDirection || result.trend || 'N/A'}\n`;
+        analysisText += `- Strategy: ${result.strategyUsed || 'N/A'}\n`;
+        analysisText += `- ADX: ${result.adx || 'N/A'} (${result.adxStrength || 'N/A'})\n`;
+        analysisText += `- RSI: ${result.rsi || 'N/A'}\n`;
+        analysisText += `- Divergence: ${result.divergence || 'None'}\n`;
+        analysisText += `- Volatility: ${result.volatilityPercent || 'N/A'}%\n`;
+        analysisText += `- Price Change: ${result.priceChange || '0'}%\n`;
+        analysisText += `- Confidence: ${result.confidence}%\n`;
         
         const expiry = getExpiryFromTimeframe(tf);
         
-        const caption = `🔔 *SIGNAL: ${pairName} (${tf})*\n${dirEmoji} *${result.signal}* | ${result.intensity} (${result.confidence}%)\n📊 RSI: ${result.rsi}\n${analysisText}\n\n📌 ${result.trendAlignment}\n\n⏱️ *Expiry:* ${expiry}\n📈 *Your win rate:* ${getWinRate(userId)}%\n💰 *Risk:* 1.5% of balance\n\n⚠️ *Decision is yours* – Trade only if confidence ≥ 70% for good probability.`;
+        const caption = `🔔 *SIGNAL: ${pairName} (${tf})*\n${dirEmoji} *${result.signal}* | ${intensityDisplay} (${result.confidence}%)\n\n${analysisText}\n\n📌 ${result.trendAlignment || result.trend || 'N/A'}\n\n⏱️ *Expiry:* ${expiry}\n📈 *Your win rate:* ${getWinRate(userId)}%\n💰 *Risk:* 1.5% of balance\n\n⚠️ *Decision is yours* – Trade only if confidence ≥ 70% for good probability.`;
         
         await ctx.replyWithMarkdown(caption);
         
@@ -234,4 +232,4 @@ bot.command('pairs', async (ctx) => {
 });
 
 bot.launch().catch(console.error);
-console.log('✅ BOT v28.0 FINAL – Always generates CALL/PUT with confidence intensity. Production ready.');
+console.log('✅ BOT v32.0 FINAL – Divergence Priority, ADX Visible, Production Ready.');
