@@ -96,7 +96,7 @@ function timeframeKeyboard(pairName) {
 
 bot.start(async (ctx) => {
     const userId = ctx.from.id;
-    await ctx.replyWithMarkdown(`🚀 *PULSE OMNI BOT v32.0* – FINAL\n✅ Divergence Priority | ADX Visible | All Strategies\nActive pairs: ${ALL_PAIRS.length}\nYour win rate: ${getWinRate(userId)}%\nSelect asset category:`, await categoryKeyboard());
+    await ctx.replyWithMarkdown(`🚀 *PULSE OMNI BOT v33.0* – LEGENDARY\n✅ ADX Override | Trend Enforcement | Multi-Strategy\nActive pairs: ${ALL_PAIRS.length}\nYour win rate: ${getWinRate(userId)}%\nSelect asset category:`, await categoryKeyboard());
 });
 
 bot.action(/cat_(.+)/, async (ctx) => {
@@ -132,19 +132,31 @@ bot.action(/tf_(.+)_(.+)/, async (ctx) => {
         
         const dirEmoji = result.signal === 'CALL' ? '📈' : '📉';
         
-        let intensityDisplay = result.intensity || (result.confidence >= 85 ? '🔴🔴🔴🔴 EXTREME' : (result.confidence >= 75 ? '🔴🔴🔴 STRONG' : (result.confidence >= 65 ? '🟠🟠 MODERATE' : (result.confidence >= 55 ? '🟡 WEAK' : '⚪ LOW'))));
-        
+        // Build complete analysis text with ALL fields
         let analysisText = `*Analysis:*\n`;
-        analysisText += `- Trade Direction: ${result.trendDirection || result.trend || 'N/A'}\n`;
-        analysisText += `- Strategy: ${result.strategyUsed || 'N/A'}\n`;
-        analysisText += `- ADX: ${result.adx || 'N/A'} (${result.adxStrength || 'N/A'})\n`;
+        analysisText += `- Trade Direction: ${result.trendDirection || result.trend || 'Unknown'}\n`;
+        analysisText += `- Strategy: ${result.strategyUsed || result.strategy || 'N/A'}\n`;
+        analysisText += `- ADX: ${result.adx || 'N/A'} (${result.adxStrength || getADXStrengthText(result.adx)})\n`;
         analysisText += `- RSI: ${result.rsi || 'N/A'}\n`;
         analysisText += `- Divergence: ${result.divergence || 'None'}\n`;
         analysisText += `- Volatility: ${result.volatilityPercent || 'N/A'}%\n`;
         analysisText += `- Price Change: ${result.priceChange || '0'}%\n`;
+        analysisText += `- Sentiment: ${result.sentiment || 'Neutral'}\n`;
+        analysisText += `- Volume: ${result.volumeQuality || 'Normal'}\n`;
+        analysisText += `- Session: ${result.session || 'Unknown'}\n`;
+        analysisText += `- Risk/Reward: ${result.riskReward || 'N/A'}:1\n`;
         analysisText += `- Confidence: ${result.confidence}%\n`;
         
         const expiry = getExpiryFromTimeframe(tf);
+        
+        // Map confidence to intensity
+        let intensityDisplay = '';
+        if (result.confidence >= 92) intensityDisplay = '🏆🏆🏆 LEGENDARY';
+        else if (result.confidence >= 86) intensityDisplay = '🔴🔴🔴🔴 EXTREME';
+        else if (result.confidence >= 78) intensityDisplay = '🔴🔴🔴 STRONG';
+        else if (result.confidence >= 68) intensityDisplay = '🟠🟠 MODERATE';
+        else if (result.confidence >= 58) intensityDisplay = '🟡 WEAK';
+        else intensityDisplay = '⚪ LOW';
         
         const caption = `🔔 *SIGNAL: ${pairName} (${tf})*\n${dirEmoji} *${result.signal}* | ${intensityDisplay} (${result.confidence}%)\n\n${analysisText}\n\n📌 ${result.trendAlignment || result.trend || 'N/A'}\n\n⏱️ *Expiry:* ${expiry}\n📈 *Your win rate:* ${getWinRate(userId)}%\n💰 *Risk:* 1.5% of balance\n\n⚠️ *Decision is yours* – Trade only if confidence ≥ 70% for good probability.`;
         
@@ -164,6 +176,17 @@ bot.action(/tf_(.+)_(.+)/, async (ctx) => {
         await ctx.reply('⚠️ Could not generate signal. Try another pair or timeframe.');
     }
 });
+
+// Helper function for ADX strength
+function getADXStrengthText(adx) {
+    if (!adx) return 'Unknown';
+    if (adx >= 50) return '🔥 EXTREME TREND';
+    if (adx >= 40) return '📈 VERY STRONG TREND';
+    if (adx >= 30) return '📈 STRONG TREND';
+    if (adx >= 25) return '📊 DEVELOPING TREND';
+    if (adx >= 20) return '🌀 WEAK TREND';
+    return '🌀 SIDEWAYS/RANGE';
+}
 
 bot.action(/win_(.+)/, async (ctx) => {
     const tradeId = ctx.match[1];
@@ -232,4 +255,4 @@ bot.command('pairs', async (ctx) => {
 });
 
 bot.launch().catch(console.error);
-console.log('✅ BOT v32.0 FINAL – Divergence Priority, ADX Visible, Production Ready.');
+console.log('✅ BOT v33.0 LEGENDARY – Full signal display, ADX override, trend enforcement. Production ready.');
