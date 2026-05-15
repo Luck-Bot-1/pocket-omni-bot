@@ -3,7 +3,7 @@ const path = require('path');
 const BACKTEST_FILE = path.join(__dirname, 'backtest_stats.json');
 
 // ============================================
-// PROFESSIONAL BACKTEST & LEARNING
+// LEGENDARY BACKTEST ENGINE
 // ============================================
 function loadStats() {
     if (!fs.existsSync(BACKTEST_FILE)) return {};
@@ -26,12 +26,12 @@ function recordTradeOutcome(pair, tf, patternId, wasWin, profitPercent = 0) {
 function getHistoricalWinRate(pair, tf, patternId) {
     const stats = loadStats();
     const key = `${pair}_${tf}_${patternId}`;
-    if (stats[key] && stats[key].total >= 10) return stats[key].winRate;
+    if (stats[key] && stats[key].total >= 20) return stats[key].winRate;
     return null;
 }
 
 // ============================================
-// TECHNICAL INDICATORS
+// CORE INDICATORS
 // ============================================
 function calculateEMA(values, period) {
     if (!values || values.length === 0) return 0;
@@ -124,36 +124,50 @@ function getADXStrength(adx) {
 }
 
 // ============================================
-// INSTITUTIONAL VOLATILITY CAP (RENAISSANCE - FIXED)
+// MORTAL WOUND FIX 1: VOLATILITY CAP WITH ADX OVERRIDE
 // ============================================
-function getVolatilityCap(volatilityPercent, adx) {
-    // STRONG TREND OVERRIDES VOLATILITY CAP
-    if (adx >= 45) return { maxConfidence: 92, canTrade: true, tier: '🔥 EXTREME TREND' };
-    if (adx >= 35) return { maxConfidence: 88, canTrade: true, tier: '📈 VERY STRONG TREND' };
-    if (adx >= 25) return { maxConfidence: 80, canTrade: true, tier: '📈 STRONG TREND' };
+function getConfidenceCap(volatilityPercent, adx) {
+    // ADX OVERRIDES EVERYTHING (RENAISSANCE METHOD)
+    if (adx >= 50) return { maxConfidence: 94, canTrade: true, tier: '🔥 EXTREME TREND' };
+    if (adx >= 40) return { maxConfidence: 90, canTrade: true, tier: '📈 VERY STRONG TREND' };
+    if (adx >= 30) return { maxConfidence: 84, canTrade: true, tier: '📈 STRONG TREND' };
+    if (adx >= 25) return { maxConfidence: 78, canTrade: true, tier: '📊 DEVELOPING TREND' };
     
-    // NORMAL VOLATILITY CAP FOR WEAK TRENDS
-    if (volatilityPercent < 0.10) return { maxConfidence: 45, canTrade: false, tier: '💀 DEAD MARKET' };
-    if (volatilityPercent < 0.15) return { maxConfidence: 55, canTrade: false, tier: '⚠️ EXTREMELY LOW' };
-    if (volatilityPercent < 0.22) return { maxConfidence: 65, canTrade: true, tier: '📊 LOW VOLATILITY' };
-    if (volatilityPercent > 0.45) return { maxConfidence: 92, canTrade: true, tier: '⚡ HIGH VOLATILITY' };
-    return { maxConfidence: 80, canTrade: true, tier: '✅ NORMAL' };
+    // HANDLE N/A VOLATILITY
+    if (!volatilityPercent || volatilityPercent === 0 || isNaN(volatilityPercent)) {
+        return { maxConfidence: 70, canTrade: true, tier: '⚠️ VOLATILITY UNKNOWN' };
+    }
+    
+    if (volatilityPercent < 0.10) return { maxConfidence: 55, canTrade: true, tier: '💀 LOW VOLATILITY' };
+    if (volatilityPercent < 0.15) return { maxConfidence: 65, canTrade: true, tier: '⚠️ LOW VOLATILITY' };
+    if (volatilityPercent > 0.45) return { maxConfidence: 94, canTrade: true, tier: '⚡ HIGH VOLATILITY' };
+    return { maxConfidence: 84, canTrade: true, tier: '✅ NORMAL' };
 }
 
-// ============================================
-// ADX BOOST (PROGRESSIVE - FIXED)
-// ============================================
 function getADXBoost(adx) {
-    if (adx >= 50) return 15;
-    if (adx >= 40) return 12;
-    if (adx >= 35) return 10;
-    if (adx >= 30) return 8;
-    if (adx >= 25) return 5;
+    if (adx >= 50) return 18;
+    if (adx >= 40) return 14;
+    if (adx >= 35) return 12;
+    if (adx >= 30) return 10;
+    if (adx >= 25) return 6;
     return 0;
 }
 
 // ============================================
-// VOLUME CONFIRMATION (JUMP TRADING - FIXED)
+// MORTAL WOUND FIX 2: ENFORCE TREND DIRECTION
+// ============================================
+function enforceTrendDirection(signal, trendScore, adx) {
+    if (trendScore === 1 && signal === 'PUT') {
+        return { signal: 'CALL', changed: true, reason: `🔄 UPTREND (ADX:${adx}) → BUY only`, boost: 15 };
+    }
+    if (trendScore === -1 && signal === 'CALL') {
+        return { signal: 'PUT', changed: true, reason: `🔄 DOWNTREND (ADX:${adx}) → SELL only`, boost: 15 };
+    }
+    return { signal: signal, changed: false, reason: '', boost: 0 };
+}
+
+// ============================================
+// MORTAL WOUND FIX 3: VOLUME CONFIRMATION
 // ============================================
 function getVolumeConfidence(candles) {
     try {
@@ -164,64 +178,29 @@ function getVolumeConfidence(candles) {
         
         if (volumeRatio < 0.6) return { confidence: -25, reason: '❌ EXTREMELY LOW VOLUME' };
         if (volumeRatio < 0.9) return { confidence: -15, reason: '⚠️ LOW VOLUME' };
-        if (volumeRatio > 1.8) return { confidence: 15, reason: '✅ VERY HIGH VOLUME' };
-        if (volumeRatio > 1.3) return { confidence: 10, reason: '✅ HIGH VOLUME' };
+        if (volumeRatio > 1.8) return { confidence: 18, reason: '✅ VERY HIGH VOLUME' };
+        if (volumeRatio > 1.3) return { confidence: 12, reason: '✅ HIGH VOLUME' };
         return { confidence: 0, reason: '📊 NORMAL VOLUME' };
     } catch(e) { return { confidence: 0, reason: '📊 NORMAL VOLUME' }; }
 }
 
 // ============================================
-// SENTIMENT INDICATOR (DE SHAW - FIXED)
+// MORTAL WOUND FIX 4: SENTIMENT ANALYSIS
 // ============================================
 function getSentiment(rsi, adx, volatilityPercent) {
     if (rsi > 75 && adx > 30 && volatilityPercent > 0.25) {
-        return { sentiment: '🟢 EXTREME GREED', bias: 'BEARISH', confidence: 85 };
+        return { sentiment: '🟢 EXTREME GREED', bias: 'BEARISH', confidence: 88 };
     }
     if (rsi < 25 && adx > 30 && volatilityPercent > 0.25) {
-        return { sentiment: '🔴 EXTREME FEAR', bias: 'BULLISH', confidence: 85 };
+        return { sentiment: '🔴 EXTREME FEAR', bias: 'BULLISH', confidence: 88 };
     }
-    if (rsi > 65) return { sentiment: '📈 GREED', bias: 'BEARISH', confidence: 65 };
-    if (rsi < 35) return { sentiment: '📉 FEAR', bias: 'BULLISH', confidence: 65 };
+    if (rsi > 65) return { sentiment: '📈 GREED', bias: 'BEARISH', confidence: 68 };
+    if (rsi < 35) return { sentiment: '📉 FEAR', bias: 'BULLISH', confidence: 68 };
     return { sentiment: '⚖️ NEUTRAL', bias: 'NEUTRAL', confidence: 50 };
 }
 
 // ============================================
-// MULTI-TIMEFRAME ALIGNMENT (CITADEL - FIXED)
-// ============================================
-function getMultiTimeframeAlignment(currentTrend, higherTrend, lowerTrend) {
-    let alignment = 0;
-    if (currentTrend === higherTrend) alignment += 2;
-    if (currentTrend === lowerTrend) alignment += 1;
-    if (higherTrend === lowerTrend) alignment += 1;
-    
-    if (alignment >= 3) return { aligned: true, strength: 'STRONG', bonus: 15 };
-    if (alignment >= 2) return { aligned: true, strength: 'MODERATE', bonus: 8 };
-    return { aligned: false, strength: 'WEAK', bonus: 0 };
-}
-
-// ============================================
-// NEWS FILTER (FIXED)
-// ============================================
-const HIGH_IMPACT_NEWS = {
-    'NFP': { start: 510, end: 540 },
-    'CPI': { start: 510, end: 540 },
-    'FOMC': { start: 1080, end: 1140 },
-    'ECB': { start: 630, end: 660 }
-};
-
-function isNewsEvent() {
-    const now = new Date();
-    const timestamp = now.getHours() * 60 + now.getMinutes();
-    for (const [event, times] of Object.entries(HIGH_IMPACT_NEWS)) {
-        if (timestamp >= times.start - 30 && timestamp <= times.end + 30) {
-            return { isNews: true, event: event };
-        }
-    }
-    return { isNews: false, event: null };
-}
-
-// ============================================
-// ORDER BLOCK DETECTION (CITADEL - FIXED)
+// MORTAL WOUND FIX 5: ORDER BLOCK DETECTION
 // ============================================
 function detectOrderBlocks(candles) {
     try {
@@ -249,7 +228,7 @@ function detectOrderBlocks(candles) {
 }
 
 // ============================================
-// RISK-REWARD (DE SHAW - FIXED)
+// MORTAL WOUND FIX 6: RISK-REWARD
 // ============================================
 function calculateRiskReward(highs, lows, closes, signal, entryPrice) {
     try {
@@ -268,12 +247,33 @@ function calculateRiskReward(highs, lows, closes, signal, entryPrice) {
             takeProfit = entryPrice - (stopLoss - entryPrice) * 2.5;
             riskReward = (entryPrice - takeProfit) / (stopLoss - entryPrice);
         }
-        return { riskReward: riskReward || 1, isValid: (riskReward || 0) >= 1.8 };
+        return { riskReward: riskReward || 1, isValid: (riskReward || 0) >= 2.0 };
     } catch(e) { return { riskReward: 1, isValid: false }; }
 }
 
 // ============================================
-// SESSION
+// MORTAL WOUND FIX 7: NEWS FILTER
+// ============================================
+const HIGH_IMPACT_NEWS = {
+    'NFP': { start: 510, end: 540 },
+    'CPI': { start: 510, end: 540 },
+    'FOMC': { start: 1080, end: 1140 },
+    'ECB': { start: 630, end: 660 }
+};
+
+function isNewsEvent() {
+    const now = new Date();
+    const timestamp = now.getHours() * 60 + now.getMinutes();
+    for (const [event, times] of Object.entries(HIGH_IMPACT_NEWS)) {
+        if (timestamp >= times.start - 30 && timestamp <= times.end + 30) {
+            return { isNews: true, event: event };
+        }
+    }
+    return { isNews: false, event: null };
+}
+
+// ============================================
+// MORTAL WOUND FIX 8: SESSION FILTER
 // ============================================
 function getInstitutionalSession(pair) {
     try {
@@ -289,21 +289,7 @@ function getInstitutionalSession(pair) {
 }
 
 // ============================================
-// EXPONENTIAL WEIGHTING (RENAISSANCE - FIXED)
-// ============================================
-function calculateWeightedTrend(closes) {
-    const lambda = 0.94;
-    let weightedSum = 0, weightSum = 0;
-    for (let i = 0; i < closes.length; i++) {
-        const weight = Math.pow(lambda, closes.length - 1 - i);
-        weightedSum += weight * closes[i];
-        weightSum += weight;
-    }
-    return weightedSum / weightSum;
-}
-
-// ============================================
-// DIVERGENCE DETECTION (FIXED - REQUIRES EXTREMES)
+// MORTAL WOUND FIX 9: DIVERGENCE (REQUIRES EXTREMES)
 // ============================================
 function getRSIValues(closes) {
     const rsiVals = [];
@@ -444,12 +430,30 @@ function getHigherTimeframeTrend(higherPriceData) {
     } catch(e) { return { trend: 'Neutral', direction: 0 }; }
 }
 
+function getSessionBonus(pair) {
+    try {
+        const hour = new Date().getHours();
+        const day = new Date().getDay();
+        if (day === 0 || day === 6) return -30;
+        if (pair.includes('EUR') || pair.includes('GBP')) {
+            if (hour >= 13 && hour <= 22) return 18;
+            if (hour >= 18 || hour <= 2) return 12;
+        } else if (pair.includes('USD') || pair.includes('CAD')) {
+            if (hour >= 18 || hour <= 2) return 18;
+            if (hour >= 13 && hour <= 22) return 12;
+        } else {
+            if (hour >= 1 && hour <= 7) return 18;
+        }
+        return 0;
+    } catch(e) { return 0; }
+}
+
 function getSignalIntensity(conf) {
-    if (conf >= 90) return '🏆🏆🏆 LEGENDARY';
-    if (conf >= 85) return '🔴🔴🔴🔴 EXTREME';
-    if (conf >= 75) return '🔴🔴🔴 STRONG';
-    if (conf >= 65) return '🟠🟠 MODERATE';
-    if (conf >= 55) return '🟡 WEAK';
+    if (conf >= 92) return '🏆🏆🏆 LEGENDARY';
+    if (conf >= 86) return '🔴🔴🔴🔴 EXTREME';
+    if (conf >= 78) return '🔴🔴🔴 STRONG';
+    if (conf >= 68) return '🟠🟠 MODERATE';
+    if (conf >= 58) return '🟡 WEAK';
     return '⚪ LOW';
 }
 
@@ -475,17 +479,51 @@ async function analyzeSignal(priceData, config, tf, higherPriceData = null, lowe
         const highs = candles.map(c => c.high);
         const lows = candles.map(c => c.low);
         const price = closes[closes.length - 1];
-        const priceChange = ((price - closes[0]) / closes[0]) * 100;
+        
+        let priceChange = 0;
+        try {
+            priceChange = ((price - closes[0]) / closes[0]) * 100;
+            if (isNaN(priceChange)) priceChange = 0;
+        } catch(e) { priceChange = 0; }
+        
         const rsi = calculateRSI(closes, 14);
         const { adx, plusDI, minusDI } = calculateADX(highs, lows, closes, 14);
         const vwap = calculateVWAP(candles);
-        const atr = calculateATR(highs, lows, closes, 14);
-        const avgPrice = closes.slice(-20).reduce((a,b)=>a+b,0)/20;
-        const volatilityPercent = (atr / avgPrice) * 100;
+        
+        let volatilityPercent = 0.15;
+        try {
+            const atr = calculateATR(highs, lows, closes, 14);
+            const avgPrice = closes.slice(-20).reduce((a,b)=>a+b,0)/20;
+            if (avgPrice > 0 && !isNaN(atr)) {
+                volatilityPercent = (atr / avgPrice) * 100;
+            }
+        } catch(e) { volatilityPercent = 0.15; }
+        
         const adxStrength = getADXStrength(adx);
         const adxBoost = getADXBoost(adx);
         
+        // ============================================
+        // NEWS FILTER (HIGHEST PRIORITY)
+        // ============================================
+        const news = isNewsEvent();
+        if (news.isNews) {
+            const fallbackSignal = price > vwap ? 'CALL' : 'PUT';
+            return {
+                signal: fallbackSignal, confidence: 45, intensity: '⚪ LOW',
+                rsi: rsi.toFixed(1), adx: adx.toFixed(1), adxStrength: adxStrength,
+                trendDirection: 'Unknown', divergence: 'None',
+                recommendation: `⚠️ ${news.event} NEWS EVENT - NO TRADE`, shouldTrade: '⚠️ Skip'
+            };
+        }
+        
+        // ============================================
+        // CONFIDENCE CAP
+        // ============================================
+        const confidenceCap = getConfidenceCap(volatilityPercent, adx);
+        
+        // ============================================
         // TREND DIRECTION
+        // ============================================
         const ema20 = calculateEMA(closes, 20);
         const ema50 = calculateEMA(closes, 50);
         let trendDirection = 'Neutral';
@@ -499,37 +537,8 @@ async function analyzeSignal(priceData, config, tf, higherPriceData = null, lowe
         }
         
         // ============================================
-        // INSTITUTIONAL FILTERS
+        // DIVERGENCE (REQUIRES RSI EXTREMES)
         // ============================================
-        
-        // 1. NEWS FILTER
-        const news = isNewsEvent();
-        if (news.isNews) {
-            const fallbackSignal = price > vwap ? 'CALL' : 'PUT';
-            return {
-                signal: fallbackSignal, confidence: 40, intensity: '⚪ LOW',
-                rsi: rsi.toFixed(1), adx: adx.toFixed(1), adxStrength: adxStrength,
-                trendDirection: 'Unknown', divergence: 'None',
-                recommendation: `⚠️ ${news.event} NEWS EVENT - NO TRADE`, shouldTrade: '⚠️ Skip'
-            };
-        }
-        
-        // 2. VOLATILITY CAP (WITH ADX OVERRIDE)
-        const volatilityCap = getVolatilityCap(volatilityPercent, adx);
-        if (!volatilityCap.canTrade) {
-            const fallbackSignal = price > vwap ? 'CALL' : 'PUT';
-            return { 
-                signal: fallbackSignal, confidence: volatilityCap.maxConfidence, intensity: '⚪ LOW',
-                rsi: rsi.toFixed(1), adx: adx.toFixed(1), adxStrength: adxStrength,
-                trendDirection: 'Unknown', divergence: 'None',
-                recommendation: `⚠️ ${volatilityCap.tier} - NO TRADE`, shouldTrade: '⚠️ Skip'
-            };
-        }
-        
-        // 3. SENTIMENT
-        const sentiment = getSentiment(rsi, adx, volatilityPercent);
-        
-        // 4. DIVERGENCE (REQUIRES RSI EXTREMES)
         const rsiVals = getRSIValues(closes);
         const rawDivergence = detectDivergence(closes, rsiVals, 100, 8);
         let divergence = 'None';
@@ -539,17 +548,31 @@ async function analyzeSignal(priceData, config, tf, higherPriceData = null, lowe
         if (rawDivergence === 'Bullish' && isOversold) divergence = 'Bullish';
         else if (rawDivergence === 'Bearish' && isOverbought) divergence = 'Bearish';
         
-        // 5. VOLUME CONFIRMATION
+        // ============================================
+        // SENTIMENT
+        // ============================================
+        const sentiment = getSentiment(rsi, adx, volatilityPercent);
+        
+        // ============================================
+        // VOLUME CONFIRMATION
+        // ============================================
         const volumeConf = getVolumeConfidence(candles);
         
-        // 6. ORDER BLOCKS
+        // ============================================
+        // ORDER BLOCKS
+        // ============================================
         const orderBlocks = detectOrderBlocks(candles);
         
-        // 7. RISK-REWARD
+        // ============================================
+        // RISK-REWARD
+        // ============================================
         const rr = calculateRiskReward(highs, lows, closes, 'CALL', price);
         
-        // 8. SESSION
+        // ============================================
+        // SESSION
+        // ============================================
         const institutionalSession = getInstitutionalSession(config.pairName || '');
+        const sessionBonus = getSessionBonus(config.pairName || '');
         
         // ============================================
         // STRATEGY VOTING
@@ -586,7 +609,7 @@ async function analyzeSignal(priceData, config, tf, higherPriceData = null, lowe
         else { bearish += 10; }
         
         // ============================================
-        // SIGNAL DETERMINATION
+        // INITIAL SIGNAL DETERMINATION
         // ============================================
         let signal = null;
         let baseConfidence = 55;
@@ -595,89 +618,100 @@ async function analyzeSignal(priceData, config, tf, higherPriceData = null, lowe
         
         if (divergence === 'Bearish') {
             signal = 'PUT';
-            baseConfidence = 92;
-            strategyUsed = '🏆 INSTITUTIONAL BEARISH DIVERGENCE';
-            trendDesc = `🔴 LEGENDARY BEARISH DIVERGENCE (RSI: ${rsi.toFixed(0)}) → SELL 📉`;
+            baseConfidence = 94;
+            strategyUsed = '🏆 BEARISH DIVERGENCE';
+            trendDesc = `🔴 BEARISH DIVERGENCE (RSI:${rsi.toFixed(0)}) → SELL 📉`;
         }
         else if (divergence === 'Bullish') {
             signal = 'CALL';
-            baseConfidence = 92;
-            strategyUsed = '🏆 INSTITUTIONAL BULLISH DIVERGENCE';
-            trendDesc = `🟢 LEGENDARY BULLISH DIVERGENCE (RSI: ${rsi.toFixed(0)}) → BUY 📈`;
+            baseConfidence = 94;
+            strategyUsed = '🏆 BULLISH DIVERGENCE';
+            trendDesc = `🟢 BULLISH DIVERGENCE (RSI:${rsi.toFixed(0)}) → BUY 📈`;
         }
         else if (isOversold) {
             signal = 'CALL';
-            baseConfidence = 82;
+            baseConfidence = 84;
             strategyUsed = 'OVERSOLD REVERSAL';
-            trendDesc = `⚠️ OVERSOLD (RSI: ${rsi.toFixed(0)}) → BUY 📈`;
+            trendDesc = `⚠️ OVERSOLD (RSI:${rsi.toFixed(0)}) → BUY 📈`;
         }
         else if (isOverbought) {
             signal = 'PUT';
-            baseConfidence = 82;
+            baseConfidence = 84;
             strategyUsed = 'OVERBOUGHT REVERSAL';
-            trendDesc = `⚠️ OVERBOUGHT (RSI: ${rsi.toFixed(0)}) → SELL 📉`;
+            trendDesc = `⚠️ OVERBOUGHT (RSI:${rsi.toFixed(0)}) → SELL 📉`;
         }
-        else if (trendScore === 1 && bullish > bearish + 30) {
+        else if (trendScore === 1) {
             signal = 'CALL';
             baseConfidence = 78;
-            strategyUsed = 'STRONG TREND FOLLOWING';
-            trendDesc = `📈 STRONG UPTREND → BUY 📈`;
+            strategyUsed = 'TREND FOLLOWING';
+            trendDesc = `📈 UPTREND (ADX:${adx.toFixed(0)}) → BUY 📈`;
         }
-        else if (trendScore === -1 && bearish > bullish + 30) {
+        else if (trendScore === -1) {
             signal = 'PUT';
             baseConfidence = 78;
-            strategyUsed = 'STRONG TREND FOLLOWING';
-            trendDesc = `📉 STRONG DOWNTREND → SELL 📉`;
+            strategyUsed = 'TREND FOLLOWING';
+            trendDesc = `📉 DOWNTREND (ADX:${adx.toFixed(0)}) → SELL 📉`;
         }
-        else if (bullish > bearish + 30 && strategies >= 3) {
+        else if (bullish > bearish + 30 && strategies >= 2) {
             signal = 'CALL';
             baseConfidence = 72;
-            strategyUsed = `BULLISH CONSENSUS (${strategies} strategies)`;
-            trendDesc = `📈 STRONG BULLISH CONSENSUS → BUY`;
+            strategyUsed = `BULLISH CONSENSUS (${strategies})`;
+            trendDesc = `📈 BULLISH CONSENSUS → BUY`;
         }
-        else if (bearish > bullish + 30 && strategies >= 3) {
+        else if (bearish > bullish + 30 && strategies >= 2) {
             signal = 'PUT';
             baseConfidence = 72;
-            strategyUsed = `BEARISH CONSENSUS (${strategies} strategies)`;
-            trendDesc = `📉 STRONG BEARISH CONSENSUS → SELL`;
+            strategyUsed = `BEARISH CONSENSUS (${strategies})`;
+            trendDesc = `📉 BEARISH CONSENSUS → SELL`;
         }
         else {
             signal = price > vwap ? 'CALL' : 'PUT';
-            baseConfidence = 55;
+            baseConfidence = 58;
             strategyUsed = 'VWAP BIAS';
-            trendDesc = `⚖️ NEUTRAL → Following VWAP`;
+            trendDesc = `⚖️ Following VWAP (${price > vwap ? 'ABOVE' : 'BELOW'})`;
+        }
+        
+        // ============================================
+        // ENFORCE TREND DIRECTION (GOLDEN RULE)
+        // ============================================
+        const trendEnforcement = enforceTrendDirection(signal, trendScore, adx);
+        signal = trendEnforcement.signal;
+        if (trendEnforcement.changed) {
+            baseConfidence += trendEnforcement.boost;
+            trendDesc = trendEnforcement.reason;
+            strategyUsed = 'TREND-ENFORCED ' + strategyUsed;
         }
         
         // ============================================
         // APPLY ALL FILTERS
         // ============================================
-        let finalConfidence = baseConfidence + adxBoost;
-        finalConfidence = Math.min(finalConfidence, volatilityCap.maxConfidence);
+        let finalConfidence = baseConfidence + sessionBonus + adxBoost;
         finalConfidence += volumeConf.confidence;
         
         if (!rr.isValid) finalConfidence -= 20;
-        else finalConfidence += 8;
+        else finalConfidence += 10;
         
         if (signal === 'CALL' && orderBlocks.nearestBullishOB && Math.abs(price - orderBlocks.nearestBullishOB.price) / price < 0.002) {
-            finalConfidence += 15;
+            finalConfidence += 18;
             trendDesc += ` ✅ NEAR BULLISH ORDER BLOCK`;
         }
         if (signal === 'PUT' && orderBlocks.nearestBearishOB && Math.abs(price - orderBlocks.nearestBearishOB.price) / price < 0.002) {
-            finalConfidence += 15;
+            finalConfidence += 18;
             trendDesc += ` ✅ NEAR BEARISH ORDER BLOCK`;
         }
         
-        finalConfidence = Math.floor(finalConfidence * institutionalSession.multiplier);
-        
         if ((signal === 'CALL' && sentiment.bias === 'BULLISH') || (signal === 'PUT' && sentiment.bias === 'BEARISH')) {
-            finalConfidence += 10;
+            finalConfidence += 12;
             trendDesc += ` ✅ SENTIMENT: ${sentiment.sentiment}`;
         }
         
         if ((signal === 'CALL' && htf.direction === 1) || (signal === 'PUT' && htf.direction === -1)) {
-            finalConfidence += 10;
+            finalConfidence += 12;
             trendDesc += ` ✅ HTF ALIGNED: ${htf.trend}`;
         }
+        
+        finalConfidence = Math.min(finalConfidence, confidenceCap.maxConfidence);
+        finalConfidence = Math.floor(finalConfidence * institutionalSession.multiplier);
         
         // Historical learning
         const patternId = `${signal}_${strategyUsed.replace(/ /g, '_')}`;
@@ -686,15 +720,15 @@ async function analyzeSignal(priceData, config, tf, higherPriceData = null, lowe
             finalConfidence = Math.floor((finalConfidence * 0.7) + (historical * 0.3));
         }
         
-        finalConfidence = Math.min(volatilityCap.maxConfidence, Math.max(45, finalConfidence));
+        finalConfidence = Math.min(confidenceCap.maxConfidence, Math.max(48, finalConfidence));
         const intensity = getSignalIntensity(finalConfidence);
         
         let recommendation = '';
-        if (finalConfidence >= 90) recommendation = '🏆🏆🏆 LEGENDARY SIGNAL - HIGHEST PROBABILITY 🏆🏆🏆';
-        else if (finalConfidence >= 85) recommendation = '✅✅✅ EXTREME HIGH PROBABILITY ✅✅✅';
-        else if (finalConfidence >= 75) recommendation = '✅✅ STRONG SIGNAL ✅✅';
-        else if (finalConfidence >= 65) recommendation = '✅ GOOD SIGNAL - Consider taking';
-        else if (finalConfidence >= 55) recommendation = '⚠️ WEAK SIGNAL - Trade with caution';
+        if (finalConfidence >= 92) recommendation = '🏆🏆🏆 LEGENDARY SIGNAL 🏆🏆🏆';
+        else if (finalConfidence >= 86) recommendation = '✅✅✅ EXTREME HIGH PROBABILITY ✅✅✅';
+        else if (finalConfidence >= 78) recommendation = '✅✅ STRONG SIGNAL ✅✅';
+        else if (finalConfidence >= 68) recommendation = '✅ GOOD SIGNAL - Consider taking';
+        else if (finalConfidence >= 58) recommendation = '⚠️ WEAK SIGNAL - Trade with caution';
         else recommendation = '⚠️ LOW CONFIDENCE - Better to skip';
         
         if (volumeConf.confidence < 0) recommendation += ` ${volumeConf.reason}`;
@@ -716,7 +750,6 @@ async function analyzeSignal(priceData, config, tf, higherPriceData = null, lowe
             strategyUsed: strategyUsed,
             trend: trendDesc,
             riskReward: rr.riskReward.toFixed(1),
-            adxBoost: adxBoost,
             recommendation: recommendation,
             shouldTrade: finalConfidence >= 70 ? '✅ Consider trading' : '⚠️ Consider skipping'
         };
