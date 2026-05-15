@@ -421,7 +421,7 @@ async function analyzeSignal(priceData, config, tf, higherPriceData = null, lowe
         const candles = priceData.values;
         if (!candles || candles.length < 100) {
             return { 
-                signal: 'CALL', confidence: 50,
+                signal: 'CALL', confidence: 50, intensity: '⚪ LOW',
                 rsi: '50', adx: '20', adxStrength: 'Insufficient',
                 trendDirection: 'Unknown', divergence: 'None',
                 strategyUsed: 'Insufficient Data',
@@ -461,8 +461,9 @@ async function analyzeSignal(priceData, config, tf, higherPriceData = null, lowe
         
         const news = isNewsEvent();
         if (news.isNews) {
+            const fallbackSignal = price > vwap ? 'CALL' : 'PUT';
             return {
-                signal: price > vwap ? 'CALL' : 'PUT', confidence: 45,
+                signal: fallbackSignal, confidence: 45, intensity: '⚪ LOW',
                 rsi: rsi.toFixed(1), adx: adx.toFixed(1), adxStrength: adxStrength,
                 trendDirection: 'Unknown', divergence: 'None',
                 strategyUsed: 'News Event',
@@ -542,12 +543,12 @@ async function analyzeSignal(priceData, config, tf, higherPriceData = null, lowe
         if (divergence === 'Bearish') {
             signal = 'PUT';
             baseConfidence = 94;
-            strategyUsed = 'BEARISH DIVERGENCE';
+            strategyUsed = '🏆 BEARISH DIVERGENCE';
         }
         else if (divergence === 'Bullish') {
             signal = 'CALL';
             baseConfidence = 94;
-            strategyUsed = 'BULLISH DIVERGENCE';
+            strategyUsed = '🏆 BULLISH DIVERGENCE';
         }
         else if (isOversold) {
             signal = 'CALL';
@@ -633,6 +634,9 @@ async function analyzeSignal(priceData, config, tf, higherPriceData = null, lowe
         else if (finalConfidence >= 58) recommendation = '⚠️ WEAK SIGNAL - Trade with caution';
         else recommendation = '⚠️ LOW CONFIDENCE - Better to skip';
         
+        // ============================================
+        // CRITICAL: RETURN ALL FIELDS FOR DISPLAY
+        // ============================================
         return {
             signal: signal,
             confidence: Math.round(finalConfidence),
@@ -655,7 +659,7 @@ async function analyzeSignal(priceData, config, tf, higherPriceData = null, lowe
     } catch(e) {
         console.error('Analyzer error:', e);
         return { 
-            signal: 'CALL', confidence: 50,
+            signal: 'CALL', confidence: 50, intensity: '⚪ LOW',
             rsi: '50', adx: '20', adxStrength: 'Error',
             trendDirection: 'Unknown', divergence: 'None',
             strategyUsed: 'Error',
