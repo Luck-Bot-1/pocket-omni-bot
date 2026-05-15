@@ -124,7 +124,207 @@ function getADXStrength(adx) {
 }
 
 // ============================================
-// ADVANCED DIVERGENCE DETECTION
+// INSTITUTIONAL FILTER 1: VOLUME CONFIRMATION
+// ============================================
+function calculateVolumeProfile(candles) {
+    const volumes = candles.map(c => c.volume);
+    const avgVolume = volumes.slice(-20).reduce((a, b) => a + b, 0) / 20;
+    const currentVolume = volumes[volumes.length - 1];
+    const volumeRatio = currentVolume / avgVolume;
+    
+    return {
+        isHighVolume: volumeRatio > 1.5,
+        isLowVolume: volumeRatio < 0.7,
+        volumeRatio: volumeRatio,
+        description: volumeRatio > 1.5 ? '🔥 HIGH VOLUME CONFIRMATION' : 
+                     volumeRatio < 0.7 ? '⚠️ LOW VOLUME - FAKEOUT RISK' : 
+                     '📊 NORMAL VOLUME'
+    };
+}
+
+// ============================================
+// INSTITUTIONAL FILTER 2: ORDER BLOCK DETECTION
+// ============================================
+function detectOrderBlocks(candles) {
+    const orderBlocks = { bullish: [], bearish: [] };
+    
+    for (let i = 2; i < candles.length - 2; i++) {
+        const prev = candles[i-1];
+        const curr = candles[i];
+        
+        if (prev.close < prev.open && curr.close > curr.open && 
+            curr.low <= prev.low && curr.volume > prev.volume * 1.3) {
+            orderBlocks.bullish.push({ price: curr.low, strength: curr.volume / prev.volume });
+        }
+        
+        if (prev.close > prev.open && curr.close < curr.open && 
+            curr.high >= prev.high && curr.volume > prev.volume * 1.3) {
+            orderBlocks.bearish.push({ price: curr.high, strength: curr.volume / prev.volume });
+        }
+    }
+    
+    const currentPrice = candles[candles.length - 1].close;
+    let nearestBullishOB = null, nearestBearishOB = null;
+    
+    for (const ob of orderBlocks.bullish) {
+        if (ob.price < currentPrice && (!nearestBullishOB || ob.price > nearestBullishOB.price)) {
+            nearestBullishOB = ob;
+        }
+    }
+    
+    for (const ob of orderBlocks.bearish) {
+        if (ob.price > currentPrice && (!nearestBearishOB || ob.price < nearestBearishOB.price)) {
+            nearestBearishOB = ob;
+        }
+    }
+    
+    return { nearestBullishOB, nearestBearishOB };
+}
+
+// ============================================
+// INSTITUTIONAL FILTER 3: RISK-REWARD CALCULATION
+// ============================================
+function calculateRiskReward(highs, lows, closes, signal, entryPrice) {
+    const atr = calculateATR(highs, lows, closes, 14);
+    const recentHighs = highs.slice(-20);
+    const recentLows = lows.slice(-20);
+    
+    let stopLoss, takeProfit, riskReward;
+    
+    if (signal === 'CALL') {
+        const swingLow = Math.min(...recentLows);
+        stopLoss = swingLow - atr * 0.5;
+        takeProfit = entryPrice + (entryPrice - stopLoss) * 2;
+        riskReward = (takeProfit - entryPrice) / (entryPrice - stopLoss);
+    } else {
+        const swingHigh = Math.max(...recentHighs);
+        stopLoss = swingHigh + atr * 0.5;
+        takeProfit = entryPrice - (stopLoss - entryPrice) * 2;
+        riskReward = (entryPrice - takeProfit) / (stopLoss - entryPrice);
+    }
+    
+    return {
+        stopLoss: stopLoss,
+        takeProfit: takeProfit,
+        riskReward: riskReward,
+        isValid: riskReward >= 1.5,
+        recommendation: riskReward >= 2 ? '✅ EXCELLENT R:R' : 
+                        riskReward >= 1.5 ? '✅ ACCEPTABLE R:R' : 
+                        '⚠️ POOR R:R - SKIP'
+    };
+}
+
+// ============================================
+// INSTITUTIONAL FILTER 4: MARKET REGIME ADAPTATION
+// ============================================
+function detectMarketRegime(highs, lows, closes) {
+    const { adx } = calculateADX(highs, lows, closes, 14);
+    const atr = calculateATR(highs, lows, closes, 14);
+    const avgPrice = closes.slice(-20).reduce((a, b) => a + b, 0) / 20;
+    const volatilityPercent = (atr / avgPrice) * 100;
+    
+    let regime = 'UNKNOWN';
+    let strategy = '';
+    
+    if (adx > 30 && volatilityPercent > 0.25) {
+        regime = 'STRONG TRENDING';
+        strategy = 'TREND_FOLLOWING';
+    } else if (adx > 25 && volatilityPercent > 0.20) {
+        regime = 'WEAK TRENDING';
+        strategy = 'PULLBACK';
+    } else if (adx < 25 && volatilityPercent > 0.25) {
+        regime = 'HIGH VOLATILITY RANGE';
+        strategy = 'MEAN_REVERSION';
+    } else if (adx < 20 && volatilityPercent < 0.15) {
+        regime = 'LOW VOLATILITY RANGE';
+        strategy = 'NO_TRADE';
+    } else {
+        regime = 'NORMAL';
+        strategy = 'BALANCED';
+    }
+    
+    return { regime, strategy, adx, volatilityPercent };
+}
+
+// ============================================
+// INSTITUTIONAL FILTER 5: MOMENTUM CONFIRMATION
+// ============================================
+function detectMomentumShift(candles) {
+    if (candles.length < 3) return { bullishMomentum: false, bearishMomentum: false, strength: 0 };
+    
+    const lastCandle = candles[candles.length - 1];
+    const prevCandle = candles[candles.length - 2];
+    
+    const momentum = (lastCandle.close - lastCandle.open) / (lastCandle.high - lastCandle.low || 0.0001);
+    const prevMomentum = (prevCandle.close - prevCandle.open) / (prevCandle.high - prevCandle.low || 0.0001);
+    
+    const bullishShift = momentum > 0.3 && prevMomentum < 0;
+    const bearishShift = momentum < -0.3 && prevMomentum > 0;
+    const volumeSpike = lastCandle.volume > prevCandle.volume * 1.5;
+    
+    return {
+        bullishMomentum: bullishShift && volumeSpike,
+        bearishMomentum: bearishShift && volumeSpike,
+        strength: Math.abs(momentum)
+    };
+}
+
+// ============================================
+// INSTITUTIONAL FILTER 6: FAKEOUT DETECTION
+// ============================================
+function detectFakeout(candles) {
+    if (candles.length < 3) return { bullishFakeout: false, bearishFakeout: false };
+    
+    const lastCandle = candles[candles.length - 1];
+    const prevCandle = candles[candles.length - 2];
+    const body = Math.abs(lastCandle.close - lastCandle.open);
+    const upperWick = lastCandle.high - Math.max(lastCandle.close, lastCandle.open);
+    const lowerWick = Math.min(lastCandle.close, lastCandle.open) - lastCandle.low;
+    
+    const bullishFakeout = lastCandle.high > prevCandle.high && 
+                           upperWick > body * 2 &&
+                           lastCandle.close < lastCandle.open;
+    
+    const bearishFakeout = lastCandle.low < prevCandle.low && 
+                           lowerWick > body * 2 &&
+                           lastCandle.close > lastCandle.open;
+    
+    return { bullishFakeout, bearishFakeout };
+}
+
+// ============================================
+// INSTITUTIONAL FILTER 7: SESSION FILTER
+// ============================================
+function getInstitutionalSession(pair) {
+    const hour = new Date().getHours();
+    const day = new Date().getDay();
+    
+    if (day === 0 || day === 6) return { quality: 'POOR', multiplier: 0.3, session: 'WEEKEND' };
+    
+    const sessions = {
+        LONDON_OPEN: { hours: [8, 9, 10], quality: 'EXCELLENT', multiplier: 1.3 },
+        LONDON_NY_OVERLAP: { hours: [13, 14, 15, 16], quality: 'EXCELLENT', multiplier: 1.4 },
+        NY_OPEN: { hours: [17, 18, 19], quality: 'GOOD', multiplier: 1.2 },
+        ASIAN: { hours: [1, 2, 3, 4, 5, 6], quality: 'POOR', multiplier: 0.6 },
+        LONDON_CLOSE: { hours: [11, 12], quality: 'FAIR', multiplier: 0.9 },
+        NY_CLOSE: { hours: [20, 21, 22, 23], quality: 'FAIR', multiplier: 0.8 }
+    };
+    
+    for (const [name, data] of Object.entries(sessions)) {
+        if (data.hours.includes(hour)) {
+            let multiplier = data.multiplier;
+            if (name === 'ASIAN' && !pair.includes('JPY') && !pair.includes('AUD') && !pair.includes('NZD')) {
+                multiplier *= 0.5;
+            }
+            return { quality: data.quality, multiplier: multiplier, session: name };
+        }
+    }
+    
+    return { quality: 'POOR', multiplier: 0.5, session: 'OFF_HOURS' };
+}
+
+// ============================================
+// DIVERGENCE DETECTION
 // ============================================
 function getRSIValues(closes) {
     const rsiVals = [];
@@ -302,7 +502,7 @@ function getSignalIntensity(conf) {
 }
 
 // ============================================
-// MAIN SIGNAL GENERATION - CORRECT PRIORITY
+// MAIN SIGNAL GENERATION - INSTITUTIONAL GRADE
 // ============================================
 async function analyzeSignal(priceData, config, tf, higherPriceData = null, lowerPriceData = null) {
     try {
@@ -379,12 +579,7 @@ async function analyzeSignal(priceData, config, tf, higherPriceData = null, lowe
         else { bearish += 10; }
         
         // ============================================
-        // CORRECT STRATEGY PRIORITY
-        // PRIORITY 1: DIVERGENCE (HIGHEST - OVERRIDES ALL)
-        // PRIORITY 2: OVERSOLD/OVERBOUGHT
-        // PRIORITY 3: TREND FOLLOWING
-        // PRIORITY 4: VOTING CONSENSUS
-        // PRIORITY 5: DEFAULT VWAP
+        // STRATEGY PRIORITY
         // ============================================
         let signal = null;
         let baseConfidence = 55;
@@ -394,31 +589,31 @@ async function analyzeSignal(priceData, config, tf, higherPriceData = null, lowe
         const isOversold = rsi < 35;
         const isOverbought = rsi > 65;
         
-        // PRIORITY 1: DIVERGENCE (HIGHEST PRIORITY)
+        // PRIORITY 1: DIVERGENCE
         if (divergence === 'Bearish') {
             signal = 'PUT';
             baseConfidence = 85;
-            strategyUsed = 'Bearish Divergence (PRIORITY #1)';
-            trendDesc = `🔴 BEARISH DIVERGENCE DETECTED → STRONG SELL SIGNAL 📉`;
+            strategyUsed = 'Bearish Divergence';
+            trendDesc = `🔴 BEARISH DIVERGENCE → STRONG SELL 📉`;
         }
         else if (divergence === 'Bullish') {
             signal = 'CALL';
             baseConfidence = 85;
-            strategyUsed = 'Bullish Divergence (PRIORITY #1)';
-            trendDesc = `🟢 BULLISH DIVERGENCE DETECTED → STRONG BUY SIGNAL 📈`;
+            strategyUsed = 'Bullish Divergence';
+            trendDesc = `🟢 BULLISH DIVERGENCE → STRONG BUY 📈`;
         }
         // PRIORITY 2: OVERSOLD/OVERBOUGHT
         else if (isOversold) {
             signal = 'CALL';
             baseConfidence = 78;
             strategyUsed = 'Oversold Reversal';
-            trendDesc = `⚠️ OVERSOLD (RSI: ${rsi.toFixed(0)}) → EXPECTING BOUNCE UP 📈`;
+            trendDesc = `⚠️ OVERSOLD (RSI: ${rsi.toFixed(0)}) → BOUNCE UP 📈`;
         }
         else if (isOverbought) {
             signal = 'PUT';
             baseConfidence = 78;
             strategyUsed = 'Overbought Reversal';
-            trendDesc = `⚠️ OVERBOUGHT (RSI: ${rsi.toFixed(0)}) → EXPECTING PULLBACK DOWN 📉`;
+            trendDesc = `⚠️ OVERBOUGHT (RSI: ${rsi.toFixed(0)}) → PULLBACK DOWN 📉`;
         }
         // PRIORITY 3: TREND FOLLOWING
         else if (trendScore === 1) {
@@ -454,9 +649,86 @@ async function analyzeSignal(priceData, config, tf, higherPriceData = null, lowe
             trendDesc = `⚖️ NEUTRAL → Following VWAP (${price > vwap ? 'ABOVE' : 'BELOW'})`;
         }
         
-        // CONFIDENCE ADJUSTMENTS
+        // ============================================
+        // APPLY ALL 7 INSTITUTIONAL FILTERS
+        // ============================================
         let finalConfidence = baseConfidence + sessionBonus;
         
+        // FILTER 1: VOLUME PROFILE
+        const volumeProfile = calculateVolumeProfile(candles);
+        if (volumeProfile.isLowVolume && !isOversold && !isOverbought) {
+            finalConfidence -= 20;
+            trendDesc += ` ⚠️ LOW VOLUME`;
+        }
+        if (volumeProfile.isHighVolume) {
+            finalConfidence += 8;
+            trendDesc += ` ✅ HIGH VOLUME`;
+        }
+        
+        // FILTER 2: ORDER BLOCKS
+        const orderBlocks = detectOrderBlocks(candles);
+        if (signal === 'CALL' && orderBlocks.nearestBullishOB && 
+            Math.abs(price - orderBlocks.nearestBullishOB.price) / price < 0.002) {
+            finalConfidence += 12;
+            trendDesc += ` ✅ NEAR BULLISH OB`;
+        }
+        if (signal === 'PUT' && orderBlocks.nearestBearishOB && 
+            Math.abs(price - orderBlocks.nearestBearishOB.price) / price < 0.002) {
+            finalConfidence += 12;
+            trendDesc += ` ✅ NEAR BEARISH OB`;
+        }
+        
+        // FILTER 3: RISK-REWARD
+        const rr = calculateRiskReward(highs, lows, closes, signal, price);
+        if (!rr.isValid) {
+            finalConfidence -= 15;
+            trendDesc += ` ⚠️ POOR R:R (${rr.riskReward.toFixed(1)}:1)`;
+        } else {
+            finalConfidence += 5;
+            trendDesc += ` ✅ R:R ${rr.riskReward.toFixed(1)}:1`;
+        }
+        
+        // FILTER 4: MARKET REGIME
+        const regime = detectMarketRegime(highs, lows, closes);
+        if (regime.strategy === 'NO_TRADE') {
+            finalConfidence = 45;
+            trendDesc += ` ⚠️ LOW VOL RANGE - NO TRADE`;
+        }
+        
+        // FILTER 5: MOMENTUM CONFIRMATION
+        const momentumShift = detectMomentumShift(candles);
+        if (signal === 'CALL' && !momentumShift.bullishMomentum && !isOversold) {
+            finalConfidence -= 10;
+            trendDesc += ` ⚠️ WAITING MOMENTUM`;
+        }
+        if (signal === 'PUT' && !momentumShift.bearishMomentum && !isOverbought) {
+            finalConfidence -= 10;
+            trendDesc += ` ⚠️ WAITING MOMENTUM`;
+        }
+        if ((signal === 'CALL' && momentumShift.bullishMomentum) || (signal === 'PUT' && momentumShift.bearishMomentum)) {
+            finalConfidence += 8;
+            trendDesc += ` ✅ MOMENTUM CONFIRMED`;
+        }
+        
+        // FILTER 6: FAKEOUT DETECTION
+        const fakeout = detectFakeout(candles);
+        if ((signal === 'CALL' && fakeout.bullishFakeout) || (signal === 'PUT' && fakeout.bearishFakeout)) {
+            signal = signal === 'CALL' ? 'PUT' : 'CALL';
+            finalConfidence = 72;
+            trendDesc = `🔄 FAKEOUT REVERSAL: ${signal}`;
+            strategyUsed = 'Fakeout Reversal';
+        }
+        
+        // FILTER 7: INSTITUTIONAL SESSION
+        const institutionalSession = getInstitutionalSession(config.pairName || '');
+        finalConfidence = Math.floor(finalConfidence * institutionalSession.multiplier);
+        if (institutionalSession.multiplier < 0.7) {
+            trendDesc += ` ⚠️ ${institutionalSession.session} SESSION`;
+        } else if (institutionalSession.multiplier > 1.1) {
+            trendDesc += ` ✅ ${institutionalSession.session} SESSION`;
+        }
+        
+        // ADX and Volatility adjustments
         if (adx >= 40) finalConfidence += 5;
         else if (adx >= 30) finalConfidence += 3;
         else if (adx < 20) finalConfidence -= 5;
@@ -498,7 +770,11 @@ async function analyzeSignal(priceData, config, tf, higherPriceData = null, lowe
             fibonacci: fibonacci || 'Neutral',
             strategyUsed: strategyUsed,
             trend: trendDesc,
-            trendAlignment: `📊 Div:${divergence} RSI:${rsi.toFixed(0)} ADX:${adx.toFixed(0)}(${adxStrength}) | ${intensity} (${Math.round(finalConfidence)}%)`,
+            volumeRatio: volumeProfile.volumeRatio.toFixed(1),
+            riskReward: rr.riskReward.toFixed(1),
+            marketRegime: regime.regime,
+            session: institutionalSession.session,
+            trendAlignment: `📊 Div:${divergence} RSI:${rsi.toFixed(0)} ADX:${adx.toFixed(0)} Vol:${volumeProfile.volumeRatio.toFixed(1)}x RR:${rr.riskReward.toFixed(1)}:1 ${institutionalSession.session} | ${intensity} (${Math.round(finalConfidence)}%)`,
             patternId: patternId,
             historicalWinRate: historical ? historical.toFixed(1) + '%' : 'Learning...',
             recommendation: recommendation,
