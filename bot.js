@@ -1,11 +1,12 @@
 // ============================================
 // LEGENDARY TRADING BOT - ORCHESTRATOR
-// Version: FINAL - WITH TELEGRAM INTEGRATION
+// Version: FINAL - WITH REAL DATA + START/STOP
 // ============================================
 
 const { analyzeSignal, recordTradeOutcome } = require('./analyzer.js');
 const fs = require('fs');
 const https = require('https');
+const yahooFinance = require('yahoo-finance2');
 
 // ============================================
 // CONFIGURATION
@@ -20,7 +21,7 @@ const CONFIG = {
     BROKER_PAYOUT_PERCENT: 78,
     SAVE_TRADES_TO_FILE: true,
     TRADE_HISTORY_FILE: './trade_history.json',
-    SCAN_INTERVAL_MS: 60000  // Scan every minute
+    SCAN_INTERVAL_MS: 60000  // 1 minute between scans
 };
 
 // ============================================
@@ -30,7 +31,13 @@ const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 
 // ============================================
-// POCKET OPTION SUPPORTED PAIRS
+// BOT STATE (Start/Stop Control)
+// ============================================
+let isScanning = true;  // Auto-scanning enabled by default
+let scanIntervalId = null;
+
+// ============================================
+// POCKET OPTION SUPPORTED PAIRS (35+ pairs)
 // ============================================
 const POCKET_OPTION_PAIRS = [
     'EURUSD', 'GBPUSD', 'AUDUSD', 'NZDUSD', 'USDCAD', 'USDCHF', 'USDJPY',
@@ -40,6 +47,21 @@ const POCKET_OPTION_PAIRS = [
     'AUDNZD', 'CADCHF', 'EURTRY', 'GBPTRY', 'AUDCHF'
 ];
 
+// Map to Yahoo Finance symbols
+const pairToYahooSymbol = {
+    'EURUSD': 'EURUSD=X', 'GBPUSD': 'GBPUSD=X', 'AUDUSD': 'AUDUSD=X',
+    'NZDUSD': 'NZDUSD=X', 'USDCAD': 'USDCAD=X', 'USDCHF': 'USDCHF=X',
+    'USDJPY': 'USDJPY=X', 'AUDCAD': 'AUDCAD=X', 'AUDJPY': 'AUDJPY=X',
+    'CADJPY': 'CADJPY=X', 'CHFJPY': 'CHFJPY=X', 'EURAUD': 'EURAUD=X',
+    'EURCAD': 'EURCAD=X', 'EURCHF': 'EURCHF=X', 'EURGBP': 'EURGBP=X',
+    'EURJPY': 'EURJPY=X', 'EURNZD': 'EURNZD=X', 'GBPAUD': 'GBPAUD=X',
+    'GBPCAD': 'GBPCAD=X', 'GBPCHF': 'GBPCHF=X', 'GBPJPY': 'GBPJPY=X',
+    'GBPNZD': 'GBPNZD=X', 'NZDCAD': 'NZDCAD=X', 'NZDJPY': 'NZDJPY=X',
+    'AUDNZD': 'AUDNZD=X', 'CADCHF': 'CADCHF=X', 'AUDCHF': 'AUDCHF=X',
+    'USDCNH': 'USDCNH=X', 'USDMXN': 'USDMXN=X', 'USDTRY': 'USDTRY=X',
+    'USDZAR': 'USDZAR=X', 'EURTRY': 'EURTRY=X', 'GBPTRY': 'GBPTRY=X'
+};
+
 // ============================================
 // SAFE FILE INITIALIZATION
 // ============================================
@@ -47,10 +69,7 @@ function ensureTradeHistoryExists() {
     if (!fs.existsSync(CONFIG.TRADE_HISTORY_FILE)) {
         try {
             fs.writeFileSync(CONFIG.TRADE_HISTORY_FILE, JSON.stringify([], null, 2));
-            console.log('✅ Created trade_history.json');
-        } catch(e) {
-            console.error('⚠️ Could not create trade_history.json:', e.message);
-        }
+        } catch(e) {}
     }
 }
 ensureTradeHistoryExists();
@@ -67,29 +86,21 @@ try {
     if (fs.existsSync(CONFIG.TRADE_HISTORY_FILE)) {
         const data = fs.readFileSync(CONFIG.TRADE_HISTORY_FILE, 'utf8');
         tradeHistory = JSON.parse(data);
-        console.log(`✅ Loaded ${tradeHistory.length} past trades`);
     }
-} catch(e) {
-    console.error('⚠️ Could not load trade history:', e.message);
-}
+} catch(e) {}
 
 // ============================================
-// CORRELATION MATRIX
+// CORRELATION MATRIX (Simplified)
 // ============================================
 const CORRELATION_MATRIX = {
-    'EURUSD': { 'GBPUSD': 0.88, 'AUDUSD': 0.82, 'USDCHF': -0.85, 'USDJPY': -0.65 },
-    'GBPUSD': { 'EURUSD': 0.88, 'AUDUSD': 0.75, 'USDCHF': -0.78, 'USDJPY': -0.60 },
-    'AUDUSD': { 'EURUSD': 0.82, 'GBPUSD': 0.75, 'AUDCAD': 0.85, 'AUDJPY': 0.78 },
-    'USDCAD': { 'AUDUSD': -0.68, 'AUDCAD': 0.72, 'CADJPY': 0.65 },
-    'USDCHF': { 'EURUSD': -0.85, 'GBPUSD': -0.78, 'CHFJPY': 0.70 },
-    'USDJPY': { 'EURUSD': -0.65, 'GBPUSD': -0.60, 'AUDJPY': 0.78 },
-    'AUDCAD': { 'AUDUSD': 0.85, 'USDCAD': 0.72, 'AUDJPY': 0.75 },
-    'AUDJPY': { 'AUDUSD': 0.78, 'USDJPY': 0.78, 'AUDCAD': 0.75 },
-    'GBPCHF': { 'GBPUSD': 0.80, 'USDCHF': -0.78, 'EURCHF': 0.85 },
-    'AUDCHF': { 'AUDUSD': 0.72, 'USDCHF': -0.70, 'AUDJPY': 0.72 },
-    'EURCAD': { 'EURUSD': 0.88, 'USDCAD': -0.58, 'EURGBP': 0.75 },
-    'EURNZD': { 'EURUSD': 0.82, 'NZDUSD': -0.68, 'AUDNZD': 0.75 },
-    'GBPNZD': { 'GBPUSD': 0.80, 'NZDUSD': -0.65, 'EURNZD': 0.72 }
+    'EURUSD': { 'GBPUSD': 0.88, 'AUDUSD': 0.82, 'USDCHF': -0.85 },
+    'GBPUSD': { 'EURUSD': 0.88, 'AUDUSD': 0.75, 'USDCHF': -0.78 },
+    'AUDUSD': { 'EURUSD': 0.82, 'GBPUSD': 0.75, 'AUDCAD': 0.85 },
+    'USDCAD': { 'AUDUSD': -0.68, 'AUDCAD': 0.72 },
+    'USDCHF': { 'EURUSD': -0.85, 'GBPUSD': -0.78 },
+    'AUDCAD': { 'AUDUSD': 0.85, 'USDCAD': 0.72 },
+    'GBPCHF': { 'GBPUSD': 0.80, 'USDCHF': -0.78 },
+    'AUDCHF': { 'AUDUSD': 0.72, 'USDCHF': -0.70 }
 };
 
 function getCorrelation(pair1, pair2) {
@@ -101,13 +112,41 @@ function getCorrelation(pair1, pair2) {
 }
 
 // ============================================
+// REAL DATA FETCHER (YAHOO FINANCE)
+// ============================================
+async function fetchRealPriceData(pair) {
+    try {
+        const symbol = pairToYahooSymbol[pair];
+        if (!symbol) return null;
+        
+        const result = await yahooFinance.chart(symbol, {
+            period1: new Date(Date.now() - 24 * 60 * 60 * 1000),
+            interval: '5m',
+            includeAdjustedClose: false
+        });
+        
+        if (!result || !result.quotes || result.quotes.length < 50) return null;
+        
+        const candles = result.quotes.map(quote => ({
+            open: quote.open,
+            high: quote.high,
+            low: quote.low,
+            close: quote.close,
+            volume: quote.volume || 1000,
+            time: quote.date.getTime()
+        })).filter(c => c.open && c.close && c.high && c.low);
+        
+        return { values: candles };
+    } catch(e) {
+        return null;
+    }
+}
+
+// ============================================
 // TELEGRAM FUNCTIONS
 // ============================================
 async function sendTelegramMessage(message) {
-    if (!TELEGRAM_TOKEN || TELEGRAM_TOKEN === 'YOUR_BOT_TOKEN_HERE') {
-        console.log('⚠️ Telegram not configured. Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID');
-        return false;
-    }
+    if (!TELEGRAM_TOKEN) return false;
     
     const url = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`;
     const data = JSON.stringify({
@@ -117,24 +156,199 @@ async function sendTelegramMessage(message) {
     });
     
     return new Promise((resolve) => {
-        const req = https.request(url, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) }
-        }, (res) => {
-            let response = '';
-            res.on('data', chunk => response += chunk);
-            res.on('end', () => {
-                console.log('✅ Telegram message sent');
-                resolve(true);
-            });
+        const req = https.request(url, { method: 'POST', headers: { 'Content-Type': 'application/json' } }, (res) => {
+            res.on('end', () => resolve(true));
         });
-        req.on('error', (e) => { console.error('Telegram error:', e.message); resolve(false); });
+        req.on('error', () => resolve(false));
         req.write(data);
         req.end();
     });
 }
 
-// Poll for incoming Telegram messages (responds to /start)
+// Send signal to Telegram
+async function sendSignalToTelegram(analysis, pair) {
+    const arrow = analysis.signal === 'CALL' ? '📈' : '📉';
+    const emoji = analysis.confidence >= 90 ? '🏆' : analysis.confidence >= 78 ? '✅' : '⚠️';
+    
+    const message = `
+${emoji} <b>SIGNAL ALERT</b> ${emoji}
+
+<b>Pair:</b> ${pair}
+<b>Signal:</b> ${arrow} ${analysis.signal}
+<b>Confidence:</b> ${analysis.confidence}% ${analysis.intensity}
+<b>Strategy:</b> ${analysis.strategyUsed}
+
+📊 <b>Analysis:</b>
+• RSI: ${analysis.rsi} | ADX: ${analysis.adx}
+• Divergence: ${analysis.divergence || 'None'}
+• Volatility: ${analysis.volatilityPercent}%
+
+⏰ <b>Expiry:</b> ${analysis.expiry}m
+    `;
+    
+    await sendTelegramMessage(message);
+}
+
+// ============================================
+// SCAN ALL PAIRS (REAL DATA ONLY)
+// ============================================
+async function scanAllPairs(isManual = false) {
+    if (isManual) {
+        await sendTelegramMessage('🔍 <b>Manual scan initiated...</b>\n\nScanning all pairs for signals...');
+    }
+    
+    console.log(`\n🔍 SCANNING ${POCKET_OPTION_PAIRS.length} PAIRS...`);
+    
+    let signalsFound = 0;
+    
+    for (const pair of POCKET_OPTION_PAIRS) {
+        try {
+            const priceData = await fetchRealPriceData(pair);
+            if (!priceData || !priceData.values || priceData.values.length < 50) continue;
+            
+            const config = { pairName: pair };
+            const analysis = await analyzeSignal(priceData, config, '15m', null, null, openPositions);
+            
+            if (analysis && analysis.signal && analysis.confidence >= CONFIG.MIN_CONFIDENCE_TO_TRADE) {
+                const lastSignalTime = lastSignals[pair] || 0;
+                const timeSinceLastSignal = Date.now() - lastSignalTime;
+                
+                // 30 minute cooldown to prevent spam
+                if (timeSinceLastSignal > 1800000 || isManual) {
+                    signalsFound++;
+                    lastSignals[pair] = Date.now();
+                    await sendSignalToTelegram(analysis, pair);
+                    console.log(`   ✅ ${pair}: ${analysis.signal} @ ${analysis.confidence}%`);
+                }
+            }
+        } catch(e) {
+            // Silent fail for individual pairs
+        }
+        
+        // Small delay to avoid rate limiting
+        await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    
+    if (isManual) {
+        await sendTelegramMessage(`✅ <b>Manual scan complete</b>\n\nFound ${signalsFound} signal(s).`);
+    }
+    
+    return signalsFound;
+}
+
+// ============================================
+// START AUTO-SCANNING
+// ============================================
+function startAutoScan() {
+    if (scanIntervalId) {
+        sendTelegramMessage('⚠️ Auto-scan is already running.');
+        return;
+    }
+    
+    isScanning = true;
+    scanIntervalId = setInterval(async () => {
+        if (isScanning) {
+            await scanAllPairs(false);
+        }
+    }, CONFIG.SCAN_INTERVAL_MS);
+    
+    sendTelegramMessage('✅ <b>Auto-scan ENABLED</b>\n\nBot will scan every minute and send signals automatically.');
+    console.log('Auto-scan started');
+}
+
+// ============================================
+// STOP AUTO-SCANNING
+// ============================================
+function stopAutoScan() {
+    if (scanIntervalId) {
+        clearInterval(scanIntervalId);
+        scanIntervalId = null;
+    }
+    
+    isScanning = false;
+    sendTelegramMessage('⏸️ <b>Auto-scan DISABLED</b>\n\nBot will no longer scan automatically. Use /scan to manual scan.');
+    console.log('Auto-scan stopped');
+}
+
+// ============================================
+// TELEGRAM COMMAND HANDLER
+// ============================================
+async function handleTelegramCommand(text) {
+    const cmd = text.toLowerCase();
+    
+    if (cmd === '/start') {
+        const welcome = `
+🚀 <b>OmniPocket Trading Bot</b>
+
+<b>Commands:</b>
+/start - Show this menu
+/status - Show bot status
+/scan - Manual scan (one time)
+/startscan - Enable auto-scanning
+/stopscan - Disable auto-scanning
+/help - Show help
+
+<b>Current Status:</b>
+Auto-scan: ${isScanning ? '🟢 ACTIVE' : '🔴 STOPPED'}
+Pairs monitored: ${POCKET_OPTION_PAIRS.length}
+Min confidence: ${CONFIG.MIN_CONFIDENCE_TO_TRADE}%
+        `;
+        await sendTelegramMessage(welcome);
+    }
+    else if (cmd === '/status') {
+        const stats = getStatistics();
+        const status = `
+📊 <b>Bot Status</b>
+
+• Auto-scan: ${isScanning ? '🟢 ACTIVE' : '🔴 STOPPED'}
+• Win Rate: ${stats.winRate}%
+• Total Trades: ${stats.totalTrades}
+• Balance: $${stats.currentBalance}
+• Return: ${stats.totalReturn}%
+• Pairs: ${POCKET_OPTION_PAIRS.length}
+        `;
+        await sendTelegramMessage(status);
+    }
+    else if (cmd === '/scan') {
+        await scanAllPairs(true);
+    }
+    else if (cmd === '/startscan') {
+        startAutoScan();
+    }
+    else if (cmd === '/stopscan') {
+        stopAutoScan();
+    }
+    else if (cmd === '/help') {
+        const help = `
+📖 <b>Help Guide</b>
+
+<b>/start</b> - Show main menu
+<b>/status</b> - Show bot performance
+<b>/scan</b> - Manual scan (instant)
+<b>/startscan</b> - Enable auto-scanning
+<b>/stopscan</b> - Disable auto-scanning
+
+<b>How it works:</b>
+1. Bot scans ${POCKET_OPTION_PAIRS.length} currency pairs
+2. When high-confidence signal found → you receive alert
+3. You decide to trade or skip
+
+<b>Signal Types:</b>
+📈 CALL - Price expected UP
+📉 PUT - Price expected DOWN
+
+<b>Confidence Levels:</b>
+🏆 90%+ - LEGENDARY
+✅ 78%+ - STRONG
+⚠️ 70%+ - MODERATE
+        `;
+        await sendTelegramMessage(help);
+    }
+}
+
+// ============================================
+// TELEGRAM POLLING
+// ============================================
 async function pollTelegram() {
     if (!TELEGRAM_TOKEN) return;
     
@@ -153,13 +367,8 @@ async function pollTelegram() {
                         if (json.ok && json.result) {
                             for (const update of json.result) {
                                 lastUpdateId = update.update_id;
-                                if (update.message && update.message.text === '/start') {
-                                    const welcome = `🚀 <b>OmniPocket Bot ACTIVE</b>\n\n✅ Bot is running\n✅ Monitoring ${POCKET_OPTION_PAIRS.length} pairs\n✅ High-confidence signals will appear here\n\n⚠️ <i>Trade with 1-2% risk per trade</i>`;
-                                    sendTelegramMessage(welcome);
-                                } else if (update.message && update.message.text === '/status') {
-                                    const stats = getStatistics();
-                                    const status = `📊 <b>Bot Status</b>\n\n• Win Rate: ${stats.winRate}%\n• Total Trades: ${stats.totalTrades}\n• Balance: $${stats.currentBalance}\n• Return: ${stats.totalReturn}%\n• Pairs: ${POCKET_OPTION_PAIRS.length}`;
-                                    sendTelegramMessage(status);
+                                if (update.message && update.message.text) {
+                                    handleTelegramCommand(update.message.text);
                                 }
                             }
                         }
@@ -174,37 +383,10 @@ async function pollTelegram() {
     }
     
     poll();
-    console.log('📡 Telegram polling active');
-}
-
-// Send signal to Telegram
-async function sendSignalToTelegram(signal, pair) {
-    const arrow = signal.signal === 'CALL' ? '📈' : '📉';
-    const emoji = signal.confidence >= 90 ? '🏆' : signal.confidence >= 78 ? '✅' : '⚠️';
-    
-    const message = `
-${emoji} <b>SIGNAL ALERT</b> ${emoji}
-
-<b>Pair:</b> ${pair}
-<b>Signal:</b> ${arrow} ${signal.signal} (${signal.signal === 'CALL' ? 'BUY' : 'SELL'})
-<b>Confidence:</b> ${signal.confidence}% ${signal.intensity}
-<b>Strategy:</b> ${signal.strategyUsed}
-
-📊 <b>Analysis:</b>
-• RSI: ${signal.rsi} | ADX: ${signal.adx}
-• Divergence: ${signal.divergence || 'None'}
-• Volatility: ${signal.volatilityPercent}%
-
-⏰ <b>Expiry:</b> ${signal.expiry}m
-
-<i>Risk: 1.5% of balance</i>
-    `;
-    
-    await sendTelegramMessage(message);
 }
 
 // ============================================
-// POSITION SIZING (Kelly Criterion)
+// POSITION SIZING
 // ============================================
 function calculatePositionSize(confidence, volatilityPercent, accountBalance) {
     try {
@@ -215,13 +397,7 @@ function calculatePositionSize(confidence, volatilityPercent, accountBalance) {
         let kellyFraction = (winProb * payoutOdds - lossProb) / payoutOdds;
         let positionFraction = Math.max(0, kellyFraction * 0.5);
         
-        const volatilityFactor = Math.min(1.5, Math.max(0.5, 0.15 / (volatilityPercent || 0.15)));
-        positionFraction = positionFraction * volatilityFactor;
-        
-        positionFraction = Math.min(
-            CONFIG.MAX_POSITION_SIZE_PERCENT / 100,
-            Math.max(CONFIG.MIN_POSITION_SIZE_PERCENT / 100, positionFraction)
-        );
+        positionFraction = Math.min(0.02, Math.max(0.005, positionFraction));
         
         return {
             fraction: positionFraction,
@@ -231,200 +407,6 @@ function calculatePositionSize(confidence, volatilityPercent, accountBalance) {
     } catch(e) {
         return { fraction: 0.01, amount: accountBalance * 0.01, kellyFraction: 0 };
     }
-}
-
-// ============================================
-// CORRELATION CHECK
-// ============================================
-function checkCorrelationLimit(pair, signal, newPositionAmount) {
-    try {
-        let totalExposure = newPositionAmount;
-        
-        for (const pos of openPositions) {
-            const correlation = getCorrelation(pair, pos.pair);
-            const isSameDirection = (signal === pos.signal);
-            
-            if (Math.abs(correlation) > 0.5 && isSameDirection) {
-                totalExposure += pos.amount;
-            }
-        }
-        
-        const maxExposure = accountBalance * CONFIG.MAX_CORRELATION_EXPOSURE;
-        
-        if (totalExposure > maxExposure) {
-            return { allowed: false, reason: `Correlation exposure exceeds limit` };
-        }
-        
-        return { allowed: true, reason: 'Correlation OK' };
-    } catch(e) {
-        return { allowed: true, reason: 'Correlation check failed' };
-    }
-}
-
-// ============================================
-// EXECUTE TRADE
-// ============================================
-async function executeTrade(signal, confidence, positionAmount, pair, expiry, strategyUsed) {
-    console.log(`\n🔹🔹🔹 EXECUTING TRADE 🔹🔹🔹`);
-    console.log(`   Pair: ${pair}`);
-    console.log(`   Signal: ${signal === 'CALL' ? '📈 CALL (BUY)' : '📉 PUT (SELL)'}`);
-    console.log(`   Confidence: ${confidence}%`);
-    console.log(`   Amount: $${positionAmount.toFixed(2)}`);
-    console.log(`   Expiry: ${expiry}m`);
-    console.log(`   Strategy: ${strategyUsed}`);
-    
-    const orderId = `ORDER_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
-    
-    const position = {
-        orderId, pair, signal, amount: positionAmount,
-        entryTime: Date.now(), expiryMinutes: expiry,
-        confidence, strategy: strategyUsed, status: 'OPEN'
-    };
-    
-    openPositions.push(position);
-    return { success: true, orderId, position };
-}
-
-// ============================================
-// CLOSE TRADE
-// ============================================
-async function closeTrade(orderId, wasWin, profitPercent) {
-    try {
-        const position = openPositions.find(p => p.orderId === orderId);
-        if (!position) return { success: false };
-        
-        const profitAmount = wasWin ? position.amount * (CONFIG.BROKER_PAYOUT_PERCENT / 100) : -position.amount;
-        accountBalance += profitAmount;
-        
-        try {
-            recordTradeOutcome(position.strategy, position.confidence, wasWin, profitPercent, position.pair, `${position.expiryMinutes}m`);
-        } catch(e) {}
-        
-        tradeHistory.push({ ...position, closeTime: Date.now(), wasWin, profitAmount, profitPercent, endingBalance: accountBalance });
-        openPositions = openPositions.filter(p => p.orderId !== orderId);
-        
-        console.log(`\n🔸🔸🔸 TRADE CLOSED 🔸🔸🔸`);
-        console.log(`   Result: ${wasWin ? '✅ WIN' : '❌ LOSS'}`);
-        console.log(`   Profit: $${profitAmount.toFixed(2)}`);
-        console.log(`   New Balance: $${accountBalance.toFixed(2)}`);
-        
-        if (CONFIG.SAVE_TRADES_TO_FILE) {
-            fs.writeFileSync(CONFIG.TRADE_HISTORY_FILE, JSON.stringify(tradeHistory, null, 2));
-        }
-        
-        return { success: true, profitAmount, newBalance: accountBalance };
-    } catch(e) {
-        return { success: false };
-    }
-}
-
-// ============================================
-// CHECK EXPIRED POSITIONS
-// ============================================
-function checkExpiredPositions() {
-    try {
-        const now = Date.now();
-        const expiredPositions = openPositions.filter(pos => (now - pos.entryTime) >= (pos.expiryMinutes * 60 * 1000));
-        
-        for (const pos of expiredPositions) {
-            const wasWin = Math.random() * 100 < pos.confidence;
-            const profitPercent = wasWin ? CONFIG.BROKER_PAYOUT_PERCENT : -100;
-            closeTrade(pos.orderId, wasWin, profitPercent);
-        }
-    } catch(e) {}
-}
-
-// ============================================
-// DEMO PRICE DATA GENERATOR
-// ============================================
-function generateDemoPriceData(basePrice = 1.00000, volatility = 0.0003) {
-    const candles = [];
-    let price = basePrice;
-    
-    for (let i = 0; i < 200; i++) {
-        const change = (Math.random() - 0.5) * volatility;
-        price += change;
-        const open = price;
-        const close = price + (Math.random() - 0.5) * volatility * 0.6;
-        const high = Math.max(open, close) + Math.random() * volatility * 0.4;
-        const low = Math.min(open, close) - Math.random() * volatility * 0.4;
-        
-        candles.push({
-            open, high, low, close,
-            volume: 1000 + Math.random() * 2000,
-            time: Date.now() - (200 - i) * 60 * 1000
-        });
-    }
-    
-    return { values: candles };
-}
-
-// ============================================
-// SCAN ALL PAIRS FOR SIGNALS
-// ============================================
-async function scanAllPairs() {
-    console.log(`\n🔍 SCANNING ${POCKET_OPTION_PAIRS.length} PAIRS...`);
-    console.log(`   Time: ${new Date().toLocaleTimeString()}`);
-    
-    const signals = [];
-    
-    // Base prices for different pairs
-    const basePrices = {
-        'EURUSD': 1.08500, 'GBPUSD': 1.26500, 'AUDUSD': 0.66500, 'USDJPY': 148.50,
-        'USDCAD': 1.34500, 'USDCHF': 0.88500, 'NZDUSD': 0.60500, 'AUDCAD': 0.89500,
-        'EURGBP': 0.85500, 'EURJPY': 160.50, 'GBPJPY': 187.50, 'AUDJPY': 98.50,
-        'AUDCHF': 0.58800, 'GBPCHF': 1.11800, 'EURCAD': 1.46000, 'EURNZD': 1.78000,
-        'GBPNZD': 2.05000
-    };
-    
-    for (const pair of POCKET_OPTION_PAIRS) {
-        try {
-            const basePrice = basePrices[pair] || 1.00000;
-            const volatility = 0.0003 + Math.random() * 0.0004;
-            const priceData = generateDemoPriceData(basePrice, volatility);
-            
-            const config = { pairName: pair };
-            const analysis = await analyzeSignal(priceData, config, '15m', null, null, openPositions);
-            
-            if (analysis && analysis.signal && analysis.confidence >= CONFIG.MIN_CONFIDENCE_TO_TRADE) {
-                const lastSignalTime = lastSignals[pair] || 0;
-                const timeSinceLastSignal = Date.now() - lastSignalTime;
-                
-                if (timeSinceLastSignal > 300000) { // 5 minute cooldown
-                    signals.push({
-                        pair,
-                        signal: analysis.signal,
-                        confidence: analysis.confidence,
-                        intensity: analysis.intensity,
-                        strategy: analysis.strategyUsed,
-                        rsi: analysis.rsi,
-                        adx: analysis.adx,
-                        divergence: analysis.divergence,
-                        volatilityPercent: analysis.volatilityPercent,
-                        expiry: analysis.expiry,
-                        timestamp: Date.now()
-                    });
-                    lastSignals[pair] = Date.now();
-                    
-                    // Send to Telegram
-                    await sendSignalToTelegram(analysis, pair);
-                }
-            }
-        } catch(e) {
-            console.error(`Error scanning ${pair}:`, e.message);
-        }
-    }
-    
-    if (signals.length === 0) {
-        console.log(`   No signals found.`);
-    } else {
-        console.log(`\n📊 FOUND ${signals.length} SIGNAL(S):`);
-        for (const sig of signals) {
-            console.log(`   ${sig.pair}: ${sig.signal} @ ${sig.confidence}% (${sig.strategy})`);
-        }
-    }
-    
-    return signals;
 }
 
 // ============================================
@@ -458,7 +440,7 @@ function getStatistics() {
 }
 
 // ============================================
-// MAIN TRADING LOOP
+// TRADING LOOP
 // ============================================
 async function tradingLoop(priceData, config, tf, higherPriceData = null, lowerPriceData = null) {
     if (!priceData || !priceData.values) {
@@ -466,36 +448,42 @@ async function tradingLoop(priceData, config, tf, higherPriceData = null, lowerP
     }
     
     try {
-        checkExpiredPositions();
-        
         const analysis = await analyzeSignal(priceData, config, tf, higherPriceData, lowerPriceData, openPositions);
         
-        if (!analysis || !analysis.signal) {
-            return { success: false, reason: 'No signal' };
-        }
-        
-        if (analysis.confidence < CONFIG.MIN_CONFIDENCE_TO_TRADE) {
-            return { success: false, reason: 'Low confidence' };
-        }
-        
-        if (analysis.shouldTrade && analysis.shouldTrade.includes('Skip')) {
-            return { success: false, reason: 'Analyzer skip' };
+        if (!analysis || !analysis.signal || analysis.confidence < CONFIG.MIN_CONFIDENCE_TO_TRADE) {
+            return { success: false, reason: 'No valid signal' };
         }
         
         const positionSize = calculatePositionSize(analysis.confidence, parseFloat(analysis.volatilityPercent) || 0.15, accountBalance);
-        const correlationCheck = checkCorrelationLimit(config.pairName, analysis.signal, positionSize.amount);
         
-        if (!correlationCheck.allowed) {
-            return { success: false, reason: correlationCheck.reason };
-        }
-        
-        const trade = await executeTrade(analysis.signal, analysis.confidence, positionSize.amount, config.pairName, analysis.expiry || 15, analysis.strategyUsed);
-        
-        return { success: true, trade, analysis };
-        
+        return { success: true, analysis, positionSize };
     } catch(error) {
         return { success: false, reason: error.message };
     }
+}
+
+// ============================================
+// CLOSE TRADE
+// ============================================
+async function closeTrade(orderId, wasWin, profitPercent) {
+    const position = openPositions.find(p => p.orderId === orderId);
+    if (!position) return { success: false };
+    
+    const profitAmount = wasWin ? position.amount * (CONFIG.BROKER_PAYOUT_PERCENT / 100) : -position.amount;
+    accountBalance += profitAmount;
+    
+    try {
+        recordTradeOutcome(position.strategy, position.confidence, wasWin, profitPercent, position.pair, `${position.expiryMinutes}m`);
+    } catch(e) {}
+    
+    tradeHistory.push({ ...position, closeTime: Date.now(), wasWin, profitAmount });
+    openPositions = openPositions.filter(p => p.orderId !== orderId);
+    
+    if (CONFIG.SAVE_TRADES_TO_FILE) {
+        fs.writeFileSync(CONFIG.TRADE_HISTORY_FILE, JSON.stringify(tradeHistory, null, 2));
+    }
+    
+    return { success: true, profitAmount, newBalance: accountBalance };
 }
 
 // ============================================
@@ -507,51 +495,21 @@ if (require.main === module) {
     console.log('========================================\n');
     
     console.log(`📊 CONFIGURATION:`);
-    console.log(`   Pairs to scan: ${POCKET_OPTION_PAIRS.length}`);
-    console.log(`   Confidence threshold: ${CONFIG.MIN_CONFIDENCE_TO_TRADE}%`);
-    console.log(`   Scan interval: ${CONFIG.SCAN_INTERVAL_MS / 1000} seconds\n`);
+    console.log(`   Pairs: ${POCKET_OPTION_PAIRS.length}`);
+    console.log(`   Min Confidence: ${CONFIG.MIN_CONFIDENCE_TO_TRADE}%`);
+    console.log(`   Scan Interval: ${CONFIG.SCAN_INTERVAL_MS / 1000}s\n`);
     
-    // Start Telegram polling
     if (TELEGRAM_TOKEN && TELEGRAM_CHAT_ID) {
         console.log('🤖 Telegram Bot configured');
         pollTelegram();
-        sendTelegramMessage('🚀 OmniPocket Bot is NOW ACTIVE!\n\n✅ Monitoring ' + POCKET_OPTION_PAIRS.length + ' pairs\n✅ Signals will appear here automatically');
+        
+        // Start auto-scanning by default
+        startAutoScan();
+        
+        sendTelegramMessage('🚀 <b>OmniPocket Bot is ACTIVE!</b>\n\n✅ Using REAL Yahoo Finance data\n✅ Auto-scan ENABLED\n✅ Use /stopscan to disable, /startscan to enable\n✅ Use /scan for manual scan');
     } else {
         console.log('⚠️ Telegram not configured. Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID');
-        console.log('   Signals will only appear in Railway logs.\n');
     }
-    
-    // Start scanning
-    let iteration = 0;
-    
-    async function runScan() {
-        iteration++;
-        console.log(`\n[${new Date().toLocaleTimeString()}] 🔍 Scan #${iteration}`);
-        await scanAllPairs();
-        
-        if (iteration % 5 === 0) {
-            const stats = getStatistics();
-            console.log(`\n📊 STATISTICS UPDATE:`);
-            console.log(`   Win Rate: ${stats.winRate}% (${stats.winningTrades}/${stats.totalTrades})`);
-            console.log(`   Balance: $${stats.currentBalance}`);
-            console.log(`   Return: ${stats.totalReturn}%`);
-        }
-    }
-    
-    // Run immediately and then on interval
-    runScan();
-    const intervalId = setInterval(runScan, CONFIG.SCAN_INTERVAL_MS);
-    
-    console.log(`\n⏰ Scanning every ${CONFIG.SCAN_INTERVAL_MS / 1000} seconds...`);
-    console.log('   Press Ctrl+C to stop\n');
-    
-    process.on('SIGINT', () => {
-        console.log('\n\n🛑 Shutting down...');
-        clearInterval(intervalId);
-        console.log('📊 Final Statistics:');
-        console.log(getStatistics());
-        process.exit(0);
-    });
 }
 
 // ============================================
@@ -562,6 +520,8 @@ module.exports = {
     scanAllPairs,
     getStatistics, 
     closeTrade, 
+    startAutoScan,
+    stopAutoScan,
     openPositions, 
     accountBalance,
     CONFIG
