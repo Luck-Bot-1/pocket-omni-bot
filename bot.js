@@ -1,10 +1,11 @@
 // ============================================
 // LEGENDARY TRADING BOT - ORCHESTRATOR
-// Version: 10.0 ULTIMATE - 50+ PAIRS REAL-TIME
+// Version: FINAL - WITH TELEGRAM INTEGRATION
 // ============================================
 
 const { analyzeSignal, recordTradeOutcome } = require('./analyzer.js');
 const fs = require('fs');
+const https = require('https');
 
 // ============================================
 // CONFIGURATION
@@ -19,24 +20,25 @@ const CONFIG = {
     BROKER_PAYOUT_PERCENT: 78,
     SAVE_TRADES_TO_FILE: true,
     TRADE_HISTORY_FILE: './trade_history.json',
-    DEMO_MODE: true,
-    DEMO_INTERVAL_MS: 60000,
-    // NEW: Multi-pair scanning
-    SCAN_ALL_PAIRS: true,
-    PAIRS_TO_SCAN: [
-        // Major Pairs (12)
-        'EURUSD', 'GBPUSD', 'AUDUSD', 'NZDUSD', 'USDCAD', 'USDCHF', 'USDJPY',
-        // Cross Pairs (16)
-        'AUDCAD', 'AUDJPY', 'AUDCHF', 'CADJPY', 'CADCHF', 'CHFJPY',
-        'EURGBP', 'EURCHF', 'EURJPY', 'GBPJPY', 'GBPCHF', 'NZDCAD', 'NZDJPY',
-        // Exotic Pairs (12)
-        'USDTRY', 'USDMXN', 'USDZAR', 'USDSGD', 'USDHKD',
-        'EURTRY', 'GBPTRY', 'AUDTRY',
-        // Additional Majors (10+)
-        'EURCAD', 'GBPCAD', 'AUDNZD', 'EURNZD', 'GBPNZD',
-        'CADCHF', 'EURSEK', 'USDNOK', 'USDDKK', 'USDSEK'
-    ]
+    SCAN_INTERVAL_MS: 60000  // Scan every minute
 };
+
+// ============================================
+// TELEGRAM CONFIGURATION
+// ============================================
+const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
+
+// ============================================
+// POCKET OPTION SUPPORTED PAIRS
+// ============================================
+const POCKET_OPTION_PAIRS = [
+    'EURUSD', 'GBPUSD', 'AUDUSD', 'NZDUSD', 'USDCAD', 'USDCHF', 'USDJPY',
+    'AUDCAD', 'AUDJPY', 'CADJPY', 'CHFJPY', 'EURAUD', 'EURCAD', 'EURCHF',
+    'EURGBP', 'EURJPY', 'EURNZD', 'GBPAUD', 'GBPCAD', 'GBPCHF', 'GBPJPY',
+    'GBPNZD', 'NZDCAD', 'NZDJPY', 'USDCNH', 'USDMXN', 'USDTRY', 'USDZAR',
+    'AUDNZD', 'CADCHF', 'EURTRY', 'GBPTRY', 'AUDCHF'
+];
 
 // ============================================
 // SAFE FILE INITIALIZATION
@@ -59,7 +61,7 @@ ensureTradeHistoryExists();
 let accountBalance = 10000;
 let openPositions = [];
 let tradeHistory = [];
-let lastSignals = {}; // Track last signal per pair to avoid spam
+let lastSignals = {};
 
 try {
     if (fs.existsSync(CONFIG.TRADE_HISTORY_FILE)) {
@@ -72,49 +74,22 @@ try {
 }
 
 // ============================================
-// EXPANDED CORRELATION MATRIX - 50+ PAIRS
+// CORRELATION MATRIX
 // ============================================
 const CORRELATION_MATRIX = {
-    // Major Pairs
-    'EURUSD': { 'GBPUSD': 0.88, 'AUDUSD': 0.82, 'NZDUSD': 0.78, 'USDCAD': -0.55, 'USDCHF': -0.85, 'USDJPY': -0.65, 'EURGBP': 0.92, 'EURCHF': 0.88, 'EURJPY': 0.85 },
-    'GBPUSD': { 'EURUSD': 0.88, 'AUDUSD': 0.75, 'NZDUSD': 0.72, 'USDCAD': -0.52, 'USDCHF': -0.78, 'USDJPY': -0.60, 'EURGBP': 0.88, 'GBPJPY': 0.82, 'GBPCHF': 0.80 },
-    'AUDUSD': { 'EURUSD': 0.82, 'GBPUSD': 0.75, 'NZDUSD': 0.85, 'USDCAD': -0.68, 'AUDCAD': 0.85, 'AUDJPY': 0.78, 'AUDCHF': 0.72, 'AUDNZD': 0.88 },
-    'NZDUSD': { 'EURUSD': 0.78, 'GBPUSD': 0.72, 'AUDUSD': 0.85, 'USDCAD': -0.62, 'NZDCAD': 0.70, 'NZDJPY': 0.75, 'AUDNZD': 0.85 },
-    'USDCAD': { 'EURUSD': -0.55, 'GBPUSD': -0.52, 'AUDUSD': -0.68, 'NZDUSD': -0.62, 'AUDCAD': 0.72, 'CADJPY': 0.65, 'CADCHF': 0.60, 'EURCAD': 0.58 },
-    'USDCHF': { 'EURUSD': -0.85, 'GBPUSD': -0.78, 'AUDUSD': -0.72, 'NZDUSD': -0.68, 'USDJPY': 0.55, 'CHFJPY': 0.70, 'EURCHF': 0.85, 'GBPCHF': 0.80 },
-    'USDJPY': { 'EURUSD': -0.65, 'GBPUSD': -0.60, 'AUDUSD': -0.58, 'NZDUSD': -0.55, 'USDCHF': 0.55, 'CADJPY': 0.62, 'AUDJPY': 0.78, 'NZDJPY': 0.75, 'EURJPY': 0.82, 'GBPJPY': 0.80 },
-    
-    // Cross Pairs
-    'AUDCAD': { 'AUDUSD': 0.85, 'USDCAD': 0.72, 'AUDJPY': 0.75, 'CADJPY': 0.68, 'AUDCHF': 0.70, 'NZDCAD': 0.68 },
-    'AUDJPY': { 'AUDUSD': 0.78, 'USDJPY': 0.78, 'AUDCAD': 0.75, 'AUDCHF': 0.72, 'CADJPY': 0.70, 'NZDJPY': 0.72 },
-    'AUDCHF': { 'AUDUSD': 0.72, 'USDCHF': -0.70, 'AUDJPY': 0.72, 'AUDCAD': 0.70, 'CHFJPY': 0.68 },
-    'CADJPY': { 'USDCAD': 0.65, 'USDJPY': 0.62, 'AUDCAD': 0.68, 'AUDJPY': 0.70, 'CADCHF': 0.60 },
-    'CHFJPY': { 'USDCHF': 0.70, 'USDJPY': 0.65, 'AUDCHF': 0.68, 'CADJPY': 0.62 },
-    'EURGBP': { 'EURUSD': 0.92, 'GBPUSD': 0.88, 'EURCHF': 0.85, 'EURJPY': 0.82, 'GBPJPY': 0.85 },
-    'EURCHF': { 'EURUSD': 0.88, 'USDCHF': -0.85, 'EURGBP': 0.85, 'EURJPY': 0.80, 'GBPCHF': 0.85 },
-    'EURJPY': { 'EURUSD': 0.85, 'USDJPY': -0.80, 'EURGBP': 0.82, 'EURCHF': 0.80, 'GBPJPY': 0.85 },
-    'GBPJPY': { 'GBPUSD': 0.82, 'USDJPY': -0.78, 'GBPCHF': 0.80, 'EURJPY': 0.85, 'EURGBP': 0.85 },
-    'GBPCHF': { 'GBPUSD': 0.80, 'USDCHF': -0.78, 'GBPJPY': 0.80, 'EURCHF': 0.85 },
-    'NZDCAD': { 'NZDUSD': 0.70, 'USDCAD': -0.62, 'AUDCAD': 0.68, 'NZDJPY': 0.65, 'AUDNZD': 0.72 },
-    'NZDJPY': { 'NZDUSD': 0.75, 'USDJPY': -0.55, 'AUDJPY': 0.72, 'NZDCAD': 0.65 },
-    'AUDNZD': { 'AUDUSD': 0.88, 'NZDUSD': 0.85, 'AUDCAD': 0.70, 'NZDCAD': 0.72 },
-    'EURCAD': { 'EURUSD': 0.88, 'USDCAD': -0.58, 'EURGBP': 0.75, 'EURJPY': 0.70 },
-    'GBPCAD': { 'GBPUSD': 0.85, 'USDCAD': -0.55, 'GBPJPY': 0.72, 'EURCAD': 0.80 },
-    'EURNZD': { 'EURUSD': 0.82, 'NZDUSD': -0.68, 'EURGBP': 0.70, 'AUDNZD': 0.75 },
-    'GBPNZD': { 'GBPUSD': 0.80, 'NZDUSD': -0.65, 'GBPJPY': 0.68, 'EURNZD': 0.72 },
-    
-    // Exotic Pairs (simplified correlations)
-    'USDTRY': { 'EURUSD': -0.45, 'USDJPY': 0.35, 'USDCAD': 0.30, 'EURTRY': 0.85 },
-    'USDMXN': { 'EURUSD': -0.40, 'USDCAD': 0.55, 'USDTRY': 0.25 },
-    'USDZAR': { 'EURUSD': -0.42, 'AUDUSD': -0.38, 'USDCAD': 0.35 },
-    'USDSGD': { 'EURUSD': -0.48, 'USDJPY': 0.42, 'AUDUSD': -0.35 },
-    'USDHKD': { 'EURUSD': -0.25, 'USDJPY': 0.20, 'USDCAD': 0.15 },
-    'EURTRY': { 'EURUSD': 0.55, 'USDTRY': 0.85, 'EURGBP': 0.45 },
-    'GBPTRY': { 'GBPUSD': 0.50, 'USDTRY': 0.80, 'EURTRY': 0.75 },
-    'AUDTRY': { 'AUDUSD': 0.48, 'USDTRY': 0.78, 'EURTRY': 0.70 },
-    'USDNOK': { 'EURUSD': -0.50, 'USDJPY': 0.30, 'USDCAD': 0.40 },
-    'USDDKK': { 'EURUSD': -0.55, 'USDJPY': 0.28, 'USDCAD': 0.35 },
-    'USDSEK': { 'EURUSD': -0.52, 'USDJPY': 0.32, 'USDCAD': 0.38 }
+    'EURUSD': { 'GBPUSD': 0.88, 'AUDUSD': 0.82, 'USDCHF': -0.85, 'USDJPY': -0.65 },
+    'GBPUSD': { 'EURUSD': 0.88, 'AUDUSD': 0.75, 'USDCHF': -0.78, 'USDJPY': -0.60 },
+    'AUDUSD': { 'EURUSD': 0.82, 'GBPUSD': 0.75, 'AUDCAD': 0.85, 'AUDJPY': 0.78 },
+    'USDCAD': { 'AUDUSD': -0.68, 'AUDCAD': 0.72, 'CADJPY': 0.65 },
+    'USDCHF': { 'EURUSD': -0.85, 'GBPUSD': -0.78, 'CHFJPY': 0.70 },
+    'USDJPY': { 'EURUSD': -0.65, 'GBPUSD': -0.60, 'AUDJPY': 0.78 },
+    'AUDCAD': { 'AUDUSD': 0.85, 'USDCAD': 0.72, 'AUDJPY': 0.75 },
+    'AUDJPY': { 'AUDUSD': 0.78, 'USDJPY': 0.78, 'AUDCAD': 0.75 },
+    'GBPCHF': { 'GBPUSD': 0.80, 'USDCHF': -0.78, 'EURCHF': 0.85 },
+    'AUDCHF': { 'AUDUSD': 0.72, 'USDCHF': -0.70, 'AUDJPY': 0.72 },
+    'EURCAD': { 'EURUSD': 0.88, 'USDCAD': -0.58, 'EURGBP': 0.75 },
+    'EURNZD': { 'EURUSD': 0.82, 'NZDUSD': -0.68, 'AUDNZD': 0.75 },
+    'GBPNZD': { 'GBPUSD': 0.80, 'NZDUSD': -0.65, 'EURNZD': 0.72 }
 };
 
 function getCorrelation(pair1, pair2) {
@@ -123,6 +98,109 @@ function getCorrelation(pair1, pair2) {
     } catch(e) {
         return 0;
     }
+}
+
+// ============================================
+// TELEGRAM FUNCTIONS
+// ============================================
+async function sendTelegramMessage(message) {
+    if (!TELEGRAM_TOKEN || TELEGRAM_TOKEN === 'YOUR_BOT_TOKEN_HERE') {
+        console.log('⚠️ Telegram not configured. Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID');
+        return false;
+    }
+    
+    const url = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`;
+    const data = JSON.stringify({
+        chat_id: TELEGRAM_CHAT_ID,
+        text: message,
+        parse_mode: 'HTML'
+    });
+    
+    return new Promise((resolve) => {
+        const req = https.request(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) }
+        }, (res) => {
+            let response = '';
+            res.on('data', chunk => response += chunk);
+            res.on('end', () => {
+                console.log('✅ Telegram message sent');
+                resolve(true);
+            });
+        });
+        req.on('error', (e) => { console.error('Telegram error:', e.message); resolve(false); });
+        req.write(data);
+        req.end();
+    });
+}
+
+// Poll for incoming Telegram messages (responds to /start)
+async function pollTelegram() {
+    if (!TELEGRAM_TOKEN) return;
+    
+    let lastUpdateId = 0;
+    
+    async function poll() {
+        try {
+            const url = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/getUpdates?offset=${lastUpdateId + 1}&timeout=30`;
+            
+            const req = https.get(url, (res) => {
+                let data = '';
+                res.on('data', chunk => data += chunk);
+                res.on('end', () => {
+                    try {
+                        const json = JSON.parse(data);
+                        if (json.ok && json.result) {
+                            for (const update of json.result) {
+                                lastUpdateId = update.update_id;
+                                if (update.message && update.message.text === '/start') {
+                                    const welcome = `🚀 <b>OmniPocket Bot ACTIVE</b>\n\n✅ Bot is running\n✅ Monitoring ${POCKET_OPTION_PAIRS.length} pairs\n✅ High-confidence signals will appear here\n\n⚠️ <i>Trade with 1-2% risk per trade</i>`;
+                                    sendTelegramMessage(welcome);
+                                } else if (update.message && update.message.text === '/status') {
+                                    const stats = getStatistics();
+                                    const status = `📊 <b>Bot Status</b>\n\n• Win Rate: ${stats.winRate}%\n• Total Trades: ${stats.totalTrades}\n• Balance: $${stats.currentBalance}\n• Return: ${stats.totalReturn}%\n• Pairs: ${POCKET_OPTION_PAIRS.length}`;
+                                    sendTelegramMessage(status);
+                                }
+                            }
+                        }
+                    } catch(e) {}
+                });
+            });
+            req.on('error', () => {});
+            req.end();
+        } catch(e) {}
+        
+        setTimeout(poll, 2000);
+    }
+    
+    poll();
+    console.log('📡 Telegram polling active');
+}
+
+// Send signal to Telegram
+async function sendSignalToTelegram(signal, pair) {
+    const arrow = signal.signal === 'CALL' ? '📈' : '📉';
+    const emoji = signal.confidence >= 90 ? '🏆' : signal.confidence >= 78 ? '✅' : '⚠️';
+    
+    const message = `
+${emoji} <b>SIGNAL ALERT</b> ${emoji}
+
+<b>Pair:</b> ${pair}
+<b>Signal:</b> ${arrow} ${signal.signal} (${signal.signal === 'CALL' ? 'BUY' : 'SELL'})
+<b>Confidence:</b> ${signal.confidence}% ${signal.intensity}
+<b>Strategy:</b> ${signal.strategyUsed}
+
+📊 <b>Analysis:</b>
+• RSI: ${signal.rsi} | ADX: ${signal.adx}
+• Divergence: ${signal.divergence || 'None'}
+• Volatility: ${signal.volatilityPercent}%
+
+⏰ <b>Expiry:</b> ${signal.expiry}m
+
+<i>Risk: 1.5% of balance</i>
+    `;
+    
+    await sendTelegramMessage(message);
 }
 
 // ============================================
@@ -151,7 +229,6 @@ function calculatePositionSize(confidence, volatilityPercent, accountBalance) {
             kellyFraction: kellyFraction
         };
     } catch(e) {
-        console.error('Position sizing error:', e);
         return { fraction: 0.01, amount: accountBalance * 0.01, kellyFraction: 0 };
     }
 }
@@ -162,33 +239,25 @@ function calculatePositionSize(confidence, volatilityPercent, accountBalance) {
 function checkCorrelationLimit(pair, signal, newPositionAmount) {
     try {
         let totalExposure = newPositionAmount;
-        let correlatedPairs = [];
-        const CORRELATION_THRESHOLD = 0.5;
         
         for (const pos of openPositions) {
             const correlation = getCorrelation(pair, pos.pair);
             const isSameDirection = (signal === pos.signal);
             
-            if (Math.abs(correlation) > CORRELATION_THRESHOLD && isSameDirection) {
+            if (Math.abs(correlation) > 0.5 && isSameDirection) {
                 totalExposure += pos.amount;
-                correlatedPairs.push(pos.pair);
             }
         }
         
         const maxExposure = accountBalance * CONFIG.MAX_CORRELATION_EXPOSURE;
         
         if (totalExposure > maxExposure) {
-            return {
-                allowed: false,
-                reason: `Correlation exposure $${totalExposure.toFixed(2)} > max $${maxExposure.toFixed(2)}`,
-                suggestedReduction: maxExposure / totalExposure
-            };
+            return { allowed: false, reason: `Correlation exposure exceeds limit` };
         }
         
         return { allowed: true, reason: 'Correlation OK' };
     } catch(e) {
-        console.error('Correlation check error:', e);
-        return { allowed: true, reason: 'Correlation check failed - allowing trade' };
+        return { allowed: true, reason: 'Correlation check failed' };
     }
 }
 
@@ -196,29 +265,24 @@ function checkCorrelationLimit(pair, signal, newPositionAmount) {
 // EXECUTE TRADE
 // ============================================
 async function executeTrade(signal, confidence, positionAmount, pair, expiry, strategyUsed) {
-    try {
-        console.log(`\n🔹🔹🔹 EXECUTING TRADE 🔹🔹🔹`);
-        console.log(`   Pair: ${pair}`);
-        console.log(`   Signal: ${signal === 'CALL' ? '📈 CALL (BUY)' : '📉 PUT (SELL)'}`);
-        console.log(`   Confidence: ${confidence}%`);
-        console.log(`   Amount: $${positionAmount.toFixed(2)}`);
-        console.log(`   Expiry: ${expiry}m`);
-        console.log(`   Strategy: ${strategyUsed}`);
-        
-        const orderId = `ORDER_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
-        
-        const position = {
-            orderId, pair, signal, amount: positionAmount,
-            entryTime: Date.now(), expiryMinutes: expiry,
-            confidence, strategy: strategyUsed, status: 'OPEN'
-        };
-        
-        openPositions.push(position);
-        return { success: true, orderId, position };
-    } catch(e) {
-        console.error('Execute trade error:', e);
-        return { success: false, error: e.message };
-    }
+    console.log(`\n🔹🔹🔹 EXECUTING TRADE 🔹🔹🔹`);
+    console.log(`   Pair: ${pair}`);
+    console.log(`   Signal: ${signal === 'CALL' ? '📈 CALL (BUY)' : '📉 PUT (SELL)'}`);
+    console.log(`   Confidence: ${confidence}%`);
+    console.log(`   Amount: $${positionAmount.toFixed(2)}`);
+    console.log(`   Expiry: ${expiry}m`);
+    console.log(`   Strategy: ${strategyUsed}`);
+    
+    const orderId = `ORDER_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+    
+    const position = {
+        orderId, pair, signal, amount: positionAmount,
+        entryTime: Date.now(), expiryMinutes: expiry,
+        confidence, strategy: strategyUsed, status: 'OPEN'
+    };
+    
+    openPositions.push(position);
+    return { success: true, orderId, position };
 }
 
 // ============================================
@@ -227,16 +291,14 @@ async function executeTrade(signal, confidence, positionAmount, pair, expiry, st
 async function closeTrade(orderId, wasWin, profitPercent) {
     try {
         const position = openPositions.find(p => p.orderId === orderId);
-        if (!position) return { success: false, reason: 'Position not found' };
+        if (!position) return { success: false };
         
         const profitAmount = wasWin ? position.amount * (CONFIG.BROKER_PAYOUT_PERCENT / 100) : -position.amount;
         accountBalance += profitAmount;
         
         try {
             recordTradeOutcome(position.strategy, position.confidence, wasWin, profitPercent, position.pair, `${position.expiryMinutes}m`);
-        } catch(e) {
-            console.error('Error recording trade outcome:', e);
-        }
+        } catch(e) {}
         
         tradeHistory.push({ ...position, closeTime: Date.now(), wasWin, profitAmount, profitPercent, endingBalance: accountBalance });
         openPositions = openPositions.filter(p => p.orderId !== orderId);
@@ -247,17 +309,12 @@ async function closeTrade(orderId, wasWin, profitPercent) {
         console.log(`   New Balance: $${accountBalance.toFixed(2)}`);
         
         if (CONFIG.SAVE_TRADES_TO_FILE) {
-            try {
-                fs.writeFileSync(CONFIG.TRADE_HISTORY_FILE, JSON.stringify(tradeHistory, null, 2));
-            } catch(e) {
-                console.error('Error saving trade history:', e);
-            }
+            fs.writeFileSync(CONFIG.TRADE_HISTORY_FILE, JSON.stringify(tradeHistory, null, 2));
         }
         
         return { success: true, profitAmount, newBalance: accountBalance };
     } catch(e) {
-        console.error('Close trade error:', e);
-        return { success: false, error: e.message };
+        return { success: false };
     }
 }
 
@@ -274,190 +331,13 @@ function checkExpiredPositions() {
             const profitPercent = wasWin ? CONFIG.BROKER_PAYOUT_PERCENT : -100;
             closeTrade(pos.orderId, wasWin, profitPercent);
         }
-    } catch(e) {
-        console.error('Check expired positions error:', e);
-    }
+    } catch(e) {}
 }
 
 // ============================================
-// MAIN TRADING LOOP (Single Pair)
+// DEMO PRICE DATA GENERATOR
 // ============================================
-async function tradingLoop(priceData, config, tf, higherPriceData = null, lowerPriceData = null) {
-    if (!priceData || !priceData.values || !Array.isArray(priceData.values)) {
-        console.error('❌ Invalid priceData provided to tradingLoop');
-        return { success: false, reason: 'Invalid priceData' };
-    }
-    
-    try {
-        checkExpiredPositions();
-        
-        if (openPositions.length >= CONFIG.MAX_CONCURRENT_TRADES) {
-            console.log(`⚠️ Max concurrent trades (${CONFIG.MAX_CONCURRENT_TRADES}) reached.`);
-            return { success: false, reason: 'Max trades reached' };
-        }
-        
-        if (!config || !config.pairName) {
-            console.error('❌ Invalid config provided');
-            return { success: false, reason: 'Invalid config' };
-        }
-        
-        const analysis = await analyzeSignal(priceData, config, tf, higherPriceData, lowerPriceData, openPositions);
-        
-        if (!analysis || !analysis.signal) {
-            return { success: false, reason: 'No signal' };
-        }
-        
-        if (analysis.confidence < CONFIG.MIN_CONFIDENCE_TO_TRADE) {
-            console.log(`⚠️ Confidence ${analysis.confidence}% < ${CONFIG.MIN_CONFIDENCE_TO_TRADE}%`);
-            return { success: false, reason: 'Low confidence' };
-        }
-        
-        if (analysis.shouldTrade && analysis.shouldTrade.includes('Skip')) {
-            console.log(`⚠️ Analyzer recommends skipping: ${analysis.recommendation}`);
-            return { success: false, reason: 'Analyzer skip' };
-        }
-        
-        const positionSize = calculatePositionSize(analysis.confidence, parseFloat(analysis.volatilityPercent) || 0.15, accountBalance);
-        const correlationCheck = checkCorrelationLimit(config.pairName, analysis.signal, positionSize.amount);
-        
-        if (!correlationCheck.allowed) {
-            console.log(`⚠️ Correlation limit exceeded: ${correlationCheck.reason}`);
-            return { success: false, reason: correlationCheck.reason };
-        }
-        
-        const trade = await executeTrade(analysis.signal, analysis.confidence, positionSize.amount, config.pairName, analysis.expiry || 15, analysis.strategyUsed);
-        
-        if (!trade.success) {
-            return { success: false, reason: trade.error };
-        }
-        
-        console.log(`\n📊 TRADE EXECUTED:`);
-        console.log(`   Signal: ${analysis.signal} | Confidence: ${analysis.confidence}%`);
-        console.log(`   Strategy: ${analysis.strategyUsed}`);
-        console.log(`   RSI: ${analysis.rsi} | ADX: ${analysis.adx}`);
-        console.log(`   Divergence: ${analysis.divergence || 'None'}`);
-        console.log(`   Volatility: ${analysis.volatilityPercent}%`);
-        
-        return { success: true, trade, analysis };
-        
-    } catch(error) {
-        console.error('Trading loop error:', error);
-        return { success: false, reason: error.message || 'Unknown error' };
-    }
-}
-
-// ============================================
-// NEW: MULTI-PAIR SCANNING FOR REAL-TIME ALERTS
-// ============================================
-async function scanAllPairs(getPriceDataFunction, tf = '15m') {
-    console.log(`\n🔍 SCANNING ${CONFIG.PAIRS_TO_SCAN.length} PAIRS FOR SIGNALS...`);
-    console.log(`   Time: ${new Date().toLocaleTimeString()}`);
-    
-    const signals = [];
-    
-    for (const pair of CONFIG.PAIRS_TO_SCAN) {
-        try {
-            // Get price data for this pair (implement based on your data source)
-            const priceData = await getPriceDataFunction(pair);
-            
-            if (!priceData || !priceData.values || priceData.values.length < 100) {
-                continue;
-            }
-            
-            const config = { pairName: pair };
-            const analysis = await analyzeSignal(priceData, config, tf, null, null, openPositions);
-            
-            if (analysis && analysis.signal && analysis.confidence >= CONFIG.MIN_CONFIDENCE_TO_TRADE) {
-                // Check if we already sent this signal recently (avoid spam)
-                const lastSignalTime = lastSignals[pair] || 0;
-                const timeSinceLastSignal = Date.now() - lastSignalTime;
-                
-                if (timeSinceLastSignal > 300000) { // 5 minutes cooldown
-                    signals.push({
-                        pair,
-                        signal: analysis.signal,
-                        confidence: analysis.confidence,
-                        intensity: analysis.intensity,
-                        strategy: analysis.strategyUsed,
-                        rsi: analysis.rsi,
-                        adx: analysis.adx,
-                        divergence: analysis.divergence,
-                        timestamp: Date.now()
-                    });
-                    lastSignals[pair] = Date.now();
-                    
-                    // REAL-TIME ALERT OUTPUT
-                    console.log(`\n🚨 REAL-TIME SIGNAL ALERT 🚨`);
-                    console.log(`   Pair: ${pair}`);
-                    console.log(`   Signal: ${analysis.signal === 'CALL' ? '📈 CALL (BUY)' : '📉 PUT (SELL)'}`);
-                    console.log(`   Confidence: ${analysis.confidence}% ${analysis.intensity}`);
-                    console.log(`   Strategy: ${analysis.strategyUsed}`);
-                    console.log(`   RSI: ${analysis.rsi} | ADX: ${analysis.adx}`);
-                    if (analysis.divergence !== 'None') {
-                        console.log(`   Divergence: ${analysis.divergence} (Quality: ${analysis.divergenceQuality}%)`);
-                    }
-                    console.log(`   Recommendation: ${analysis.recommendation}`);
-                }
-            }
-        } catch(e) {
-            console.error(`Error scanning ${pair}:`, e.message);
-        }
-    }
-    
-    if (signals.length === 0) {
-        console.log(`   No strong signals found across ${CONFIG.PAIRS_TO_SCAN.length} pairs.`);
-    } else {
-        console.log(`\n📊 FOUND ${signals.length} SIGNAL(S):`);
-        for (const sig of signals) {
-            console.log(`   ✅ ${sig.pair}: ${sig.signal} @ ${sig.confidence}% (${sig.strategy})`);
-        }
-    }
-    
-    return signals;
-}
-
-// ============================================
-// GET STATISTICS
-// ============================================
-function getStatistics() {
-    try {
-        const totalTrades = tradeHistory.length;
-        const winningTrades = tradeHistory.filter(t => t.wasWin).length;
-        const winRate = totalTrades > 0 ? (winningTrades / totalTrades) * 100 : 0;
-        const totalProfit = tradeHistory.reduce((sum, t) => sum + (t.profitAmount || 0), 0);
-        
-        const returns = tradeHistory.map(t => t.profitPercent || 0);
-        const avgReturn = returns.reduce((a,b) => a+b, 0) / (returns.length || 1);
-        const variance = returns.reduce((a,b) => a + Math.pow(b - avgReturn, 2), 0) / (returns.length || 1);
-        const sharpeRatio = Math.sqrt(variance) > 0 ? (avgReturn / Math.sqrt(variance)) * Math.sqrt(252) : 0;
-        
-        return {
-            totalTrades, 
-            winningTrades, 
-            losingTrades: totalTrades - winningTrades,
-            winRate: winRate.toFixed(1), 
-            totalProfit: totalProfit.toFixed(2),
-            currentBalance: accountBalance.toFixed(2), 
-            totalReturn: ((accountBalance - 10000) / 10000 * 100).toFixed(1),
-            sharpeRatio: sharpeRatio.toFixed(2), 
-            openPositions: openPositions.length,
-            pairsScanned: CONFIG.PAIRS_TO_SCAN.length
-        };
-    } catch(e) {
-        console.error('Get statistics error:', e);
-        return {
-            totalTrades: 0, winningTrades: 0, losingTrades: 0,
-            winRate: '0', totalProfit: '0',
-            currentBalance: accountBalance.toFixed(2), totalReturn: '0',
-            sharpeRatio: '0', openPositions: 0, pairsScanned: 0
-        };
-    }
-}
-
-// ============================================
-// DEMO MODE - GENERATE FAKE PRICE DATA
-// ============================================
-function generateDemoPriceData(basePrice = 0.98000, volatility = 0.0005) {
+function generateDemoPriceData(basePrice = 1.00000, volatility = 0.0003) {
     const candles = [];
     let price = basePrice;
     
@@ -479,16 +359,143 @@ function generateDemoPriceData(basePrice = 0.98000, volatility = 0.0005) {
     return { values: candles };
 }
 
-// Demo price data getter for multi-pair scanning
-async function demoGetPriceData(pair) {
-    // Generate different base prices for different pairs
+// ============================================
+// SCAN ALL PAIRS FOR SIGNALS
+// ============================================
+async function scanAllPairs() {
+    console.log(`\n🔍 SCANNING ${POCKET_OPTION_PAIRS.length} PAIRS...`);
+    console.log(`   Time: ${new Date().toLocaleTimeString()}`);
+    
+    const signals = [];
+    
+    // Base prices for different pairs
     const basePrices = {
         'EURUSD': 1.08500, 'GBPUSD': 1.26500, 'AUDUSD': 0.66500, 'USDJPY': 148.50,
-        'USDCAD': 1.34500, 'USDCHF': 0.88500, 'NZDUSD': 0.60500, 'AUDCAD': 0.89500
+        'USDCAD': 1.34500, 'USDCHF': 0.88500, 'NZDUSD': 0.60500, 'AUDCAD': 0.89500,
+        'EURGBP': 0.85500, 'EURJPY': 160.50, 'GBPJPY': 187.50, 'AUDJPY': 98.50,
+        'AUDCHF': 0.58800, 'GBPCHF': 1.11800, 'EURCAD': 1.46000, 'EURNZD': 1.78000,
+        'GBPNZD': 2.05000
     };
-    const basePrice = basePrices[pair] || 1.00000;
-    const volatility = 0.0003 + Math.random() * 0.0004;
-    return generateDemoPriceData(basePrice, volatility);
+    
+    for (const pair of POCKET_OPTION_PAIRS) {
+        try {
+            const basePrice = basePrices[pair] || 1.00000;
+            const volatility = 0.0003 + Math.random() * 0.0004;
+            const priceData = generateDemoPriceData(basePrice, volatility);
+            
+            const config = { pairName: pair };
+            const analysis = await analyzeSignal(priceData, config, '15m', null, null, openPositions);
+            
+            if (analysis && analysis.signal && analysis.confidence >= CONFIG.MIN_CONFIDENCE_TO_TRADE) {
+                const lastSignalTime = lastSignals[pair] || 0;
+                const timeSinceLastSignal = Date.now() - lastSignalTime;
+                
+                if (timeSinceLastSignal > 300000) { // 5 minute cooldown
+                    signals.push({
+                        pair,
+                        signal: analysis.signal,
+                        confidence: analysis.confidence,
+                        intensity: analysis.intensity,
+                        strategy: analysis.strategyUsed,
+                        rsi: analysis.rsi,
+                        adx: analysis.adx,
+                        divergence: analysis.divergence,
+                        volatilityPercent: analysis.volatilityPercent,
+                        expiry: analysis.expiry,
+                        timestamp: Date.now()
+                    });
+                    lastSignals[pair] = Date.now();
+                    
+                    // Send to Telegram
+                    await sendSignalToTelegram(analysis, pair);
+                }
+            }
+        } catch(e) {
+            console.error(`Error scanning ${pair}:`, e.message);
+        }
+    }
+    
+    if (signals.length === 0) {
+        console.log(`   No signals found.`);
+    } else {
+        console.log(`\n📊 FOUND ${signals.length} SIGNAL(S):`);
+        for (const sig of signals) {
+            console.log(`   ${sig.pair}: ${sig.signal} @ ${sig.confidence}% (${sig.strategy})`);
+        }
+    }
+    
+    return signals;
+}
+
+// ============================================
+// GET STATISTICS
+// ============================================
+function getStatistics() {
+    try {
+        const totalTrades = tradeHistory.length;
+        const winningTrades = tradeHistory.filter(t => t.wasWin).length;
+        const winRate = totalTrades > 0 ? (winningTrades / totalTrades) * 100 : 0;
+        const totalProfit = tradeHistory.reduce((sum, t) => sum + (t.profitAmount || 0), 0);
+        
+        return {
+            totalTrades, 
+            winningTrades, 
+            losingTrades: totalTrades - winningTrades,
+            winRate: winRate.toFixed(1), 
+            totalProfit: totalProfit.toFixed(2),
+            currentBalance: accountBalance.toFixed(2), 
+            totalReturn: ((accountBalance - 10000) / 10000 * 100).toFixed(1),
+            openPositions: openPositions.length
+        };
+    } catch(e) {
+        return {
+            totalTrades: 0, winningTrades: 0, losingTrades: 0,
+            winRate: '0', totalProfit: '0',
+            currentBalance: accountBalance.toFixed(2), totalReturn: '0',
+            openPositions: 0
+        };
+    }
+}
+
+// ============================================
+// MAIN TRADING LOOP
+// ============================================
+async function tradingLoop(priceData, config, tf, higherPriceData = null, lowerPriceData = null) {
+    if (!priceData || !priceData.values) {
+        return { success: false, reason: 'Invalid priceData' };
+    }
+    
+    try {
+        checkExpiredPositions();
+        
+        const analysis = await analyzeSignal(priceData, config, tf, higherPriceData, lowerPriceData, openPositions);
+        
+        if (!analysis || !analysis.signal) {
+            return { success: false, reason: 'No signal' };
+        }
+        
+        if (analysis.confidence < CONFIG.MIN_CONFIDENCE_TO_TRADE) {
+            return { success: false, reason: 'Low confidence' };
+        }
+        
+        if (analysis.shouldTrade && analysis.shouldTrade.includes('Skip')) {
+            return { success: false, reason: 'Analyzer skip' };
+        }
+        
+        const positionSize = calculatePositionSize(analysis.confidence, parseFloat(analysis.volatilityPercent) || 0.15, accountBalance);
+        const correlationCheck = checkCorrelationLimit(config.pairName, analysis.signal, positionSize.amount);
+        
+        if (!correlationCheck.allowed) {
+            return { success: false, reason: correlationCheck.reason };
+        }
+        
+        const trade = await executeTrade(analysis.signal, analysis.confidence, positionSize.amount, config.pairName, analysis.expiry || 15, analysis.strategyUsed);
+        
+        return { success: true, trade, analysis };
+        
+    } catch(error) {
+        return { success: false, reason: error.message };
+    }
 }
 
 // ============================================
@@ -496,65 +503,66 @@ async function demoGetPriceData(pair) {
 // ============================================
 if (require.main === module) {
     console.log('\n========================================');
-    console.log('🚀 LEGENDARY TRADING BOT v10.0 ULTIMATE');
+    console.log('🚀 LEGENDARY TRADING BOT vFINAL');
     console.log('========================================\n');
-    console.log(`📊 CONFIGURATION:`);
-    console.log(`   Pairs to scan: ${CONFIG.PAIRS_TO_SCAN.length}`);
-    console.log(`   Confidence threshold: ${CONFIG.MIN_CONFIDENCE_TO_TRADE}%`);
-    console.log(`   Max concurrent trades: ${CONFIG.MAX_CONCURRENT_TRADES}`);
-    console.log(`   Correlation exposure limit: ${CONFIG.MAX_CORRELATION_EXPOSURE * 100}%\n`);
     
-    if (CONFIG.DEMO_MODE) {
-        console.log('📈 DEMO MODE ENABLED');
-        console.log('   Scanning all pairs with fake price data...\n');
-        
-        let iteration = 0;
-        
-        async function runDemoIteration() {
-            iteration++;
-            const timestamp = new Date().toLocaleTimeString();
-            console.log(`\n[${timestamp}] 🔍 Demo Scan #${iteration}`);
-            
-            const signals = await scanAllPairs(demoGetPriceData, '15m');
-            
-            if (iteration % 5 === 0) {
-                const stats = getStatistics();
-                console.log(`\n📊 STATISTICS UPDATE:`);
-                console.log(`   Win Rate: ${stats.winRate}% (${stats.winningTrades}/${stats.totalTrades})`);
-                console.log(`   Balance: $${stats.currentBalance}`);
-                console.log(`   Total Return: ${stats.totalReturn}%`);
-                console.log(`   Pairs Scanned: ${stats.pairsScanned}`);
-            }
-        }
-        
-        // Run immediately
-        runDemoIteration();
-        
-        // Then run on interval
-        const intervalId = setInterval(runDemoIteration, CONFIG.DEMO_INTERVAL_MS);
-        console.log(`\n⏰ Scanning ${CONFIG.PAIRS_TO_SCAN.length} pairs every ${CONFIG.DEMO_INTERVAL_MS / 1000} seconds...`);
-        console.log('   Press Ctrl+C to stop\n');
-        
-        process.on('SIGINT', () => {
-            console.log('\n\n🛑 Shutting down...');
-            clearInterval(intervalId);
-            console.log('📊 Final Statistics:');
-            console.log(getStatistics());
-            process.exit(0);
-        });
+    console.log(`📊 CONFIGURATION:`);
+    console.log(`   Pairs to scan: ${POCKET_OPTION_PAIRS.length}`);
+    console.log(`   Confidence threshold: ${CONFIG.MIN_CONFIDENCE_TO_TRADE}%`);
+    console.log(`   Scan interval: ${CONFIG.SCAN_INTERVAL_MS / 1000} seconds\n`);
+    
+    // Start Telegram polling
+    if (TELEGRAM_TOKEN && TELEGRAM_CHAT_ID) {
+        console.log('🤖 Telegram Bot configured');
+        pollTelegram();
+        sendTelegramMessage('🚀 OmniPocket Bot is NOW ACTIVE!\n\n✅ Monitoring ' + POCKET_OPTION_PAIRS.length + ' pairs\n✅ Signals will appear here automatically');
     } else {
-        console.log('🔧 PRODUCTION MODE');
-        console.log('   Provide a getPriceDataFunction to scanAllPairs() for real-time alerts.\n');
+        console.log('⚠️ Telegram not configured. Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID');
+        console.log('   Signals will only appear in Railway logs.\n');
     }
+    
+    // Start scanning
+    let iteration = 0;
+    
+    async function runScan() {
+        iteration++;
+        console.log(`\n[${new Date().toLocaleTimeString()}] 🔍 Scan #${iteration}`);
+        await scanAllPairs();
+        
+        if (iteration % 5 === 0) {
+            const stats = getStatistics();
+            console.log(`\n📊 STATISTICS UPDATE:`);
+            console.log(`   Win Rate: ${stats.winRate}% (${stats.winningTrades}/${stats.totalTrades})`);
+            console.log(`   Balance: $${stats.currentBalance}`);
+            console.log(`   Return: ${stats.totalReturn}%`);
+        }
+    }
+    
+    // Run immediately and then on interval
+    runScan();
+    const intervalId = setInterval(runScan, CONFIG.SCAN_INTERVAL_MS);
+    
+    console.log(`\n⏰ Scanning every ${CONFIG.SCAN_INTERVAL_MS / 1000} seconds...`);
+    console.log('   Press Ctrl+C to stop\n');
+    
+    process.on('SIGINT', () => {
+        console.log('\n\n🛑 Shutting down...');
+        clearInterval(intervalId);
+        console.log('📊 Final Statistics:');
+        console.log(getStatistics());
+        process.exit(0);
+    });
 }
 
+// ============================================
 // EXPORTS
+// ============================================
 module.exports = { 
     tradingLoop, 
-    scanAllPairs,  // NEW: Multi-pair scanning
+    scanAllPairs,
     getStatistics, 
     closeTrade, 
     openPositions, 
     accountBalance,
-    CONFIG  // Export config for customization
+    CONFIG
 };
