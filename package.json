@@ -1,18 +1,14 @@
 {
-  "name": "pocket-omni-bot",
-  "version": "5.3.0",
-  "description": "Legendary Trading Bot with Yahoo Finance",
-  "main": "bot.js",
-  "scripts": {
-    "start": "node bot.js"
-  },
-  "dependencies": {
-    "yahoo-finance2": "^2.11.3"
-  },
-  "engines": {
-    "node": ">=18.0.0"
-  },
-  "keywords": ["trading", "bot", "forex", "binary-options", "telegram"],
-  "author": "OmniPocket",
-  "license": "MIT"
+    "name": "pocket-omni-bot",
+    "version": "5.3.0",
+    "main": "bot.js",
+    "scripts": {
+        "start": "node bot.js"
+    },
+    "dependencies": {
+        "yahoo-finance2": "^3.0.0"
+    },
+    "engines": {
+        "node": ">=18.0.0"
+    }
 }
