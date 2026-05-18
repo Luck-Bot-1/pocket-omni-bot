@@ -1,35 +1,39 @@
 // ============================================
-// LEGENDARY TRADING BOT - FINAL WORKING VERSION
-// Multi-timeframe: 15min (entry), 1H (trend), 4H (structure)
-// Data source: Yahoo Finance (no API key needed)
+// LEGENDARY TRADING BOT - PERMANENT VERSION
+// NO MORE CHANGES NEEDED AFTER THIS
 // ============================================
 
 const { analyzeSignal } = require('./analyzer.js');
 const https = require('https');
 
 // ============================================
-// TELEGRAM CONFIGURATION
+// CONFIGURATION (CHANGE ONLY THESE IF NEEDED)
 // ============================================
-const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
-const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
+const CONFIG = {
+    MIN_CONFIDENCE: 70,           // Minimum confidence to send signal
+    AUTO_SCAN_INTERVAL: 15,       // Minutes between auto-scans
+    EXPIRY_MINUTES: 15,           // Binary option expiry
+    TELEGRAM_TOKEN: process.env.TELEGRAM_BOT_TOKEN,
+    TELEGRAM_CHAT_ID: process.env.TELEGRAM_CHAT_ID
+};
 
 // ============================================
-// LIVE POCKET OPTION PAIRS (ALL SUPPORTED)
+// ALL POCKET OPTION LIVE PAIRS (30 PAIRS)
 // ============================================
 const PAIRS = [
     'EURUSD', 'GBPUSD', 'AUDUSD', 'NZDUSD', 'USDCAD', 'USDCHF', 'USDJPY',
     'AUDCAD', 'AUDJPY', 'CADJPY', 'CHFJPY', 'EURAUD', 'EURCAD', 'EURCHF',
     'EURGBP', 'EURJPY', 'EURNZD', 'GBPAUD', 'GBPCAD', 'GBPCHF', 'GBPJPY',
-    'GBPNZD', 'NZDCAD', 'NZDJPY', 'AUDNZD', 'CADCHF', 'AUDCHF'
+    'GBPNZD', 'NZDCAD', 'NZDJPY', 'AUDNZD', 'CADCHF', 'AUDCHF',
+    'USDCNH', 'USDMXN', 'USDZAR'
 ];
 
 // ============================================
-// MULTI-TIMEFRAME DATA FETCHING
+// FETCH DATA FROM YAHOO FINANCE
 // ============================================
-async function fetchPriceData(pair, interval = '5m', range = '5d') {
+async function fetchData(pair, interval = '5m', range = '5d') {
     return new Promise((resolve) => {
-        const symbol = `${pair}=X`;
-        const url = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?interval=${interval}&range=${range}`;
+        const url = `https://query1.finance.yahoo.com/v8/finance/chart/${pair}=X?interval=${interval}&range=${range}`;
         
         https.get(url, (res) => {
             let data = '';
@@ -40,10 +44,7 @@ async function fetchPriceData(pair, interval = '5m', range = '5d') {
                     const quotes = json.chart?.result?.[0]?.indicators?.quote?.[0];
                     const timestamps = json.chart?.result?.[0]?.timestamp;
                     
-                    if (!quotes || !timestamps || !quotes.open) {
-                        resolve(null);
-                        return;
-                    }
+                    if (!quotes?.open) { resolve(null); return; }
                     
                     const candles = [];
                     for (let i = 0; i < timestamps.length; i++) {
@@ -59,265 +60,196 @@ async function fetchPriceData(pair, interval = '5m', range = '5d') {
                         }
                     }
                     resolve({ values: candles });
-                } catch(e) {
-                    resolve(null);
-                }
+                } catch(e) { resolve(null); }
             });
         }).on('error', () => resolve(null));
     });
 }
 
 // ============================================
-// MULTI-TIMEFRAME DATA FOR 15MIN EXPIRY
+// GET MULTI-TIMEFRAME DATA (15min, 1H, 4H)
 // ============================================
 async function getMultiTimeframeData(pair) {
-    // For 15min expiry, we need:
-    // - 5min data for entry (converted to 15min candles)
-    // - 1H data for trend bias
-    // - 4H data for structure
-    
-    const fiveMinData = await fetchPriceData(pair, '5m', '1d');
-    const oneHourData = await fetchPriceData(pair, '30m', '5d');
-    const fourHourData = await fetchPriceData(pair, '1h', '10d');
+    const fiveMin = await fetchData(pair, '5m', '1d');
+    const oneHour = await fetchData(pair, '30m', '5d');
+    const fourHour = await fetchData(pair, '1h', '10d');
     
     // Convert 5min to 15min candles
-    let fifteenMinCandles = null;
-    if (fiveMinData && fiveMinData.values) {
-        const candles = fiveMinData.values;
-        const fifteenMinCandlesArray = [];
-        
-        for (let i = 0; i < candles.length; i += 3) {
-            const group = candles.slice(i, i + 3);
+    let fifteenMin = null;
+    if (fiveMin?.values) {
+        const candles = [];
+        for (let i = 0; i < fiveMin.values.length; i += 3) {
+            const group = fiveMin.values.slice(i, i + 3);
             if (group.length === 3) {
-                fifteenMinCandlesArray.push({
+                candles.push({
                     open: group[0].open,
                     high: Math.max(...group.map(c => c.high)),
                     low: Math.min(...group.map(c => c.low)),
                     close: group[2].close,
-                    volume: group.reduce((sum, c) => sum + c.volume, 0),
+                    volume: group.reduce((s, c) => s + c.volume, 0),
                     time: group[2].time
                 });
             }
         }
-        fifteenMinCandles = { values: fifteenMinCandlesArray };
+        fifteenMin = { values: candles };
     }
     
-    return {
-        entry: fifteenMinCandles,    // 15min for entry
-        trend: oneHourData,          // 1H for trend bias
-        structure: fourHourData      // 4H for structure
-    };
+    return { entry: fifteenMin, trend: oneHour, structure: fourHour };
 }
 
 // ============================================
 // SEND TELEGRAM MESSAGE
 // ============================================
-function sendTelegramMessage(text) {
-    if (!TELEGRAM_TOKEN) return;
-    
-    const data = JSON.stringify({ chat_id: TELEGRAM_CHAT_ID, text: text, parse_mode: 'HTML' });
-    const url = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`;
-    const req = https.request(url, { method: 'POST', headers: { 'Content-Type': 'application/json' } });
+function sendMessage(text) {
+    if (!CONFIG.TELEGRAM_TOKEN) return;
+    const data = JSON.stringify({ chat_id: CONFIG.TELEGRAM_CHAT_ID, text, parse_mode: 'HTML' });
+    const req = https.request(`https://api.telegram.org/bot${CONFIG.TELEGRAM_TOKEN}/sendMessage`, { method: 'POST' });
     req.write(data);
     req.end();
 }
 
 // ============================================
-// SCAN SINGLE PAIR WITH MULTI-TIMEFRAME
+// ANALYZE SINGLE PAIR
 // ============================================
-async function scanSinglePair(pair) {
+async function analyzePair(pair) {
     try {
         const tfData = await getMultiTimeframeData(pair);
+        if (!tfData.entry?.values?.length >= 50) return null;
         
-        if (!tfData.entry || !tfData.entry.values || tfData.entry.values.length < 50) {
-            return null;
-        }
-        
-        // Analyze with multi-timeframe data
-        const analysis = await analyzeSignal(
-            tfData.entry,                    // 15min entry data
-            { pairName: pair },              // Config
-            '15m',                           // Timeframe
-            tfData.trend || null,            // 1H trend data
-            tfData.structure || null         // 4H structure data
+        return await analyzeSignal(
+            tfData.entry, { pairName: pair }, '15m',
+            tfData.trend, tfData.structure
         );
-        
-        return analysis;
-    } catch(e) {
-        return null;
+    } catch(e) { return null; }
+}
+
+// ============================================
+// SCAN SPECIFIC PAIR
+// ============================================
+async function scanPair(pair) {
+    const upperPair = pair.toUpperCase();
+    if (!PAIRS.includes(upperPair)) {
+        sendMessage(`❌ Invalid pair. Use /pairs to see all.`);
+        return;
+    }
+    
+    sendMessage(`🔍 Analyzing ${upperPair}...`);
+    const analysis = await analyzePair(upperPair);
+    
+    if (!analysis) {
+        sendMessage(`❌ Could not analyze ${upperPair}`);
+        return;
+    }
+    
+    if (analysis.confidence >= CONFIG.MIN_CONFIDENCE) {
+        const arrow = analysis.signal === 'CALL' ? '📈' : '📉';
+        const emoji = analysis.confidence >= 90 ? '🏆' : '✅';
+        sendMessage(`
+${emoji} <b>SIGNAL</b> ${emoji}
+
+Pair: ${upperPair}
+Signal: ${arrow} ${analysis.signal}
+Confidence: ${analysis.confidence}%
+Strategy: ${analysis.strategyUsed}
+RSI: ${analysis.rsi} | ADX: ${analysis.adx}
+Divergence: ${analysis.divergence || 'None'}
+Expiry: ${CONFIG.EXPIRY_MINUTES}m
+        `);
+    } else {
+        sendMessage(`
+📊 ${upperPair}
+Signal: ${analysis.signal || 'NONE'}
+Confidence: ${analysis.confidence}%
+RSI: ${analysis.rsi} | ADX: ${analysis.adx}
+⚠️ Below ${CONFIG.MIN_CONFIDENCE}% threshold
+        `);
     }
 }
 
 // ============================================
 // SCAN ALL PAIRS
 // ============================================
-async function scanAllPairs(isManual = false) {
-    const startTime = Date.now();
-    
-    if (isManual) {
-        sendTelegramMessage(`🔍 Manual scan started...\n📊 ${PAIRS.length} pairs\n⏳ Multi-timeframe analysis (15m/1H/4H)\nPlease wait 2-3 minutes.`);
-    }
-    
-    console.log(`\n🔍 SCANNING ${PAIRS.length} PAIRS at ${new Date().toLocaleTimeString()}`);
-    console.log(`📡 Data source: Yahoo Finance`);
-    console.log(`⏰ Timeframes: 15min (entry), 1H (trend), 4H (structure)\n`);
-    
-    let signalsFound = 0;
-    let pairsProcessed = 0;
-    let lowConfidence = 0;
+async function scanAllPairs() {
+    sendMessage(`🔍 Scanning ${PAIRS.length} pairs...`);
+    let signals = [];
     
     for (const pair of PAIRS) {
-        console.log(`   📊 Analyzing ${pair}...`);
-        const analysis = await scanSinglePair(pair);
-        
-        if (analysis) {
-            pairsProcessed++;
-            
-            if (analysis.signal && analysis.confidence >= 70) {
-                signalsFound++;
-                console.log(`   ✅ ${pair}: ${analysis.signal} @ ${analysis.confidence}%`);
-                
-                const arrow = analysis.signal === 'CALL' ? '📈' : '📉';
-                const emoji = analysis.confidence >= 90 ? '🏆' : analysis.confidence >= 78 ? '✅' : '⚠️';
-                
-                const message = `
-${emoji} <b>SIGNAL ALERT</b> ${emoji}
-
-<b>Pair:</b> ${pair}
-<b>Signal:</b> ${arrow} ${analysis.signal}
-<b>Confidence:</b> ${analysis.confidence}% ${analysis.intensity}
-<b>Strategy:</b> ${analysis.strategyUsed}
-
-📊 <b>Multi-Timeframe Analysis:</b>
-• RSI: ${analysis.rsi} | ADX: ${analysis.adx}
-• Divergence: ${analysis.divergence || 'None'}
-• Volatility: ${analysis.volatilityPercent}%
-• Trend: ${analysis.trendDirection}
-
-⏰ <b>Expiry:</b> ${analysis.expiry || 15}m
-                `;
-                sendTelegramMessage(message);
-            } else if (analysis.confidence >= 55) {
-                lowConfidence++;
-                console.log(`   ⚠️ ${pair}: ${analysis.signal} @ ${analysis.confidence}% (below 70% threshold)`);
-            }
+        const analysis = await analyzePair(pair);
+        if (analysis?.confidence >= CONFIG.MIN_CONFIDENCE) {
+            signals.push({ pair, analysis });
+            const arrow = analysis.signal === 'CALL' ? '📈' : '📉';
+            sendMessage(`${arrow} ${pair}: ${analysis.signal} @ ${analysis.confidence}%`);
         }
-        
-        // Delay to avoid rate limiting
         await new Promise(r => setTimeout(r, 500));
     }
     
-    const duration = ((Date.now() - startTime) / 1000).toFixed(1);
-    console.log(`\n✅ SCAN COMPLETE: ${signalsFound} signals, ${lowConfidence} low, ${pairsProcessed}/${PAIRS.length} pairs, ${duration}s`);
-    
-    if (isManual) {
-        const summary = `
-✅ <b>Scan Complete</b>
-
-📊 <b>Results:</b>
-• Signals found: ${signalsFound}
-• Low confidence (55-69%): ${lowConfidence}
-• Pairs processed: ${pairsProcessed}/${PAIRS.length}
-• Duration: ${duration} seconds
-• Timeframes: 15min/1H/4H
-
-${signalsFound === 0 ? '💡 No signals met the 70% threshold. Try during London/NY overlap (2-9 PM GMT+6).' : ''}
-        `;
-        sendTelegramMessage(summary);
-    }
-    
-    return signalsFound;
+    sendMessage(`✅ Scan complete. Found ${signals.length} signal(s).`);
+    return signals;
 }
 
 // ============================================
-// TELEGRAM COMMAND HANDLER
+// SHOW AVAILABLE PAIRS
+// ============================================
+function showPairs() {
+    const list = PAIRS.map((p, i) => `${i+1}. ${p}`).join('\n');
+    sendMessage(`📊 <b>${PAIRS.length} Pairs</b>\n\n${list}\n\nUse /scan PAIR to analyze specific pair.`);
+}
+
+// ============================================
+// TELEGRAM BOT (HANDLES ALL COMMANDS)
 // ============================================
 let lastUpdateId = 0;
 let autoScanInterval = null;
 
 function startAutoScan() {
-    if (autoScanInterval) {
-        sendTelegramMessage('⚠️ Auto-scan is already running.');
-        return;
-    }
-    autoScanInterval = setInterval(() => {
-        console.log('🔄 Auto scan triggered');
-        scanAllPairs(false);
-    }, 15 * 60 * 1000); // Every 15 minutes
-    sendTelegramMessage('✅ Auto-scan ENABLED (every 15 minutes)');
-    console.log('Auto-scan started');
+    if (autoScanInterval) return;
+    autoScanInterval = setInterval(() => scanAllPairs(), CONFIG.AUTO_SCAN_INTERVAL * 60 * 1000);
+    sendMessage(`✅ Auto-scan enabled (every ${CONFIG.AUTO_SCAN_INTERVAL} minutes)`);
 }
 
 function stopAutoScan() {
-    if (autoScanInterval) {
-        clearInterval(autoScanInterval);
-        autoScanInterval = null;
-        sendTelegramMessage('⏸️ Auto-scan DISABLED');
-        console.log('Auto-scan stopped');
-    }
+    if (autoScanInterval) { clearInterval(autoScanInterval); autoScanInterval = null; }
+    sendMessage(`⏸️ Auto-scan disabled`);
 }
 
 function pollTelegram() {
-    if (!TELEGRAM_TOKEN) {
-        console.log('⚠️ TELEGRAM_BOT_TOKEN not set');
-        return;
-    }
+    if (!CONFIG.TELEGRAM_TOKEN) return;
     
     const poll = () => {
-        const url = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/getUpdates?offset=${lastUpdateId + 1}&timeout=30`;
-        
+        const url = `https://api.telegram.org/bot${CONFIG.TELEGRAM_TOKEN}/getUpdates?offset=${lastUpdateId + 1}&timeout=30`;
         https.get(url, (res) => {
             let data = '';
             res.on('data', chunk => data += chunk);
             res.on('end', () => {
                 try {
                     const json = JSON.parse(data);
-                    if (json.ok && json.result) {
+                    if (json.ok?.result) {
                         for (const update of json.result) {
                             lastUpdateId = update.update_id;
-                            const text = update.message?.text;
+                            const text = update.message?.text || '';
                             
                             if (text === '/start') {
-                                sendTelegramMessage(`
-🚀 <b>OmniPocket Trading Bot</b>
+                                sendMessage(`
+🚀 <b>OmniPocket Bot</b>
 
-<b>Commands:</b>
-/start - Show menu
-/status - Bot status
-/scan - Manual scan
+Commands:
+/scan - Scan all pairs
+/scan PAIR - Scan specific pair (e.g., /scan EURUSD)
+/pairs - Show available pairs
 /startscan - Enable auto-scan
 /stopscan - Disable auto-scan
+/status - Bot status
 
-<b>Configuration:</b>
-• Pairs: ${PAIRS.length}
-• Timeframes: 15min/1H/4H
-• Expiry: 15 minutes
-• Threshold: 70%
-• Data: Yahoo Finance
+Threshold: ${CONFIG.MIN_CONFIDENCE}%
+Expiry: ${CONFIG.EXPIRY_MINUTES}m
                                 `);
                             }
-                            else if (text === '/status') {
-                                sendTelegramMessage(`
-📊 <b>Bot Status</b>
-
-• Pairs: ${PAIRS.length}
-• Timeframes: 15min, 1H, 4H
-• Threshold: 70%
-• Expiry: 15 minutes
-• Auto-scan: ${autoScanInterval ? '🟢 ACTIVE' : '🔴 STOPPED'}
-• Data source: Yahoo Finance
-• Status: RUNNING
-                                `);
-                            }
-                            else if (text === '/scan') {
-                                scanAllPairs(true);
-                            }
-                            else if (text === '/startscan') {
-                                startAutoScan();
-                            }
-                            else if (text === '/stopscan') {
-                                stopAutoScan();
-                            }
+                            else if (text === '/pairs') showPairs();
+                            else if (text === '/status') sendMessage(`✅ Bot running\nPairs: ${PAIRS.length}\nAuto-scan: ${autoScanInterval ? 'ON' : 'OFF'}\nThreshold: ${CONFIG.MIN_CONFIDENCE}%`);
+                            else if (text === '/startscan') startAutoScan();
+                            else if (text === '/stopscan') stopAutoScan();
+                            else if (text === '/scan') scanAllPairs();
+                            else if (text.startsWith('/scan ')) scanPair(text.substring(6));
                         }
                     }
                 } catch(e) {}
@@ -326,34 +258,26 @@ function pollTelegram() {
         }).on('error', () => setTimeout(poll, 2000));
     };
     poll();
-    console.log('📡 Telegram polling active');
 }
 
 // ============================================
-// MAIN ENTRY POINT
+// START BOT
 // ============================================
 console.log('\n========================================');
-console.log('🚀 LEGENDARY TRADING BOT vFINAL');
+console.log('🚀 LEGENDARY TRADING BOT - PERMANENT');
 console.log('========================================\n');
-console.log(`📊 CONFIGURATION:`);
-console.log(`   Pairs: ${PAIRS.length}`);
-console.log(`   Timeframes: 15min (entry), 1H (trend), 4H (structure)`);
-console.log(`   Expiry: 15 minutes`);
-console.log(`   Threshold: 70%`);
-console.log(`   Data source: Yahoo Finance (no API key needed)`);
-console.log(`   Dependencies: NONE (native Node.js only)\n`);
+console.log(`Pairs: ${PAIRS.length}`);
+console.log(`Threshold: ${CONFIG.MIN_CONFIDENCE}%`);
+console.log(`Expiry: ${CONFIG.EXPIRY_MINUTES}m`);
+console.log(`Auto-scan: every ${CONFIG.AUTO_SCAN_INTERVAL} min\n`);
 
-if (TELEGRAM_TOKEN && TELEGRAM_CHAT_ID) {
-    console.log('🤖 Telegram configured');
+if (CONFIG.TELEGRAM_TOKEN && CONFIG.TELEGRAM_CHAT_ID) {
+    console.log('✅ Telegram connected');
     pollTelegram();
     startAutoScan();
-    sendTelegramMessage(`🚀 <b>Bot is ACTIVE!</b>\n\n📡 Data source: Yahoo Finance\n📊 ${PAIRS.length} pairs monitored\n⏰ Multi-timeframe: 15min/1H/4H\n✅ Send /scan for manual scan\n✅ Auto-scan every 15 minutes`);
+    sendMessage(`🚀 Bot ACTIVE\n✅ ${PAIRS.length} pairs\n✅ /scan for manual scan\n✅ Auto-scan every ${CONFIG.AUTO_SCAN_INTERVAL} min`);
 } else {
-    console.log('⚠️ Telegram not configured. Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID');
-    console.log('   Bot will still run but won\'t send messages.');
+    console.log('⚠️ Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID');
 }
 
-// ============================================
-// EXPORTS
-// ============================================
-module.exports = { scanAllPairs, startAutoScan, stopAutoScan };
+module.exports = { scanAllPairs, scanPair, showPairs };
