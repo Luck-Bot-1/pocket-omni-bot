@@ -1,8 +1,3 @@
-
-Armanul Azim <armanulazim@gmail.com>
-7:03 PM (4 minutes ago)
-to me
-
 // ============================================
 // LEGENDARY TRADING BOT - INSTITUTIONAL GRADE
 // Version: 5.0 FINAL - AUDIT COMPLETE
