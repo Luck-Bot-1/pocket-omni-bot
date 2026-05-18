@@ -1,6 +1,6 @@
 // ============================================
 // LEGENDARY TRADING BOT - ORCHESTRATOR
-// Version: FINAL - PRODUCTION READY
+// Version: FINAL - WITH YAHOO FINANCE v3
 // ============================================
 
 const { analyzeSignal, recordTradeOutcome } = require('./analyzer.js');
@@ -72,7 +72,7 @@ let openPositions = [];
 let accountBalance = 10000;
 
 // ============================================
-// FETCH REAL DATA FROM YAHOO FINANCE
+// FETCH REAL DATA FROM YAHOO FINANCE v3
 // ============================================
 async function fetchRealPriceData(pair) {
     try {
@@ -100,6 +100,7 @@ async function fetchRealPriceData(pair) {
         
         return { values: candles };
     } catch(e) {
+        console.log(`   ❌ Yahoo error for ${pair}: ${e.message}`);
         return null;
     }
 }
@@ -149,57 +150,75 @@ ${emoji} <b>SIGNAL ALERT</b> ${emoji}
 // SCAN ALL PAIRS
 // ============================================
 async function scanAllPairs(isManual = false) {
-    if (isManual) {
-        await sendTelegramMessage('🔍 <b>Manual scan initiated...</b>\n\nScanning all 33 pairs...\n⏳ This will take 30-60 seconds.');
-    }
-    
-    console.log(`\n🔍 SCANNING ${POCKET_OPTION_PAIRS.length} PAIRS...`);
-    
-    let signalsFound = 0;
-    let lowConfidence = 0;
-    
-    for (const pair of POCKET_OPTION_PAIRS) {
-        try {
-            const priceData = await fetchRealPriceData(pair);
-            if (!priceData) continue;
-            
-            const config = { pairName: pair };
-            const analysis = await analyzeSignal(priceData, config, '15m', null, null, openPositions);
-            
-            if (analysis && analysis.signal) {
-                if (analysis.confidence >= CONFIG.MIN_CONFIDENCE_TO_TRADE) {
-                    const lastTime = lastSignals[pair] || 0;
-                    if (Date.now() - lastTime > 1800000 || isManual) {
+    try {
+        console.log(`🔍 SCAN STARTED at ${new Date().toLocaleTimeString()}`);
+        
+        if (isManual) {
+            await sendTelegramMessage('🔍 Manual scan started... Scanning 33 pairs. Please wait 30-60 seconds.');
+        }
+        
+        let signalsFound = 0;
+        let lowConfidence = 0;
+        let errors = 0;
+        let pairsProcessed = 0;
+        
+        for (const pair of POCKET_OPTION_PAIRS) {
+            try {
+                const priceData = await fetchRealPriceData(pair);
+                if (!priceData) {
+                    errors++;
+                    continue;
+                }
+                
+                pairsProcessed++;
+                const config = { pairName: pair };
+                const analysis = await analyzeSignal(priceData, config, '15m', null, null, openPositions);
+                
+                if (analysis && analysis.signal) {
+                    if (analysis.confidence >= CONFIG.MIN_CONFIDENCE_TO_TRADE) {
                         signalsFound++;
-                        lastSignals[pair] = Date.now();
                         await sendSignalToTelegram(analysis, pair);
                         console.log(`   ✅ ${pair}: ${analysis.signal} @ ${analysis.confidence}%`);
+                    } else if (analysis.confidence >= 55) {
+                        lowConfidence++;
+                        console.log(`   ⚠️ ${pair}: ${analysis.signal} @ ${analysis.confidence}%`);
                     }
-                } else if (analysis.confidence >= 55) {
-                    lowConfidence++;
-                    console.log(`   ⚠️ ${pair}: ${analysis.signal} @ ${analysis.confidence}% (below threshold)`);
                 }
+                
+                await new Promise(resolve => setTimeout(resolve, 100));
+                
+            } catch(pairError) {
+                errors++;
+                console.log(`   ❌ Error on ${pair}: ${pairError.message}`);
             }
-            
-            await new Promise(resolve => setTimeout(resolve, 100));
-        } catch(e) {}
-    }
-    
-    if (isManual) {
-        const message = `
+        }
+        
+        console.log(`🔍 SCAN COMPLETE: ${signalsFound} signals, ${lowConfidence} low, ${errors} errors, ${pairsProcessed} processed`);
+        
+        if (isManual) {
+            const message = `
 ✅ <b>Scan Complete</b>
 
-📊 <b>Results:</b>
+📊 Results:
 • Signals found: ${signalsFound}
 • Low confidence (50-69%): ${lowConfidence}
-• Pairs scanned: ${POCKET_OPTION_PAIRS.length}
+• Pairs processed: ${pairsProcessed}/${POCKET_OPTION_PAIRS.length}
+• Errors: ${errors}
 
-${signalsFound === 0 ? '💡 <i>No signals met the 70% threshold. Try during London/NY overlap (2-9 PM GMT+6).</i>' : ''}
-        `;
-        await sendTelegramMessage(message);
+${signalsFound === 0 ? '💡 No signals met the 70% threshold. Try during London/NY overlap (2-9 PM GMT+6).' : ''}
+            `;
+            await sendTelegramMessage(message);
+        }
+        
+        return signalsFound;
+        
+    } catch(error) {
+        console.error(`SCAN FATAL ERROR: ${error.message}`);
+        if (isManual) {
+            await sendTelegramMessage(`❌ Scan failed: ${error.message}`);
+        }
+        return 0;
     }
-    
-    return signalsFound;
 }
 
 // ============================================
