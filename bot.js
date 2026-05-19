@@ -1,13 +1,13 @@
 // ============================================
-// LEGENDARY TRADING BOT - FINAL PERMANENT VERSION
-// NO MORE CHANGES AFTER THIS - EVER
+// LEGENDARY TRADING BOT - ABSOLUTE FINAL
+// NO MORE CHANGES EVER - DEPLOY ONCE
 // ============================================
 
 const { analyzeSignal } = require('./analyzer.js');
 const https = require('https');
 
 // ============================================
-// CONFIGURATION
+// CONFIGURATION (DO NOT CHANGE)
 // ============================================
 const CONFIG = {
     MIN_CONFIDENCE: 65,
@@ -30,19 +30,24 @@ const PAIRS = [
 ];
 
 // ============================================
-// HELPERS
+// SIMPLE LOGGER
 // ============================================
 function log(msg) { console.log(`[${new Date().toLocaleTimeString()}] ${msg}`); }
+
+// ============================================
+// SEND TELEGRAM MESSAGE
+// ============================================
 function sendMessage(text) {
     if (!CONFIG.TELEGRAM_TOKEN) return;
     const data = JSON.stringify({ chat_id: CONFIG.TELEGRAM_CHAT_ID, text, parse_mode: 'HTML' });
     const req = https.request(`https://api.telegram.org/bot${CONFIG.TELEGRAM_TOKEN}/sendMessage`, { method: 'POST' });
     req.write(data);
     req.end();
+    log(`📤 Sent: ${text.substring(0, 50)}`);
 }
 
 // ============================================
-// TWELVE DATA API
+// FETCH FROM TWELVE DATA
 // ============================================
 async function fetchTwelveData(pair, interval = '15min') {
     if (!CONFIG.TWELVE_DATA_KEY) return null;
@@ -69,7 +74,7 @@ async function fetchTwelveData(pair, interval = '15min') {
 }
 
 // ============================================
-// MULTI-TIMEFRAME
+// MULTI-TIMEFRAME DATA
 // ============================================
 async function getMultiTimeframeData(pair) {
     const fifteenMin = await fetchTwelveData(pair, '15min');
@@ -81,7 +86,7 @@ async function getMultiTimeframeData(pair) {
 }
 
 // ============================================
-// ANALYZE PAIR
+// ANALYZE SINGLE PAIR
 // ============================================
 async function analyzePair(pair) {
     try {
@@ -101,7 +106,7 @@ async function scanPair(pair) {
     if (!analysis) { sendMessage(`❌ Could not analyze ${upperPair}`); return; }
     const arrow = analysis.signal === 'CALL' ? '📈' : '📉';
     const emoji = analysis.confidence >= 90 ? '🏆' : analysis.confidence >= 70 ? '✅' : '📊';
-    sendMessage(`${emoji} <b>${upperPair}</b> ${emoji}\n\nSignal: ${arrow} ${analysis.signal}\nConfidence: ${analysis.confidence}%\nStrategy: ${analysis.strategyUsed}\nRSI: ${analysis.rsi} | ADX: ${analysis.adx}\nDivergence: ${analysis.divergence || 'None'}\nExpiry: ${CONFIG.EXPIRY_MINUTES}m`);
+    sendMessage(`${emoji} ${upperPair}\nSignal: ${arrow} ${analysis.signal}\nConfidence: ${analysis.confidence}%\nRSI: ${analysis.rsi} | ADX: ${analysis.adx}`);
 }
 
 // ============================================
@@ -110,29 +115,55 @@ async function scanPair(pair) {
 async function scanAllPairs(isAuto = false) {
     if (!isAuto) sendMessage(`🔍 Scanning ${PAIRS.length} pairs... (2-3 minutes)`);
     log(`Scanning ${PAIRS.length} pairs`);
-    let signals = [], processed = 0;
+    let signals = 0, processed = 0;
     for (let i = 0; i < PAIRS.length; i++) {
         const pair = PAIRS[i];
-        log(`[${i+1}/${PAIRS.length}] ${pair}...`);
         const analysis = await analyzePair(pair);
-        if (analysis) { processed++; if (analysis.confidence >= CONFIG.MIN_CONFIDENCE) { signals.push({ pair, analysis }); log(`✅ SIGNAL: ${pair} ${analysis.signal} @ ${analysis.confidence}%`); if (!isAuto) { const arrow = analysis.signal === 'CALL' ? '📈' : '📉'; sendMessage(`${arrow} ${pair}: ${analysis.signal} @ ${analysis.confidence}%`); } } }
+        if (analysis) {
+            processed++;
+            if (analysis.confidence >= CONFIG.MIN_CONFIDENCE) {
+                signals++;
+                log(`✅ SIGNAL: ${pair} ${analysis.signal} @ ${analysis.confidence}%`);
+                if (!isAuto) {
+                    const arrow = analysis.signal === 'CALL' ? '📈' : '📉';
+                    sendMessage(`${arrow} ${pair}: ${analysis.signal} @ ${analysis.confidence}%`);
+                }
+            }
+        }
         if (i < PAIRS.length - 1) await new Promise(r => setTimeout(r, CONFIG.DELAY_BETWEEN_PAIRS));
     }
-    if (!isAuto) sendMessage(`✅ Scan complete\nSignals: ${signals.length}\nProcessed: ${processed}/${PAIRS.length}\n${signals.length === 0 ? '⚠️ No signals above threshold. Try during London/NY overlap.' : ''}`);
-    return signals;
+    if (!isAuto) sendMessage(`✅ Scan complete: ${signals} signals, ${processed}/${PAIRS.length} pairs`);
 }
 
 // ============================================
-// TELEGRAM COMMANDS
+// TELEGRAM BOT (POLLING)
 // ============================================
-let lastUpdateId = 0, autoScanInterval = null, isScanning = false;
-function startAutoScan() { if (autoScanInterval) return; autoScanInterval = setInterval(() => { if (!isScanning) { isScanning = true; scanAllPairs(true).finally(() => { isScanning = false; }); } }, CONFIG.AUTO_SCAN_INTERVAL * 60 * 1000); sendMessage(`✅ Auto-scan enabled (every ${CONFIG.AUTO_SCAN_INTERVAL} min)`); }
-function stopAutoScan() { if (autoScanInterval) { clearInterval(autoScanInterval); autoScanInterval = null; sendMessage('⏸️ Auto-scan disabled'); } }
-function showPairs() { sendMessage(`📊 ${PAIRS.length} Pairs\n${PAIRS.map((p,i)=>`${i+1}. ${p}`).join('\n')}`); }
-function showStatus() { sendMessage(`📊 Bot Status\n• Pairs: ${PAIRS.length}\n• Threshold: ${CONFIG.MIN_CONFIDENCE}%\n• Auto-scan: ${autoScanInterval ? 'ON' : 'OFF'}\n• API Key: ${CONFIG.TWELVE_DATA_KEY ? '✅' : '❌'}`); }
+let lastUpdateId = 0;
+let autoScanInterval = null;
+let isScanning = false;
+
+function startAutoScan() {
+    if (autoScanInterval) return;
+    autoScanInterval = setInterval(() => {
+        if (!isScanning) {
+            isScanning = true;
+            scanAllPairs(true).finally(() => { isScanning = false; });
+        }
+    }, CONFIG.AUTO_SCAN_INTERVAL * 60 * 1000);
+    sendMessage(`✅ Auto-scan enabled (every ${CONFIG.AUTO_SCAN_INTERVAL} min)`);
+}
+
+function stopAutoScan() {
+    if (autoScanInterval) {
+        clearInterval(autoScanInterval);
+        autoScanInterval = null;
+        sendMessage('⏸️ Auto-scan disabled');
+    }
+}
 
 function pollTelegram() {
-    if (!CONFIG.TELEGRAM_TOKEN) return;
+    if (!CONFIG.TELEGRAM_TOKEN) { log('❌ No TELEGRAM_TOKEN'); return; }
+    log('📡 Polling started');
     const poll = () => {
         https.get(`https://api.telegram.org/bot${CONFIG.TELEGRAM_TOKEN}/getUpdates?offset=${lastUpdateId + 1}&timeout=30`, (res) => {
             let data = '';
@@ -144,46 +175,42 @@ function pollTelegram() {
                         for (const update of json.result) {
                             lastUpdateId = update.update_id;
                             const text = update.message?.text || '';
-                            if (text === '/start') sendMessage(`🚀 LEGENDARY TRADING BOT\n\nCommands:\n/scan - Scan all pairs\n/scan PAIR - Scan specific pair\n/pairs - Show pairs\n/startscan - Auto-scan ON\n/stopscan - Auto-scan OFF\n/status - Bot status\n\nThreshold: ${CONFIG.MIN_CONFIDENCE}%\nExpiry: ${CONFIG.EXPIRY_MINUTES}m`);
-                            else if (text === '/status') showStatus();
-                            else if (text === '/pairs') showPairs();
+                            log(`📥 Command: ${text}`);
+                            if (text === '/start') sendMessage(`🚀 BOT ACTIVE!\n/scan - Scan all\n/scan EUR/USD - Scan specific\n/status - Status\n/startscan - Auto ON\n/stopscan - Auto OFF`);
+                            else if (text === '/status') sendMessage(`📊 Status\nPairs: ${PAIRS.length}\nThreshold: ${CONFIG.MIN_CONFIDENCE}%\nAuto: ${autoScanInterval ? 'ON' : 'OFF'}`);
                             else if (text === '/startscan') startAutoScan();
                             else if (text === '/stopscan') stopAutoScan();
-                            else if (text === '/scan') { if (!isScanning) { isScanning = true; scanAllPairs(false).finally(() => { isScanning = false; }); } else sendMessage('⏳ Scan in progress'); }
+                            else if (text === '/scan') { if (!isScanning) { isScanning = true; scanAllPairs(false).finally(() => { isScanning = false; }); } else sendMessage('⏳ Wait...'); }
                             else if (text?.startsWith('/scan ')) scanPair(text.substring(6));
                         }
                     }
-                } catch(e) {}
+                } catch(e) { log(`Parse error: ${e.message}`); }
                 setTimeout(poll, 2000);
             });
-        }).on('error', () => setTimeout(poll, 2000));
+        }).on('error', (e) => { log(`Poll error: ${e.message}`); setTimeout(poll, 5000); });
     };
     poll();
-    log('📡 Telegram polling active');
 }
 
 // ============================================
 // KEEP ALIVE
 // ============================================
-setInterval(() => log('💓 Bot alive'), 60000);
+setInterval(() => log('💓 Alive'), 60000);
 
 // ============================================
-// START
+// START BOT
 // ============================================
 console.log('\n========================================');
-console.log('🚀 LEGENDARY TRADING BOT - FINAL');
+console.log('🚀 LEGENDARY TRADING BOT');
 console.log('========================================\n');
 console.log(`Pairs: ${PAIRS.length}`);
-console.log(`Threshold: ${CONFIG.MIN_CONFIDENCE}%`);
-console.log(`Twelve Data API: ${CONFIG.TWELVE_DATA_KEY ? '✅' : '❌'}`);
+console.log(`Twelve Data: ${CONFIG.TWELVE_DATA_KEY ? '✅' : '❌'}`);
 console.log(`Telegram: ${CONFIG.TELEGRAM_TOKEN ? '✅' : '❌'}\n`);
 
 if (CONFIG.TELEGRAM_TOKEN && CONFIG.TELEGRAM_CHAT_ID && CONFIG.TWELVE_DATA_KEY) {
     pollTelegram();
     startAutoScan();
-    sendMessage(`🚀 Bot ACTIVE!\n✅ ${PAIRS.length} pairs\n✅ Send /scan to test`);
+    sendMessage(`🚀 BOT ACTIVE! ${PAIRS.length} pairs monitored. Send /scan to test.`);
 } else {
     console.log('❌ Missing: TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, or TWELVE_DATA_API_KEY');
 }
-
-module.exports = { scanAllPairs, scanPair, showPairs, showStatus };
