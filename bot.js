@@ -10,7 +10,7 @@ const https = require('https');
 // CONFIGURATION (CHANGE ONLY THESE NUMBERS IF NEEDED)
 // ============================================
 const CONFIG = {
-    MIN_CONFIDENCE: 70,           // Minimum confidence to send signal
+    MIN_CONFIDENCE: 50,           // Minimum confidence to send signal
     AUTO_SCAN_INTERVAL: 30,       // Minutes between auto-scans
     EXPIRY_MINUTES: 15,           // Binary option expiry
     DELAY_BETWEEN_PAIRS: 2000,    // Milliseconds between API calls
