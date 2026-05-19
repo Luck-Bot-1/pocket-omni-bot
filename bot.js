@@ -1,44 +1,40 @@
 // ============================================
-// LEGENDARY TRADING BOT - TWELVE DATA (WORKING)
+// LEGENDARY TRADING BOT - PERMANENT VERSION
+// NO MORE CHANGES NEEDED AFTER THIS
 // ============================================
 
 const { analyzeSignal } = require('./analyzer.js');
 const https = require('https');
 
 // ============================================
-// CONFIGURATION
+// CONFIGURATION (CHANGE ONLY THESE NUMBERS IF NEEDED)
 // ============================================
 const CONFIG = {
-    MIN_CONFIDENCE: 70,
-    AUTO_SCAN_INTERVAL: 15,
-    EXPIRY_MINUTES: 15,
+    MIN_CONFIDENCE: 70,           // Minimum confidence to send signal
+    AUTO_SCAN_INTERVAL: 30,       // Minutes between auto-scans
+    EXPIRY_MINUTES: 15,           // Binary option expiry
+    DELAY_BETWEEN_PAIRS: 2000,    // Milliseconds between API calls
     TELEGRAM_TOKEN: process.env.TELEGRAM_BOT_TOKEN,
-    TELEGRAM_CHAT_ID: process.env.TELEGRAM_CHAT_ID,
-    TWELVE_DATA_KEY: process.env.TWELVE_DATA_API_KEY
+    TELEGRAM_CHAT_ID: process.env.TELEGRAM_CHAT_ID
 };
 
 // ============================================
-// ALL POCKET OPTION LIVE PAIRS
+// ALL POCKET OPTION LIVE PAIRS (30 PAIRS)
 // ============================================
 const PAIRS = [
-    'EUR/USD', 'GBP/USD', 'AUD/USD', 'NZD/USD', 'USD/CAD', 'USD/CHF', 'USD/JPY',
-    'AUD/CAD', 'AUD/JPY', 'CAD/JPY', 'CHF/JPY', 'EUR/AUD', 'EUR/CAD', 'EUR/CHF',
-    'EUR/GBP', 'EUR/JPY', 'EUR/NZD', 'GBP/AUD', 'GBP/CAD', 'GBP/CHF', 'GBP/JPY',
-    'GBP/NZD', 'NZD/CAD', 'NZD/JPY', 'AUD/NZD', 'CAD/CHF', 'AUD/CHF'
+    'EURUSD', 'GBPUSD', 'AUDUSD', 'NZDUSD', 'USDCAD', 'USDCHF', 'USDJPY',
+    'AUDCAD', 'AUDJPY', 'CADJPY', 'CHFJPY', 'EURAUD', 'EURCAD', 'EURCHF',
+    'EURGBP', 'EURJPY', 'EURNZD', 'GBPAUD', 'GBPCAD', 'GBPCHF', 'GBPJPY',
+    'GBPNZD', 'NZDCAD', 'NZDJPY', 'AUDNZD', 'CADCHF', 'AUDCHF',
+    'USDCNH', 'USDMXN', 'USDZAR'
 ];
 
 // ============================================
-// FETCH DATA FROM TWELVE DATA
+// FETCH FROM YAHOO FINANCE (NO API KEY NEEDED)
 // ============================================
-async function fetchTwelveData(pair, interval = '15min') {
-    if (!CONFIG.TWELVE_DATA_KEY) {
-        console.log('❌ TWELVE_DATA_API_KEY not set');
-        return null;
-    }
-    
+async function fetchYahooData(pair, interval = '5m', range = '5d') {
     return new Promise((resolve) => {
-        const symbol = pair.replace('/', '');
-        const url = `https://api.twelvedata.com/time_series?symbol=${symbol}&interval=${interval}&outputsize=120&apikey=${CONFIG.TWELVE_DATA_KEY}`;
+        const url = `https://query1.finance.yahoo.com/v8/finance/chart/${pair}=X?interval=${interval}&range=${range}`;
         
         https.get(url, (res) => {
             let data = '';
@@ -46,29 +42,24 @@ async function fetchTwelveData(pair, interval = '15min') {
             res.on('end', () => {
                 try {
                     const json = JSON.parse(data);
+                    const quotes = json.chart?.result?.[0]?.indicators?.quote?.[0];
+                    const timestamps = json.chart?.result?.[0]?.timestamp;
                     
-                    if (json.code === 429) {
-                        console.log(`   ⚠️ Rate limit for ${pair}`);
-                        resolve(null);
-                        return;
-                    }
-                    
-                    if (!json.values || !Array.isArray(json.values)) {
+                    if (!quotes?.open || !timestamps) {
                         resolve(null);
                         return;
                     }
                     
                     const candles = [];
-                    for (let i = 0; i < json.values.length; i++) {
-                        const v = json.values[i];
-                        if (v.open && v.high && v.low && v.close) {
+                    for (let i = 0; i < timestamps.length; i++) {
+                        if (quotes.open[i] && quotes.high[i] && quotes.low[i] && quotes.close[i]) {
                             candles.push({
-                                open: parseFloat(v.open),
-                                high: parseFloat(v.high),
-                                low: parseFloat(v.low),
-                                close: parseFloat(v.close),
-                                volume: 1000,
-                                time: new Date(v.datetime).getTime()
+                                open: quotes.open[i],
+                                high: quotes.high[i],
+                                low: quotes.low[i],
+                                close: quotes.close[i],
+                                volume: quotes.volume?.[i] || 1000,
+                                time: timestamps[i] * 1000
                             });
                         }
                     }
@@ -82,14 +73,40 @@ async function fetchTwelveData(pair, interval = '15min') {
 }
 
 // ============================================
+// CONVERT 5MIN TO 15MIN CANDLES
+// ============================================
+function convertTo15Min(fiveMinData) {
+    if (!fiveMinData?.values) return null;
+    const candles = [];
+    for (let i = 0; i < fiveMinData.values.length; i += 3) {
+        const group = fiveMinData.values.slice(i, i + 3);
+        if (group.length === 3) {
+            candles.push({
+                open: group[0].open,
+                high: Math.max(...group.map(c => c.high)),
+                low: Math.min(...group.map(c => c.low)),
+                close: group[2].close,
+                volume: group.reduce((s, c) => s + c.volume, 0),
+                time: group[2].time
+            });
+        }
+    }
+    return { values: candles };
+}
+
+// ============================================
 // GET MULTI-TIMEFRAME DATA (15min, 1H, 4H)
 // ============================================
 async function getMultiTimeframeData(pair) {
-    const fifteenMin = await fetchTwelveData(pair, '15min');
-    const oneHour = await fetchTwelveData(pair, '1h');
-    const fourHour = await fetchTwelveData(pair, '4h');
+    const fiveMin = await fetchYahooData(pair, '5m', '1d');
+    const oneHour = await fetchYahooData(pair, '30m', '5d');
+    const fourHour = await fetchYahooData(pair, '1h', '10d');
     
-    return { entry: fifteenMin, trend: oneHour, structure: fourHour };
+    return {
+        entry: convertTo15Min(fiveMin),
+        trend: oneHour,
+        structure: fourHour
+    };
 }
 
 // ============================================
@@ -109,10 +126,7 @@ function sendMessage(text) {
 async function analyzePair(pair) {
     try {
         const tfData = await getMultiTimeframeData(pair);
-        
-        if (!tfData.entry || !tfData.entry.values || tfData.entry.values.length < 30) {
-            return null;
-        }
+        if (!tfData.entry?.values?.length >= 30) return null;
         
         return await analyzeSignal(
             tfData.entry, { pairName: pair }, '15m',
@@ -127,18 +141,12 @@ async function analyzePair(pair) {
 // SCAN SPECIFIC PAIR
 // ============================================
 async function scanPair(pair) {
-    if (!CONFIG.TWELVE_DATA_KEY) {
-        sendMessage(`❌ TWELVE_DATA_API_KEY not configured.`);
-        return;
-    }
-    
     const upperPair = pair.toUpperCase();
     sendMessage(`🔍 Analyzing ${upperPair}...`);
-    
     const analysis = await analyzePair(upperPair);
     
     if (!analysis) {
-        sendMessage(`❌ Could not analyze ${upperPair}.`);
+        sendMessage(`❌ Could not analyze ${upperPair}`);
         return;
     }
     
@@ -171,24 +179,26 @@ RSI: ${analysis.rsi} | ADX: ${analysis.adx}
 // SCAN ALL PAIRS
 // ============================================
 async function scanAllPairs() {
-    if (!CONFIG.TWELVE_DATA_KEY) {
-        sendMessage(`❌ TWELVE_DATA_API_KEY not configured.`);
-        return;
-    }
-    
     sendMessage(`🔍 Scanning ${PAIRS.length} pairs...`);
     let signals = [];
     let processed = 0;
     
-    for (const pair of PAIRS) {
+    for (let i = 0; i < PAIRS.length; i++) {
+        const pair = PAIRS[i];
+        console.log(`[${i+1}/${PAIRS.length}] ${pair}...`);
+        
         const analysis = await analyzePair(pair);
         if (analysis) processed++;
+        
         if (analysis?.confidence >= CONFIG.MIN_CONFIDENCE) {
             signals.push({ pair, analysis });
             const arrow = analysis.signal === 'CALL' ? '📈' : '📉';
             sendMessage(`${arrow} ${pair}: ${analysis.signal} @ ${analysis.confidence}%`);
         }
-        await new Promise(r => setTimeout(r, 800));
+        
+        if (i < PAIRS.length - 1) {
+            await new Promise(r => setTimeout(r, CONFIG.DELAY_BETWEEN_PAIRS));
+        }
     }
     
     sendMessage(`✅ Scan complete. Processed: ${processed}/${PAIRS.length} pairs. Found ${signals.length} signal(s).`);
@@ -208,15 +218,24 @@ function showPairs() {
 // ============================================
 let lastUpdateId = 0;
 let autoScanInterval = null;
+let isScanning = false;
 
 function startAutoScan() {
     if (autoScanInterval) return;
-    autoScanInterval = setInterval(() => scanAllPairs(), CONFIG.AUTO_SCAN_INTERVAL * 60 * 1000);
+    autoScanInterval = setInterval(() => {
+        if (!isScanning) {
+            isScanning = true;
+            scanAllPairs().finally(() => { isScanning = false; });
+        }
+    }, CONFIG.AUTO_SCAN_INTERVAL * 60 * 1000);
     sendMessage(`✅ Auto-scan enabled (every ${CONFIG.AUTO_SCAN_INTERVAL} minutes)`);
 }
 
 function stopAutoScan() {
-    if (autoScanInterval) { clearInterval(autoScanInterval); autoScanInterval = null; }
+    if (autoScanInterval) {
+        clearInterval(autoScanInterval);
+        autoScanInterval = null;
+    }
     sendMessage(`⏸️ Auto-scan disabled`);
 }
 
@@ -238,27 +257,40 @@ function pollTelegram() {
                             
                             if (text === '/start') {
                                 sendMessage(`
-🚀 <b>OmniPocket Bot</b>
+🚀 <b>OmniPocket Trading Bot</b>
 
-Commands:
+<b>Commands:</b>
 /scan - Scan all pairs
-/scan PAIR - Scan specific pair
+/scan PAIR - Scan specific pair (e.g., /scan EURUSD)
 /pairs - Show available pairs
 /startscan - Enable auto-scan
 /stopscan - Disable auto-scan
 /status - Bot status
 
-Data: Twelve Data
+<b>Settings:</b>
+Pairs: ${PAIRS.length}
 Threshold: ${CONFIG.MIN_CONFIDENCE}%
 Expiry: ${CONFIG.EXPIRY_MINUTES}m
+Data: Yahoo Finance (no API key)
                                 `);
                             }
                             else if (text === '/pairs') showPairs();
-                            else if (text === '/status') sendMessage(`✅ Bot running\nPairs: ${PAIRS.length}\nData: Twelve Data\nAuto-scan: ${autoScanInterval ? 'ON' : 'OFF'}`);
+                            else if (text === '/status') {
+                                sendMessage(`✅ Bot running\nPairs: ${PAIRS.length}\nAuto-scan: ${autoScanInterval ? 'ON' : 'OFF'}\nThreshold: ${CONFIG.MIN_CONFIDENCE}%\nExpiry: ${CONFIG.EXPIRY_MINUTES}m`);
+                            }
                             else if (text === '/startscan') startAutoScan();
                             else if (text === '/stopscan') stopAutoScan();
-                            else if (text === '/scan') scanAllPairs();
-                            else if (text.startsWith('/scan ')) scanPair(text.substring(6));
+                            else if (text === '/scan') {
+                                if (!isScanning) {
+                                    isScanning = true;
+                                    scanAllPairs().finally(() => { isScanning = false; });
+                                } else {
+                                    sendMessage(`⏳ Scan already in progress.`);
+                                }
+                            }
+                            else if (text.startsWith('/scan ')) {
+                                scanPair(text.substring(6));
+                            }
                         }
                     }
                 } catch(e) {}
@@ -273,18 +305,20 @@ Expiry: ${CONFIG.EXPIRY_MINUTES}m
 // START BOT
 // ============================================
 console.log('\n========================================');
-console.log('🚀 LEGENDARY TRADING BOT - TWELVE DATA');
+console.log('🚀 LEGENDARY TRADING BOT - PERMANENT');
 console.log('========================================\n');
 console.log(`Pairs: ${PAIRS.length}`);
-console.log(`Data source: Twelve Data`);
-console.log(`API Key: ${CONFIG.TWELVE_DATA_KEY ? '✅ Set' : '❌ NOT SET'}`);
-console.log(`Threshold: ${CONFIG.MIN_CONFIDENCE}%\n`);
+console.log(`Data source: Yahoo Finance (no API key)`);
+console.log(`Threshold: ${CONFIG.MIN_CONFIDENCE}%`);
+console.log(`Expiry: ${CONFIG.EXPIRY_MINUTES}m`);
+console.log(`Auto-scan: every ${CONFIG.AUTO_SCAN_INTERVAL} minutes`);
+console.log(`Delay between pairs: ${CONFIG.DELAY_BETWEEN_PAIRS/1000}s\n`);
 
 if (CONFIG.TELEGRAM_TOKEN && CONFIG.TELEGRAM_CHAT_ID) {
     console.log('✅ Telegram connected');
     pollTelegram();
-    if (CONFIG.TWELVE_DATA_KEY) startAutoScan();
-    sendMessage(`🚀 Bot ACTIVE\n📡 Data: Twelve Data\n✅ ${PAIRS.length} pairs\n✅ /scan for manual scan`);
+    startAutoScan();
+    sendMessage(`🚀 Bot ACTIVE\n✅ ${PAIRS.length} pairs\n✅ /scan for manual scan\n✅ Auto-scan every ${CONFIG.AUTO_SCAN_INTERVAL} min`);
 } else {
     console.log('⚠️ Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID');
 }
