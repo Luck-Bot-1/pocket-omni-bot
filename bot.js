@@ -1,19 +1,18 @@
 // ============================================
-// LEGENDARY TRADING BOT - ABSOLUTE FINAL
-// NO MORE CHANGES EVER - DEPLOY ONCE
+// LEGENDARY TRADING BOT - FINAL PERMANENT
+// WILL GENERATE SIGNALS - DEPLOY ONCE
 // ============================================
 
 const { analyzeSignal } = require('./analyzer.js');
 const https = require('https');
 
 // ============================================
-// CONFIGURATION (DO NOT CHANGE)
+// CONFIGURATION
 // ============================================
 const CONFIG = {
     MIN_CONFIDENCE: 65,
-    AUTO_SCAN_INTERVAL: 30,
-    EXPIRY_MINUTES: 15,
-    DELAY_BETWEEN_PAIRS: 2000,
+    SCAN_INTERVAL: 30,
+    DELAY_BETWEEN_PAIRS: 1500,
     TELEGRAM_TOKEN: process.env.TELEGRAM_BOT_TOKEN,
     TELEGRAM_CHAT_ID: process.env.TELEGRAM_CHAT_ID,
     TWELVE_DATA_KEY: process.env.TWELVE_DATA_API_KEY
@@ -30,13 +29,17 @@ const PAIRS = [
 ];
 
 // ============================================
-// SIMPLE LOGGER
+// STATE
+// ============================================
+let autoScanInterval = null;
+let isScanning = false;
+let lastUpdateId = 0;
+
+// ============================================
+// HELPERS
 // ============================================
 function log(msg) { console.log(`[${new Date().toLocaleTimeString()}] ${msg}`); }
 
-// ============================================
-// SEND TELEGRAM MESSAGE
-// ============================================
 function sendMessage(text) {
     if (!CONFIG.TELEGRAM_TOKEN) return;
     const data = JSON.stringify({ chat_id: CONFIG.TELEGRAM_CHAT_ID, text, parse_mode: 'HTML' });
@@ -53,7 +56,7 @@ async function fetchTwelveData(pair, interval = '15min') {
     if (!CONFIG.TWELVE_DATA_KEY) return null;
     return new Promise((resolve) => {
         const symbol = pair.replace('/', '');
-        const url = `https://api.twelvedata.com/time_series?symbol=${symbol}&interval=${interval}&outputsize=120&apikey=${CONFIG.TWELVE_DATA_KEY}`;
+        const url = `https://api.twelvedata.com/time_series?symbol=${symbol}&interval=${interval}&outputsize=100&apikey=${CONFIG.TWELVE_DATA_KEY}`;
         https.get(url, (res) => {
             let data = '';
             res.on('data', chunk => data += chunk);
@@ -69,20 +72,8 @@ async function fetchTwelveData(pair, interval = '15min') {
                     resolve({ values: candles });
                 } catch(e) { resolve(null); }
             });
-        }).on('error', () => resolve(null)).setTimeout(10000, function() { this.destroy(); resolve(null); });
+        }).on('error', () => resolve(null));
     });
-}
-
-// ============================================
-// MULTI-TIMEFRAME DATA
-// ============================================
-async function getMultiTimeframeData(pair) {
-    const fifteenMin = await fetchTwelveData(pair, '15min');
-    await new Promise(r => setTimeout(r, 500));
-    const oneHour = await fetchTwelveData(pair, '1h');
-    await new Promise(r => setTimeout(r, 500));
-    const fourHour = await fetchTwelveData(pair, '4h');
-    return { entry: fifteenMin, trend: oneHour, structure: fourHour };
 }
 
 // ============================================
@@ -90,14 +81,14 @@ async function getMultiTimeframeData(pair) {
 // ============================================
 async function analyzePair(pair) {
     try {
-        const tfData = await getMultiTimeframeData(pair);
-        if (!tfData.entry?.values?.length >= 50) return null;
-        return await analyzeSignal(tfData.entry, { pairName: pair }, '15m', tfData.trend, tfData.structure);
+        const data = await fetchTwelveData(pair, '15min');
+        if (!data?.values?.length >= 50) return null;
+        return await analyzeSignal(data, { pairName: pair }, '15m');
     } catch(e) { return null; }
 }
 
 // ============================================
-// SCAN SPECIFIC PAIR
+// SCAN SPECIFIC PAIR (MANUAL)
 // ============================================
 async function scanPair(pair) {
     const upperPair = pair.toUpperCase();
@@ -110,60 +101,93 @@ async function scanPair(pair) {
 }
 
 // ============================================
-// SCAN ALL PAIRS
+// SCAN ALL PAIRS (MANUAL)
 // ============================================
-async function scanAllPairs(isAuto = false) {
-    if (!isAuto) sendMessage(`🔍 Scanning ${PAIRS.length} pairs... (2-3 minutes)`);
-    log(`Scanning ${PAIRS.length} pairs`);
-    let signals = 0, processed = 0;
-    for (let i = 0; i < PAIRS.length; i++) {
-        const pair = PAIRS[i];
+async function scanAllPairs() {
+    if (isScanning) { sendMessage('⏳ Scan already in progress'); return; }
+    
+    isScanning = true;
+    sendMessage(`🔍 Scanning ${PAIRS.length} pairs... (2-3 minutes)`);
+    log(`Manual scan started`);
+    
+    let signals = [];
+    
+    for (const pair of PAIRS) {
         const analysis = await analyzePair(pair);
-        if (analysis) {
-            processed++;
-            if (analysis.confidence >= CONFIG.MIN_CONFIDENCE) {
-                signals++;
-                log(`✅ SIGNAL: ${pair} ${analysis.signal} @ ${analysis.confidence}%`);
-                if (!isAuto) {
-                    const arrow = analysis.signal === 'CALL' ? '📈' : '📉';
-                    sendMessage(`${arrow} ${pair}: ${analysis.signal} @ ${analysis.confidence}%`);
-                }
-            }
+        if (analysis?.confidence >= CONFIG.MIN_CONFIDENCE) {
+            signals.push({ pair, analysis });
+            const arrow = analysis.signal === 'CALL' ? '📈' : '📉';
+            sendMessage(`${arrow} ${pair}: ${analysis.signal} @ ${analysis.confidence}%`);
+            log(`✅ ${pair}: ${analysis.signal} @ ${analysis.confidence}%`);
         }
-        if (i < PAIRS.length - 1) await new Promise(r => setTimeout(r, CONFIG.DELAY_BETWEEN_PAIRS));
+        await new Promise(r => setTimeout(r, CONFIG.DELAY_BETWEEN_PAIRS));
     }
-    if (!isAuto) sendMessage(`✅ Scan complete: ${signals} signals, ${processed}/${PAIRS.length} pairs`);
+    
+    if (signals.length === 0) {
+        sendMessage(`✅ Scan complete: No signals above ${CONFIG.MIN_CONFIDENCE}% threshold.`);
+    } else {
+        sendMessage(`✅ Scan complete: ${signals.length} signals found.`);
+    }
+    
+    isScanning = false;
 }
 
 // ============================================
-// TELEGRAM BOT (POLLING)
+// AUTO SCAN (SILENT - ONLY SIGNALS)
 // ============================================
-let lastUpdateId = 0;
-let autoScanInterval = null;
-let isScanning = false;
-
-function startAutoScan() {
-    if (autoScanInterval) return;
-    autoScanInterval = setInterval(() => {
-        if (!isScanning) {
-            isScanning = true;
-            scanAllPairs(true).finally(() => { isScanning = false; });
+async function autoScan() {
+    if (isScanning) return;
+    isScanning = true;
+    log(`🔄 Auto-scan triggered`);
+    
+    for (const pair of PAIRS) {
+        const analysis = await analyzePair(pair);
+        if (analysis?.confidence >= CONFIG.MIN_CONFIDENCE) {
+            const arrow = analysis.signal === 'CALL' ? '📈' : '📉';
+            sendMessage(`${arrow} ${pair}: ${analysis.signal} @ ${analysis.confidence}%`);
+            log(`🔔 AUTO SIGNAL: ${pair} ${analysis.signal} @ ${analysis.confidence}%`);
         }
-    }, CONFIG.AUTO_SCAN_INTERVAL * 60 * 1000);
-    sendMessage(`✅ Auto-scan enabled (every ${CONFIG.AUTO_SCAN_INTERVAL} min)`);
+        await new Promise(r => setTimeout(r, CONFIG.DELAY_BETWEEN_PAIRS));
+    }
+    
+    isScanning = false;
+}
+
+// ============================================
+// AUTO SCAN CONTROLS
+// ============================================
+function startAutoScan() {
+    if (autoScanInterval) { sendMessage('⚠️ Auto-scan already running'); return; }
+    autoScanInterval = setInterval(autoScan, CONFIG.SCAN_INTERVAL * 60 * 1000);
+    sendMessage(`✅ Auto-scan ENABLED (every ${CONFIG.SCAN_INTERVAL} minutes)`);
+    log(`Auto-scan started`);
 }
 
 function stopAutoScan() {
     if (autoScanInterval) {
         clearInterval(autoScanInterval);
         autoScanInterval = null;
-        sendMessage('⏸️ Auto-scan disabled');
+        sendMessage('⏸️ Auto-scan DISABLED');
+        log(`Auto-scan stopped`);
+    } else {
+        sendMessage('⚠️ Auto-scan was not running');
     }
 }
 
+// ============================================
+// STATUS
+// ============================================
+function showStatus() {
+    sendMessage(`📊 Bot Status\nPairs: ${PAIRS.length}\nThreshold: ${CONFIG.MIN_CONFIDENCE}%\nAuto-scan: ${autoScanInterval ? '🟢 ACTIVE' : '🔴 STOPPED'}\nInterval: ${CONFIG.SCAN_INTERVAL} min\nData: Twelve Data`);
+}
+
+// ============================================
+// TELEGRAM POLLING
+// ============================================
 function pollTelegram() {
     if (!CONFIG.TELEGRAM_TOKEN) { log('❌ No TELEGRAM_TOKEN'); return; }
     log('📡 Polling started');
+    
     const poll = () => {
         https.get(`https://api.telegram.org/bot${CONFIG.TELEGRAM_TOKEN}/getUpdates?offset=${lastUpdateId + 1}&timeout=30`, (res) => {
             let data = '';
@@ -176,18 +200,21 @@ function pollTelegram() {
                             lastUpdateId = update.update_id;
                             const text = update.message?.text || '';
                             log(`📥 Command: ${text}`);
-                            if (text === '/start') sendMessage(`🚀 BOT ACTIVE!\n/scan - Scan all\n/scan EUR/USD - Scan specific\n/status - Status\n/startscan - Auto ON\n/stopscan - Auto OFF`);
-                            else if (text === '/status') sendMessage(`📊 Status\nPairs: ${PAIRS.length}\nThreshold: ${CONFIG.MIN_CONFIDENCE}%\nAuto: ${autoScanInterval ? 'ON' : 'OFF'}`);
+                            
+                            if (text === '/start') {
+                                sendMessage(`🚀 BOT ACTIVE!\n\nCommands:\n/scan - Scan all pairs\n/scan EUR/USD - Scan specific\n/startscan - Enable auto-scan\n/stopscan - Disable auto-scan\n/status - Bot status\n\nThreshold: ${CONFIG.MIN_CONFIDENCE}%\nPairs: ${PAIRS.length}`);
+                            }
+                            else if (text === '/status') showStatus();
                             else if (text === '/startscan') startAutoScan();
                             else if (text === '/stopscan') stopAutoScan();
-                            else if (text === '/scan') { if (!isScanning) { isScanning = true; scanAllPairs(false).finally(() => { isScanning = false; }); } else sendMessage('⏳ Wait...'); }
+                            else if (text === '/scan') scanAllPairs();
                             else if (text?.startsWith('/scan ')) scanPair(text.substring(6));
                         }
                     }
-                } catch(e) { log(`Parse error: ${e.message}`); }
+                } catch(e) {}
                 setTimeout(poll, 2000);
             });
-        }).on('error', (e) => { log(`Poll error: ${e.message}`); setTimeout(poll, 5000); });
+        }).on('error', () => setTimeout(poll, 5000));
     };
     poll();
 }
@@ -198,19 +225,20 @@ function pollTelegram() {
 setInterval(() => log('💓 Alive'), 60000);
 
 // ============================================
-// START BOT
+// START
 // ============================================
 console.log('\n========================================');
-console.log('🚀 LEGENDARY TRADING BOT');
+console.log('🚀 LEGENDARY TRADING BOT - FINAL');
 console.log('========================================\n');
 console.log(`Pairs: ${PAIRS.length}`);
+console.log(`Threshold: ${CONFIG.MIN_CONFIDENCE}%`);
+console.log(`Auto-scan: every ${CONFIG.SCAN_INTERVAL} min`);
 console.log(`Twelve Data: ${CONFIG.TWELVE_DATA_KEY ? '✅' : '❌'}`);
 console.log(`Telegram: ${CONFIG.TELEGRAM_TOKEN ? '✅' : '❌'}\n`);
 
 if (CONFIG.TELEGRAM_TOKEN && CONFIG.TELEGRAM_CHAT_ID && CONFIG.TWELVE_DATA_KEY) {
     pollTelegram();
-    startAutoScan();
-    sendMessage(`🚀 BOT ACTIVE! ${PAIRS.length} pairs monitored. Send /scan to test.`);
+    sendMessage(`🚀 BOT ACTIVE!\n✅ ${PAIRS.length} pairs\n✅ /scan to test\n✅ /startscan for auto-scan`);
 } else {
-    console.log('❌ Missing: TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, or TWELVE_DATA_API_KEY');
+    console.log('❌ Missing: TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, or TWELVE_DATA_KEY');
 }
