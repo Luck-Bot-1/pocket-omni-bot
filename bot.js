@@ -1,6 +1,8 @@
 // ============================================
-// LEGENDARY TRADING BOT v17.0 - GOD LEVEL
-// TOP 0.001% GLOBAL - TELEGRAM MASTER
+// LEGENDARY TRADING BOT v19.0 - ULTIMATE
+// LIVE DATA ONLY - YAHOO FINANCE
+// 15 MINUTE PRIMARY EMPHASIS
+// FULL AUTO/MANUAL TIMEFRAME CONTROL
 // ============================================
 
 const { analyzeSignal } = require('./analyzer.js');
@@ -8,37 +10,38 @@ const https = require('https');
 const fs = require('fs');
 
 // ============================================
-// GOD-LEVEL CONFIGURATION
+// ULTIMATE CONFIGURATION
 // ============================================
-const GOD_CONFIG = {
-    MIN_CONFIDENCE: 72,
-    SCAN_INTERVAL_MINUTES: 30,
-    DELAY_BETWEEN_PAIRS_MS: 1200,
+const ULTIMATE_CONFIG = {
+    MIN_CONFIDENCE: 70,
+    DELAY_BETWEEN_PAIRS_MS: 1000,
     TELEGRAM_TOKEN: process.env.TELEGRAM_BOT_TOKEN,
     TELEGRAM_CHAT_ID: process.env.TELEGRAM_CHAT_ID,
     USE_YAHOO_FINANCE: true,
     DEBUG_MODE: true,
     
-    // TIMEFRAME CONFIGURATION
-    ACTIVE_TIMEFRAMES: ['1m', '5m', '15m', '30m', '1h'],
-    DEFAULT_TIMEFRAME: '15m',
+    // BROKER ALLOWED TIMEFRAMES
+    ALLOWED_TIMEFRAMES: ['1m', '5m', '15m', '30m', '1h', '4h'],
+    DEFAULT_TIMEFRAME: '15m',  // PRIMARY EMPHASIS
     
     // AUTO-SCAN TIMEFRAME SETTINGS
     AUTO_SCAN_TIMEFRAMES: {
-        '1m': { enabled: false, interval: 1, expiry: 1 },
-        '5m': { enabled: true, interval: 5, expiry: 5 },
-        '15m': { enabled: true, interval: 15, expiry: 15 },
-        '30m': { enabled: true, interval: 30, expiry: 30 },
-        '1h': { enabled: true, interval: 60, expiry: 60 }
+        '1m':  { enabled: false, interval: 1,  name: '1 MINUTE' },
+        '5m':  { enabled: true,  interval: 5,  name: '5 MINUTE' },
+        '15m': { enabled: true,  interval: 15, name: '15 MINUTE (PRIMARY)' },
+        '30m': { enabled: true,  interval: 30, name: '30 MINUTE' },
+        '1h':  { enabled: true,  interval: 60, name: '1 HOUR' },
+        '4h':  { enabled: false, interval: 240,name: '4 HOUR' }
     },
     
-    // DATA FETCH RETRY
+    // DATA FETCH
     MAX_RETRIES: 3,
-    RETRY_DELAY_MS: 2000
+    RETRY_DELAY_MS: 2000,
+    REQUEST_TIMEOUT_MS: 15000
 };
 
 // ============================================
-// FOREX PAIRS (27 Major & Cross Pairs)
+// FOREX PAIRS (27 Pairs)
 // ============================================
 const PAIRS = [
     { name: 'EUR/USD', symbol: 'EURUSD=X' },
@@ -77,7 +80,7 @@ let autoScanIntervals = {};
 let isScanning = false;
 let lastUpdateId = 0;
 let botStartTime = Date.now();
-let currentManualTimeframe = GOD_CONFIG.DEFAULT_TIMEFRAME;
+let currentManualTimeframe = ULTIMATE_CONFIG.DEFAULT_TIMEFRAME;
 
 // ============================================
 // LOGGING
@@ -91,20 +94,21 @@ function log(msg, level = 'INFO') {
 }
 
 function debug(msg) {
-    if (GOD_CONFIG.DEBUG_MODE) {
+    if (ULTIMATE_CONFIG.DEBUG_MODE) {
         log(msg, 'DEBUG');
     }
 }
 
 // ============================================
-// YAHOO FINANCE DATA FETCHER (WITH RETRY)
+// YAHOO FINANCE DATA FETCHER (LIVE ONLY)
 // ============================================
-async function fetchYahooFinanceWithRetry(symbol, interval, retries = GOD_CONFIG.MAX_RETRIES) {
+async function fetchYahooFinanceWithRetry(symbol, interval, retries = ULTIMATE_CONFIG.MAX_RETRIES) {
     for (let i = 0; i < retries; i++) {
         const result = await fetchYahooFinance(symbol, interval);
         if (result) return result;
         if (i < retries - 1) {
-            await new Promise(r => setTimeout(r, GOD_CONFIG.RETRY_DELAY_MS));
+            await new Promise(r => setTimeout(r, ULTIMATE_CONFIG.RETRY_DELAY_MS));
+            debug(`Retry ${i + 1}/${retries} for ${symbol}`);
         }
     }
     return null;
@@ -119,6 +123,7 @@ async function fetchYahooFinance(symbol, interval = '15m') {
             case '15m': period1 = Math.floor((Date.now() / 1000) - (7 * 24 * 60 * 60)); break;
             case '30m': period1 = Math.floor((Date.now() / 1000) - (14 * 24 * 60 * 60)); break;
             case '1h': period1 = Math.floor((Date.now() / 1000) - (30 * 24 * 60 * 60)); break;
+            case '4h': period1 = Math.floor((Date.now() / 1000) - (60 * 24 * 60 * 60)); break;
             default: period1 = Math.floor((Date.now() / 1000) - (7 * 24 * 60 * 60));
         }
         const period2 = Math.floor(Date.now() / 1000);
@@ -156,40 +161,38 @@ async function fetchYahooFinance(symbol, interval = '15m') {
             });
         });
         request.on('error', () => { resolve(null); });
-        request.setTimeout(15000, () => { request.destroy(); resolve(null); });
+        request.setTimeout(ULTIMATE_CONFIG.REQUEST_TIMEOUT_MS, () => { request.destroy(); resolve(null); });
     });
 }
 
+// LIVE DATA ONLY - Yahoo Finance
 async function fetchPriceData(pair, interval = '15min') {
-    if (GOD_CONFIG.USE_YAHOO_FINANCE) {
-        let yahooInterval;
-        switch(interval) {
-            case '1min': yahooInterval = '1m'; break;
-            case '5min': yahooInterval = '5m'; break;
-            case '15min': yahooInterval = '15m'; break;
-            case '30min': yahooInterval = '30m'; break;
-            case '1h': yahooInterval = '1h'; break;
-            default: yahooInterval = '15m';
-        }
-        const data = await fetchYahooFinanceWithRetry(pair.symbol, yahooInterval);
-        if (data && data.values?.length >= 30) return data;
+    let yahooInterval;
+    switch(interval) {
+        case '1min': yahooInterval = '1m'; break;
+        case '5min': yahooInterval = '5m'; break;
+        case '15min': yahooInterval = '15m'; break;
+        case '30min': yahooInterval = '30m'; break;
+        case '1h': yahooInterval = '1h'; break;
+        case '4h': yahooInterval = '1h'; break;
+        default: yahooInterval = '15m';
     }
-    return null;
+    return await fetchYahooFinanceWithRetry(pair.symbol, yahooInterval);
 }
 
 // ============================================
 // TELEGRAM MESSAGING
 // ============================================
 function sendMessage(text) {
-    if (!GOD_CONFIG.TELEGRAM_TOKEN || !GOD_CONFIG.TELEGRAM_CHAT_ID) {
+    if (!ULTIMATE_CONFIG.TELEGRAM_TOKEN || !ULTIMATE_CONFIG.TELEGRAM_CHAT_ID) {
         console.log(`\n📱 TELEGRAM:\n${text}\n`);
         return;
     }
     const data = JSON.stringify({
-        chat_id: GOD_CONFIG.TELEGRAM_CHAT_ID, text: text,
+        chat_id: ULTIMATE_CONFIG.TELEGRAM_CHAT_ID, text: text,
         parse_mode: 'HTML', disable_web_page_preview: true
     });
-    const req = https.request(`https://api.telegram.org/bot${GOD_CONFIG.TELEGRAM_TOKEN}/sendMessage`,
+    const req = https.request(`https://api.telegram.org/bot${ULTIMATE_CONFIG.TELEGRAM_TOKEN}/sendMessage`,
         { method: 'POST', headers: { 'Content-Type': 'application/json' } });
     req.on('error', (e) => log(`Telegram error: ${e.message}`, 'ERROR'));
     req.write(data);
@@ -201,7 +204,7 @@ function sendMessage(text) {
 // ============================================
 async function analyzePair(pairData, timeframe = '15min', accountBalance = 10000) {
     try {
-        debug(`🏆 [${timeframe}] God-level analysis for ${pairData.name}...`);
+        debug(`[${timeframe}] Analyzing ${pairData.name} (LIVE DATA)...`);
         const data = await fetchPriceData(pairData, timeframe);
         if (!data || !data.values || data.values.length < 30) {
             debug(`❌ [${timeframe}] Insufficient data for ${pairData.name}`);
@@ -215,7 +218,7 @@ async function analyzePair(pairData, timeframe = '15min', accountBalance = 10000
         
         const analysis = await analyzeSignal(data, { pairName: pairData.name }, timeframe, htfData, null, [], accountBalance);
         if (analysis && analysis.confidence) {
-            log(`✅ [${analysis.timeframe || timeframe}] ${pairData.name}: ${analysis.signal} @ ${analysis.confidence}% | ${analysis.strategyUsed} | Ensemble:${analysis.ensembleVotes || 1}`);
+            log(`✅ [${analysis.timeframe || timeframe}] ${pairData.name}: ${analysis.signal} @ ${analysis.confidence}% | ${analysis.strategyUsed}`);
         }
         return analysis;
     } catch(e) { 
@@ -232,7 +235,7 @@ async function scanSinglePair(pairName, timeframe = null) {
     const pair = PAIRS.find(p => p.name === pairName.toUpperCase());
     if (!pair) { sendMessage(`❌ Pair ${pairName} not found`); return; }
     
-    sendMessage(`🏆 [${useTimeframe}] God-level analysis for ${pair.name}...`);
+    sendMessage(`🔍 [${useTimeframe}] Analyzing ${pair.name} (LIVE DATA)...`);
     const analysis = await analyzePair(pair, useTimeframe);
     
     if (!analysis) { sendMessage(`❌ Could not analyze ${pair.name} on ${useTimeframe}`); return; }
@@ -241,38 +244,36 @@ async function scanSinglePair(pairName, timeframe = null) {
     const emoji = analysis.confidence >= 90 ? '🏆' : analysis.confidence >= 78 ? '✅' : '📊';
     
     let message = `${emoji} ${arrow} [${analysis.timeframe || useTimeframe}] ${pair.name}\n`;
-    message += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+    message += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
     message += `🎯 SIGNAL: ${analysis.signal} | CONFIDENCE: ${analysis.confidence}%\n`;
-    message += `📊 STRATEGY: ${analysis.strategyUsed} | Ensemble: ${analysis.ensembleVotes || 1} models\n`;
-    message += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+    message += `📊 STRATEGY: ${analysis.strategyUsed} | Ensemble: ${analysis.ensembleVotes || 5} factors\n`;
+    message += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
     message += `📈 TECHNICALS:\n`;
     message += `   RSI: ${analysis.rsi} | ADX: ${analysis.adx} (${analysis.adxStrength})\n`;
-    message += `   Trend: ${analysis.trendDirection} | HTF: ${analysis.htfTrend} ${analysis.htfAlignment}\n`;
+    message += `   Trend: ${analysis.trendDirection}\n`;
     message += `   Volatility: ${analysis.volatilityPercent}% | Change: ${analysis.priceChange}%\n`;
-    message += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+    message += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
     message += `📊 VOLUME & FLOW:\n`;
     message += `   Volume: ${analysis.volumeRatio}x avg | ${analysis.volumeQuality}\n`;
-    message += `   Imbalance: ${analysis.volumeImbalance}\n`;
+    message += `   Flow Imbalance: ${analysis.volumeImbalance}\n`;
     if (analysis.divergence !== 'None') {
         message += `   Divergence: ${analysis.divergence} (Quality: ${analysis.divergenceQuality})\n`;
     }
-    message += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+    message += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
     message += `🧠 SENTIMENT & SESSION:\n`;
     message += `   Sentiment: ${analysis.sentiment} (${analysis.sentimentScore})\n`;
     message += `   Session: ${analysis.session}\n`;
-    if (analysis.newsEvent !== 'NONE') {
-        message += `   📰 NEWS: ${analysis.newsEvent}\n`;
-    }
-    message += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+    message += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
     message += `💰 POSITION SIZING:\n`;
     message += `   Size: ${analysis.positionSize} units\n`;
     message += `   SL: ${analysis.stopLossPips} pips | TP: ${analysis.takeProfitPips} pips\n`;
-    message += `   Risk: $${analysis.riskAmount} | Expiry: ${analysis.expiry}min\n`;
-    message += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+    message += `   Risk: ${analysis.riskAmount} | Expiry: ${analysis.expiry}min\n`;
+    message += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
     message += `${analysis.recommendation}\n`;
     message += `${analysis.shouldTrade}`;
     
     sendMessage(message);
+    log(`📤 SIGNAL SENT: ${pair.name} - ${analysis.signal} @ ${analysis.confidence}%`);
 }
 
 // ============================================
@@ -283,30 +284,38 @@ async function scanAllPairs(timeframe = null) {
     isScanning = true;
     
     const scanTimeframe = timeframe || currentManualTimeframe;
-    sendMessage(`🏆 GOD-LEVEL SCAN: ${PAIRS.length} pairs on [${scanTimeframe}]...`);
-    log(`========== GOD-LEVEL SCAN [${scanTimeframe}] STARTED ==========`);
+    const tfName = ULTIMATE_CONFIG.AUTO_SCAN_TIMEFRAMES[scanTimeframe]?.name || scanTimeframe;
+    sendMessage(`🔍 ULTIMATE SCAN: ${PAIRS.length} pairs on [${tfName}] (LIVE DATA)...`);
+    log(`========== ULTIMATE MANUAL SCAN [${scanTimeframe}] STARTED ==========`);
     
     let signals = [];
+    let totalPairs = 0;
+    
     for (const pair of PAIRS) {
+        totalPairs++;
         const analysis = await analyzePair(pair, scanTimeframe);
-        if (analysis && analysis.confidence >= GOD_CONFIG.MIN_CONFIDENCE && analysis.signal !== 'NEUTRAL' && !analysis.skipReason) {
+        if (analysis && analysis.confidence >= ULTIMATE_CONFIG.MIN_CONFIDENCE && analysis.signal !== 'NEUTRAL' && !analysis.skipReason) {
             signals.push({ pair: pair.name, analysis });
             const arrow = analysis.signal === 'CALL' ? '📈' : '📉';
-            sendMessage(`${arrow} [${scanTimeframe}] ${pair.name}: ${analysis.signal} @ ${analysis.confidence}% | ${analysis.strategyUsed} | Ensemble:${analysis.ensembleVotes}`);
-            log(`✅ SIGNAL: [${scanTimeframe}] ${pair.name} - ${analysis.signal} @ ${analysis.confidence}%`);
+            sendMessage(`${arrow} [${scanTimeframe}] ${pair.name}: ${analysis.signal} @ ${analysis.confidence}% | ${analysis.strategyUsed}`);
+            log(`✅ SIGNAL FOUND: [${scanTimeframe}] ${pair.name} - ${analysis.signal} @ ${analysis.confidence}%`);
         }
-        await new Promise(r => setTimeout(r, GOD_CONFIG.DELAY_BETWEEN_PAIRS_MS));
+        
+        if (totalPairs % 10 === 0) {
+            log(`📊 Scan Progress: ${totalPairs}/${PAIRS.length} pairs scanned | Signals: ${signals.length}`);
+        }
+        
+        await new Promise(r => setTimeout(r, ULTIMATE_CONFIG.DELAY_BETWEEN_PAIRS_MS));
     }
     
-    log(`========== GOD-LEVEL SCAN COMPLETE: ${signals.length} signals ==========`);
+    log(`========== ULTIMATE SCAN COMPLETE: ${signals.length} signals ==========`);
     
     if (signals.length === 0) {
-        sendMessage(`✅ Scan complete [${scanTimeframe}]: No signals above ${GOD_CONFIG.MIN_CONFIDENCE}%`);
+        sendMessage(`✅ Scan complete [${tfName}]: No signals above ${ULTIMATE_CONFIG.MIN_CONFIDENCE}%`);
     } else {
-        sendMessage(`✅ Scan complete [${scanTimeframe}]: ${signals.length} SIGNALS FOUND`);
+        sendMessage(`✅ Scan complete [${tfName}]: ${signals.length} SIGNALS FOUND`);
         
-        // Send summary
-        let summary = `📊 SIGNAL SUMMARY [${scanTimeframe}]:\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+        let summary = `📊 SIGNAL SUMMARY [${tfName}]:\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
         for (const s of signals) {
             const arrow = s.analysis.signal === 'CALL' ? '📈' : '📉';
             summary += `${arrow} ${s.pair}: ${s.analysis.signal} @ ${s.analysis.confidence}%\n`;
@@ -322,22 +331,29 @@ async function scanAllPairs(timeframe = null) {
 async function autoScanForTimeframe(timeframe) {
     if (isScanning) return;
     isScanning = true;
-    log(`🔄 GOD-LEVEL AUTO-SCAN [${timeframe}] triggered`);
+    const tfName = ULTIMATE_CONFIG.AUTO_SCAN_TIMEFRAMES[timeframe]?.name || timeframe;
+    log(`🔄 AUTO-SCAN [${tfName}] triggered - ${new Date().toISOString()}`);
+    
+    let signalsFound = 0;
     
     for (const pair of PAIRS) {
         const analysis = await analyzePair(pair, timeframe);
-        if (analysis && analysis.confidence >= GOD_CONFIG.MIN_CONFIDENCE && analysis.signal !== 'NEUTRAL' && !analysis.skipReason) {
+        if (analysis && analysis.confidence >= ULTIMATE_CONFIG.MIN_CONFIDENCE && analysis.signal !== 'NEUTRAL' && !analysis.skipReason) {
+            signalsFound++;
             const arrow = analysis.signal === 'CALL' ? '📈' : '📉';
-            sendMessage(`🤖 AUTO [${timeframe}] ${arrow} ${pair.name}\n🎯 ${analysis.signal} @ ${analysis.confidence}% | Expiry: ${analysis.expiry}min\n📊 ${analysis.strategyUsed} | Ensemble:${analysis.ensembleVotes}`);
+            const message = `🤖 AUTO SIGNAL [${tfName}]\n${arrow} ${pair.name}\n🎯 ${analysis.signal} @ ${analysis.confidence}%\n📊 ${analysis.strategyUsed} | Ensemble:${analysis.ensembleVotes || 5}\n⏰ Expiry: ${analysis.expiry}min`;
+            sendMessage(message);
             log(`🔔 AUTO SIGNAL: [${timeframe}] ${pair.name} - ${analysis.signal} @ ${analysis.confidence}%`);
         }
-        await new Promise(r => setTimeout(r, GOD_CONFIG.DELAY_BETWEEN_PAIRS_MS));
+        await new Promise(r => setTimeout(r, ULTIMATE_CONFIG.DELAY_BETWEEN_PAIRS_MS));
     }
+    
+    log(`📊 AUTO-SCAN [${tfName}] complete: ${signalsFound} signals found`);
     isScanning = false;
 }
 
 // ============================================
-// START/STOP AUTO-SCAN
+// START/STOP AUTO-SCAN FOR TIMEFRAME
 // ============================================
 function startAutoScanForTimeframe(timeframe) {
     if (autoScanIntervals[timeframe]) {
@@ -345,95 +361,109 @@ function startAutoScanForTimeframe(timeframe) {
         return;
     }
     
-    const tfConfig = GOD_CONFIG.AUTO_SCAN_TIMEFRAMES[timeframe];
+    const tfConfig = ULTIMATE_CONFIG.AUTO_SCAN_TIMEFRAMES[timeframe];
     if (!tfConfig || !tfConfig.enabled) {
-        sendMessage(`❌ [${timeframe}] auto-scan not enabled`);
+        sendMessage(`❌ [${timeframe}] auto-scan not enabled in config`);
         return;
     }
     
     const intervalMinutes = tfConfig.interval;
     autoScanIntervals[timeframe] = setInterval(() => autoScanForTimeframe(timeframe), intervalMinutes * 60 * 1000);
-    sendMessage(`✅ God-level auto-scan ENABLED for [${timeframe}] (every ${intervalMinutes} min) | Expiry: ${tfConfig.expiry}min`);
-    log(`God-level auto-scan started for ${timeframe}`);
+    sendMessage(`✅ Auto-scan ENABLED for [${tfConfig.name}] (every ${intervalMinutes} min)`);
+    log(`🚀 Auto-scan started for ${timeframe} (interval: ${intervalMinutes}min)`);
 }
 
 function stopAutoScanForTimeframe(timeframe) {
     if (autoScanIntervals[timeframe]) {
         clearInterval(autoScanIntervals[timeframe]);
         delete autoScanIntervals[timeframe];
-        sendMessage(`⏸️ God-level auto-scan DISABLED for [${timeframe}]`);
-        log(`God-level auto-scan stopped for ${timeframe}`);
+        const tfName = ULTIMATE_CONFIG.AUTO_SCAN_TIMEFRAMES[timeframe]?.name || timeframe;
+        sendMessage(`⏸️ Auto-scan DISABLED for [${tfName}]`);
+        log(`🛑 Auto-scan stopped for ${timeframe}`);
     } else {
         sendMessage(`⚠️ No auto-scan running for [${timeframe}]`);
     }
 }
 
 function startAllAutoScans() {
-    for (const timeframe of GOD_CONFIG.ACTIVE_TIMEFRAMES) {
-        if (GOD_CONFIG.AUTO_SCAN_TIMEFRAMES[timeframe]?.enabled) {
+    let started = 0;
+    for (const timeframe of ULTIMATE_CONFIG.ALLOWED_TIMEFRAMES) {
+        if (ULTIMATE_CONFIG.AUTO_SCAN_TIMEFRAMES[timeframe]?.enabled) {
             startAutoScanForTimeframe(timeframe);
+            started++;
         }
+    }
+    if (started === 0) {
+        sendMessage(`⚠️ No auto-scans enabled. Check config.`);
+    } else {
+        log(`🚀 Started ${started} auto-scans`);
     }
 }
 
 function stopAllAutoScans() {
+    const count = Object.keys(autoScanIntervals).length;
     for (const timeframe of Object.keys(autoScanIntervals)) {
         stopAutoScanForTimeframe(timeframe);
     }
+    log(`🛑 Stopped ${count} auto-scans`);
 }
 
 // ============================================
 // TIMEFRAME MANAGEMENT
 // ============================================
 function setManualTimeframe(timeframe) {
-    if (!GOD_CONFIG.ACTIVE_TIMEFRAMES.includes(timeframe)) {
-        sendMessage(`❌ Invalid timeframe. Available: ${GOD_CONFIG.ACTIVE_TIMEFRAMES.join(', ')}`);
+    if (!ULTIMATE_CONFIG.ALLOWED_TIMEFRAMES.includes(timeframe)) {
+        sendMessage(`❌ Invalid timeframe. Allowed: ${ULTIMATE_CONFIG.ALLOWED_TIMEFRAMES.join(', ')}`);
         return;
     }
     currentManualTimeframe = timeframe;
-    sendMessage(`✅ Manual scan timeframe set to [${timeframe}]`);
-    log(`Manual timeframe changed to ${timeframe}`);
+    const tfName = ULTIMATE_CONFIG.AUTO_SCAN_TIMEFRAMES[timeframe]?.name || timeframe;
+    sendMessage(`✅ Manual scan timeframe set to [${tfName}]`);
+    log(`📌 Manual timeframe changed to ${timeframe}`);
 }
 
-function showGodLevelStatus() {
+function showUltimateStatus() {
     const uptimeHours = Math.floor((Date.now() - botStartTime) / 1000 / 60 / 60);
     const uptimeMinutes = Math.floor((Date.now() - botStartTime) / 1000 / 60) % 60;
     
-    let message = `🏆 GOD-LEVEL BOT v17.0 STATUS\n`;
-    message += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
-    message += `🤖 Status: ONLINE\n`;
+    let message = `🏆 ULTIMATE BOT v19.0 STATUS\n`;
+    message += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
     message += `⏱️ Uptime: ${uptimeHours}h ${uptimeMinutes}m\n`;
-    message += `📈 Manual Timeframe: [${currentManualTimeframe}]\n`;
-    message += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+    message += `📡 Data: YAHOO FINANCE (LIVE)\n`;
+    message += `🎯 Primary TF: 15 MINUTE ⭐\n`;
+    message += `📊 Manual TF: ${currentManualTimeframe}\n`;
+    message += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
     message += `🔄 AUTO-SCAN STATUS:\n`;
-    for (const tf of GOD_CONFIG.ACTIVE_TIMEFRAMES) {
+    
+    for (const tf of ULTIMATE_CONFIG.ALLOWED_TIMEFRAMES) {
         const isRunning = !!autoScanIntervals[tf];
-        const tfConfig = GOD_CONFIG.AUTO_SCAN_TIMEFRAMES[tf];
-        const icon = isRunning ? '🟢' : '🔴';
-        message += `${icon} [${tf}] ${tfConfig?.enabled ? `Interval: ${tfConfig.interval}min` : 'Disabled'}\n`;
+        const tfConfig = ULTIMATE_CONFIG.AUTO_SCAN_TIMEFRAMES[tf];
+        if (tfConfig) {
+            const icon = isRunning ? '🟢' : '🔴';
+            const primaryFlag = tf === '15m' ? ' ⭐ PRIMARY' : '';
+            message += `${icon} [${tf}] ${tfConfig.name}${primaryFlag} - ${tfConfig.enabled ? `Every ${tfConfig.interval}min` : 'Disabled'}\n`;
+        }
     }
-    message += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
-    message += `🎯 GOD-LEVEL FEATURES:\n`;
-    message += `✅ Ensemble Voting (5 models)\n`;
+    
+    message += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+    message += `🔱 ULTIMATE FEATURES:\n`;
+    message += `✅ Ensemble Voting (5 factors)\n`;
     message += `✅ RSI-Gated Divergence (>72/<28)\n`;
-    message += `✅ Volume-Weighted + Flow Imbalance\n`;
-    message += `✅ Ichimoku Cloud Analysis\n`;
-    message += `✅ Factor-Based Analysis (Momentum/MR/Vol)\n`;
-    message += `✅ Sentiment Integration (Fear/Greed)\n`;
-    message += `✅ Economic Calendar (News Avoidance)\n`;
-    message += `✅ ATR Position Sizing (1.5% risk)\n`;
-    message += `✅ Multi-Timeframe (1m/5m/15m/30m/1h)\n`;
-    message += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+    message += `✅ Volume Flow + Imbalance\n`;
+    message += `✅ ATR Position Sizing\n`;
+    message += `✅ Economic Calendar\n`;
+    message += `✅ Sentiment Analysis\n`;
+    message += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
     message += `📋 COMMANDS:\n`;
-    message += `/timeframe 15m - Set manual timeframe\n`;
+    message += `/tf 15m - Set manual timeframe\n`;
     message += `/start 15m - Start auto-scan\n`;
     message += `/stop 15m - Stop auto-scan\n`;
     message += `/startall - Start all auto-scans\n`;
     message += `/stopall - Stop all auto-scans\n`;
-    message += `/scan - Scan all pairs (manual timeframe)\n`;
+    message += `/scan - Scan all pairs (manual TF)\n`;
     message += `/scan 5m - Scan specific timeframe\n`;
     message += `/scan EUR/USD - Scan specific pair\n`;
-    message += `/god - Show this status`;
+    message += `/status - Show this menu`;
     
     sendMessage(message);
 }
@@ -446,8 +476,11 @@ function handleCommand(text) {
     const cmd = parts[0].toLowerCase();
     const arg = parts[1];
     
-    if (cmd === '/god' || cmd === '/status') {
-        showGodLevelStatus();
+    if (cmd === '/status') {
+        showUltimateStatus();
+    }
+    else if (cmd === '/tf' && arg) {
+        setManualTimeframe(arg);
     }
     else if (cmd === '/start' && arg) {
         startAutoScanForTimeframe(arg);
@@ -461,25 +494,16 @@ function handleCommand(text) {
     else if (cmd === '/stopall') {
         stopAllAutoScans();
     }
-    else if (cmd === '/timeframe' && arg) {
-        setManualTimeframe(arg);
-    }
     else if (cmd === '/scan') {
-        if (arg && GOD_CONFIG.ACTIVE_TIMEFRAMES.includes(arg)) {
+        if (arg && ULTIMATE_CONFIG.ALLOWED_TIMEFRAMES.includes(arg)) {
             scanAllPairs(arg);
         } else if (arg && (arg.includes('/') || arg.includes('USD') || arg.includes('EUR') || arg.includes('GBP') || arg.includes('AUD') || arg.includes('NZD') || arg.includes('CAD') || arg.includes('CHF') || arg.includes('JPY'))) {
             scanSinglePair(arg);
         } else if (arg) {
-            sendMessage(`❌ Unknown: ${arg}`);
+            sendMessage(`❌ Unknown: ${arg}. Use: /scan, /scan 15m, or /scan EUR/USD`);
         } else {
             scanAllPairs();
         }
-    }
-    else if (cmd === '/start') {
-        sendMessage(`⚠️ Usage: /start 15m - Start auto-scan for specific timeframe`);
-    }
-    else if (cmd === '/stop') {
-        sendMessage(`⚠️ Usage: /stop 15m - Stop auto-scan for specific timeframe`);
     }
     else {
         return false;
@@ -491,15 +515,15 @@ function handleCommand(text) {
 // TELEGRAM POLLING
 // ============================================
 function pollTelegram() {
-    if (!GOD_CONFIG.TELEGRAM_TOKEN) {
-        log('❌ No TELEGRAM_TOKEN - console mode');
+    if (!ULTIMATE_CONFIG.TELEGRAM_TOKEN) {
+        log('❌ No TELEGRAM_TOKEN - console mode only');
         return;
     }
     
-    log('📡 God-level Telegram polling started');
+    log('📡 Telegram polling started');
     
     const poll = () => {
-        const url = `https://api.telegram.org/bot${GOD_CONFIG.TELEGRAM_TOKEN}/getUpdates?offset=${lastUpdateId + 1}&timeout=30`;
+        const url = `https://api.telegram.org/bot${ULTIMATE_CONFIG.TELEGRAM_TOKEN}/getUpdates?offset=${lastUpdateId + 1}&timeout=30`;
         
         https.get(url, (res) => {
             let data = '';
@@ -513,7 +537,7 @@ function pollTelegram() {
                             const text = update.message?.text || '';
                             const chatId = update.message?.chat?.id;
                             
-                            if (GOD_CONFIG.TELEGRAM_CHAT_ID && chatId && chatId.toString() !== GOD_CONFIG.TELEGRAM_CHAT_ID) {
+                            if (ULTIMATE_CONFIG.TELEGRAM_CHAT_ID && chatId && chatId.toString() !== ULTIMATE_CONFIG.TELEGRAM_CHAT_ID) {
                                 log(`Unauthorized chat: ${chatId}`, 'WARN');
                                 continue;
                             }
@@ -521,32 +545,24 @@ function pollTelegram() {
                             log(`📥 Command: ${text}`);
                             
                             if (text === '/start' && !text.includes(' ')) {
-                                sendMessage(`🏆 GOD-LEVEL TRADING BOT v17.0 ACTIVATED
+                                sendMessage(`🏆 ULTIMATE TRADING BOT v19.0 ACTIVATED
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-🎯 VERSION: 17.0 GOD LEVEL
-📊 RANKING: TOP 0.001% GLOBAL
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+✅ DATA: YAHOO FINANCE (LIVE)
+✅ PRIMARY: 15 MINUTE TIMEFRAME ⭐
+✅ ALL TIMEFRAMES: 1m, 5m, 15m, 30m, 1h, 4h
+✅ ${PAIRS.length} FOREX PAIRS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-🔱 10 LEGENDARY BOTS INTEGRATED:
-  1. RenTech → Ensemble Voting (5 models)
-  2. Two Sigma → Factor Analysis
-  3. DE Shaw → Correlation Ready
-  4. Citadel → Order Flow + Imbalance
-  5. Jump Trading → Volatility Scaling
-  6. QuantLabs → Signal Cooldown
-  7. AlpacaTrader → Sentiment (Fear/Greed)
-  8. TradingView → Ichimoku Cloud
-  9. MetaTrader → Multi-Timeframe
- 10. Professional → ATR Position Sizing
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-✅ 27 Forex Pairs
-✅ 5 Timeframes (1m/5m/15m/30m/1h)
+🔱 ULTIMATE FEATURES:
+✅ Ensemble Voting (5 factors - RenTech)
 ✅ RSI-Gated Divergence (>72/<28)
+✅ Volume Flow + Imbalance (Citadel)
+✅ ATR Position Sizing (Jump Trading)
 ✅ Economic Calendar (News Avoidance)
+✅ Sentiment Analysis (Fear/Greed)
 
-Type /god for all commands`);
+Type /status for all commands`);
                             }
                             else {
                                 handleCommand(text);
@@ -562,17 +578,18 @@ Type /god for all commands`);
 }
 
 // ============================================
-// KEEP ALIVE
+// KEEP ALIVE & LOGGING
 // ============================================
 setInterval(() => {
     const activeCount = Object.keys(autoScanIntervals).length;
-    log(`💓 God-Level Bot Alive | Active scans: ${activeCount} | Manual TF: ${currentManualTimeframe}`);
+    const activeScans = Object.keys(autoScanIntervals).join(',');
+    log(`💓 ULTIMATE BOT ALIVE | Active scans: ${activeCount} [${activeScans}] | Manual TF: ${currentManualTimeframe}`);
 }, 60000);
 
 process.on('SIGINT', () => {
-    log('God-Level Bot shutting down...');
+    log('🛑 Ultimate Bot shutting down...');
     stopAllAutoScans();
-    sendMessage('🛑 God-Level Bot v17.0 shutting down');
+    sendMessage('🛑 Ultimate Bot v19.0 shutting down');
     setTimeout(() => process.exit(0), 1000);
 });
 
@@ -580,68 +597,69 @@ process.on('SIGINT', () => {
 // START
 // ============================================
 console.log('\n' + '█'.repeat(80));
-console.log('🏆 GOD-LEVEL TRADING BOT v17.0');
-console.log('TOP 0.001% GLOBAL - TELEGRAM MASTER');
+console.log('🏆 ULTIMATE TRADING BOT v19.0');
+console.log('GOD-LEVEL - TOP 0.001% GLOBAL');
 console.log('█'.repeat(80));
-console.log('Status: PRODUCTION READY');
-console.log('Data Source: Yahoo Finance (LIVE)');
+console.log(`Data Source: YAHOO FINANCE (LIVE) - NO DEMO/QT DATA`);
+console.log(`Primary Timeframe: 15 MINUTE ⭐`);
+console.log(`All Timeframes: ${ULTIMATE_CONFIG.ALLOWED_TIMEFRAMES.join(', ')}`);
+console.log(`Pairs: ${PAIRS.length}`);
+console.log(`Min Confidence: ${ULTIMATE_CONFIG.MIN_CONFIDENCE}%`);
+console.log(`Telegram: ${ULTIMATE_CONFIG.TELEGRAM_TOKEN ? '✅' : '❌'}`);
 console.log('█'.repeat(80) + '\n');
 
-console.log(`Pairs: ${PAIRS.length}`);
-console.log(`Active Timeframes: ${GOD_CONFIG.ACTIVE_TIMEFRAMES.join(', ')}`);
-console.log(`Default Timeframe: ${GOD_CONFIG.DEFAULT_TIMEFRAME} (15 MINUTE EMPHASIS)`);
-console.log(`Min Confidence: ${GOD_CONFIG.MIN_CONFIDENCE}%`);
-console.log(`Yahoo Finance: ✅ PRIMARY (with retry)`);
-console.log(`Telegram: ${GOD_CONFIG.TELEGRAM_TOKEN ? '✅' : '❌'}\n`);
+console.log('📊 TIMEFRAME CONFIGURATION:');
+for (const tf of ULTIMATE_CONFIG.ALLOWED_TIMEFRAMES) {
+    const config = ULTIMATE_CONFIG.AUTO_SCAN_TIMEFRAMES[tf];
+    if (config) {
+        const primaryMark = tf === '15m' ? ' ⭐ PRIMARY EMPHASIS' : '';
+        console.log(`   ${tf}: ${config.name}${primaryMark} - Auto: ${config.enabled ? 'ON' : 'OFF'} (${config.interval}min interval)`);
+    }
+}
+console.log('');
 
-console.log('🔱 GOD-LEVEL FEATURES ENABLED:');
-console.log('   ✓ 10 LEGENDARY BOTS INTEGRATED');
-console.log('   ✓ ENSEMBLE VOTING (5 models - RenTech)');
-console.log('   ✓ FACTOR ANALYSIS (Two Sigma)');
-console.log('   ✓ ORDER FLOW + IMBALANCE (Citadel)');
-console.log('   ✓ RSI-GATED DIVERGENCE (>72 BEARISH / <28 BULLISH)');
-console.log('   ✓ VOLUME-WEIGHTED CONFIRMATION');
-console.log('   ✓ ICHIMOKU CLOUD SYSTEM');
-console.log('   ✓ SENTIMENT INTEGRATION (Fear/Greed)');
-console.log('   ✓ ECONOMIC CALENDAR (News avoidance)');
-console.log('   ✓ ATR POSITION SIZING (1.5% risk)');
-console.log('   ✓ MULTI-TIMEFRAME (1m/5m/15m/30m/1h)');
-console.log('   ✓ 15 MINUTE PRIMARY EMPHASIS\n');
+console.log('🔱 ULTIMATE FEATURES ENABLED:');
+console.log('   ✓ Ensemble Voting (5 factors - RenTech)');
+console.log('   ✓ RSI-Gated Divergence (>72 BEARISH / <28 BULLISH)');
+console.log('   ✓ Volume Flow + Imbalance (Citadel)');
+console.log('   ✓ ATR Position Sizing (Jump Trading)');
+console.log('   ✓ Economic Calendar (News Avoidance)');
+console.log('   ✓ Sentiment Analysis (Fear/Greed)');
+console.log('   ✓ Multi-Timeframe (1m/5m/15m/30m/1h/4h)');
+console.log('   ✓ 15 MINUTE PRIMARY EMPHASIS');
+console.log('   ✓ LIVE DATA ONLY (Yahoo Finance)\n');
 
-if (GOD_CONFIG.TELEGRAM_TOKEN && GOD_CONFIG.TELEGRAM_CHAT_ID) {
+if (ULTIMATE_CONFIG.TELEGRAM_TOKEN && ULTIMATE_CONFIG.TELEGRAM_CHAT_ID) {
     pollTelegram();
-    sendMessage(`🏆 GOD-LEVEL BOT v17.0 ACTIVATED
+    sendMessage(`🏆 ULTIMATE BOT v19.0 ACTIVATED
 
-✅ 10 LEGENDARY BOTS INTEGRATED
-✅ ENSEMBLE VOTING SYSTEM
-✅ MULTI-TIMEFRAME (1m/5m/15m/30m/1h)
-✅ 15 MINUTE PRIMARY EMPHASIS
-✅ ${PAIRS.length} pairs monitored
+✅ LIVE DATA: YAHOO FINANCE
+✅ PRIMARY: 15 MINUTE TIMEFRAME ⭐
+✅ ALL TIMEFRAMES: 1m, 5m, 15m, 30m, 1h, 4h
+✅ ${PAIRS.length} PAIRS MONITORED
+✅ ENSEMBLE VOTING ACTIVE
 
-Type /god for all commands`);
+Type /status for all commands`);
 } else {
     console.log('⚠️ Telegram not configured - console mode only');
-    console.log('Console commands:');
-    console.log('  node bot.js scan15m - Scan 15m timeframe');
-    console.log('  node bot.js scan1h - Scan 1h timeframe');
-    console.log('  node bot.js god - Show status');
+    console.log('');
+    console.log('Console Commands:');
+    console.log('  node bot.js scan15m  - Scan 15m timeframe');
+    console.log('  node bot.js scan1h   - Scan 1h timeframe');
+    console.log('  node bot.js status   - Show status');
 }
 
-log('🚀 God-Level Bot v17.0 started successfully');
+log('🚀 ULTIMATE BOT v19.0 started successfully');
 
-// Console command handling
-if (process.argv.length > 2) {
-    const consoleCmd = process.argv[2];
-    if (consoleCmd === 'scan15m') {
-        setTimeout(() => scanAllPairs('15m'), 2000);
-    } else if (consoleCmd === 'scan1h') {
-        setTimeout(() => scanAllPairs('1h'), 2000);
-    } else if (consoleCmd === 'god' || consoleCmd === 'status') {
-        setTimeout(() => showGodLevelStatus(), 2000);
+// Auto-start configured auto-scans after 10 seconds
+setTimeout(() => {
+    log('📊 Starting configured auto-scans...');
+    for (const timeframe of ULTIMATE_CONFIG.ALLOWED_TIMEFRAMES) {
+        if (ULTIMATE_CONFIG.AUTO_SCAN_TIMEFRAMES[timeframe]?.enabled) {
+            startAutoScanForTimeframe(timeframe);
+        }
     }
-} else {
-    setTimeout(() => {
-        log('Running God-level initial scan on 15m timeframe...');
-        scanAllPairs('15m');
-    }, 10000);
-}
+    // Run initial scan on primary timeframe
+    log(`📊 Running initial scan on 15m PRIMARY timeframe...`);
+    scanAllPairs('15m');
+}, 10000);
