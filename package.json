@@ -1,22 +1,22 @@
 {
-  "name": "pocket-option-trading-bot",
-  "version": "22.0.0",
-  "description": "Ultimate Trading Bot with Web Dashboard",
+  "name": "pocket-option-legendary-bot",
+  "version": "24.0.0",
+  "description": "Ultimate Trading Bot with Telegram Dashboard - 15m Auto Scan Only",
   "main": "bot.js",
   "scripts": {
     "start": "node bot.js",
     "bot": "node bot.js",
-    "bot:web": "node bot-v22.js",
     "dashboard": "node server.js",
-    "dev": "concurrently \"node server.js\" \"node bot-v22.js\""
+    "dev": "concurrently \"node server.js\" \"node bot.js\""
   },
   "dependencies": {
     "express": "^4.18.2",
-    "cors": "^2.8.5",
-    "fs": "^0.0.1-security",
-    "https": "^1.0.0"
+    "cors": "^2.8.5"
   },
   "devDependencies": {
     "concurrently": "^8.0.0"
-  }
+  },
+  "keywords": ["forex", "trading-bot", "pocket-option", "telegram-bot", "yahoo-finance"],
+  "author": "Legendary Trading Bot",
+  "license": "MIT"
 }
