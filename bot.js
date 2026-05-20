@@ -1,6 +1,5 @@
 // ============================================
-// OMNI_POCKET_BOT - ULTRA SHORT VERSION
-// TELEGRAM OPTIMIZED - NO ERROR 400
+// OMNI_POCKET_BOT - WITH WORKING MENU
 // ============================================
 
 const { analyzeSignal } = require('./analyzer.js');
@@ -41,27 +40,16 @@ const PAIRS = [
 ];
 
 const MIN_CONFIDENCE = 55;
-const DELAY_BETWEEN_PAIRS_MS = 300;
-
 let lastUpdateId = 0;
 let botStartTime = Date.now();
 let isScanning = false;
 
-// ============================================
-// SIMPLE TELEGRAM SEND
-// ============================================
 function sendTelegramMessage(text) {
     if (!TELEGRAM_TOKEN || !TELEGRAM_CHAT_ID) return false;
     
-    // Keep messages under 200 chars to avoid error 400
-    let messageText = text;
-    if (messageText.length > 200) {
-        messageText = messageText.substring(0, 180) + "...";
-    }
-    
     const data = JSON.stringify({
         chat_id: TELEGRAM_CHAT_ID,
-        text: messageText,
+        text: text,
         parse_mode: "",
         disable_web_page_preview: true
     });
@@ -71,32 +59,132 @@ function sendTelegramMessage(text) {
         path: `/bot${TELEGRAM_TOKEN}/sendMessage`,
         method: 'POST',
         headers: { 'Content-Type': 'application/json' }
-    }, (res) => {
-        let responseData = '';
-        res.on('data', chunk => responseData += chunk);
-        res.on('end', () => {
-            if (res.statusCode === 200) {
-                console.log('✅ Sent');
-            } else {
-                console.log(`❌ Error: ${res.statusCode}`);
-            }
-        });
     });
     
-    req.on('error', (e) => console.log(`❌ Failed: ${e.message}`));
+    req.on('error', (e) => console.log(`❌ Error: ${e.message}`));
     req.write(data);
     req.end();
     return true;
 }
 
 // ============================================
-// SUPER SHORT SIGNAL FORMAT (UNDER 200 CHARS)
+// WORKING MENU COMMANDS
+// ============================================
+function showMainMenu() {
+    const menu = `🏆 <b>OMNI_POCKET_BOT MAIN MENU</b> 🏆
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📊 <b>BOT STATUS</b>
+✅ ONLINE | 27 PAIRS
+🔄 15m AUTO-SCAN
+📈 MIN CONF: 55%
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🔘 <b>TRADING COMMANDS</b>
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+/scan → Manual scan (15m)
+/scan5m → Manual scan (5m)
+/scan1h → Manual scan (1h)
+/status → Bot status
+/help → All commands
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📊 <b>SIGNAL EXPLANATION</b>
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+CALL ↑ = BUY (Price will go UP)
+PUT ↓ = SELL (Price will go DOWN)
+Confidence % = Signal strength
+Expiry = Option duration in minutes
+SL = Stop Loss in pips
+TP = Take Profit in pips
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+⚠️ <b>IMPORTANT</b>
+This is a SIGNAL-ONLY bot.
+You must manually execute trades on Pocket Option.
+
+Send /help for complete command list`;
+    
+    sendTelegramMessage(menu);
+}
+
+function showHelp() {
+    const help = `📋 <b>COMPLETE COMMAND LIST</b>
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+<b>📊 STATUS COMMANDS</b>
+/start or /menu → Show main menu
+/status → Bot status and uptime
+/help → This help screen
+
+<b>🔍 MANUAL SCAN COMMANDS</b>
+/scan → Scan all 27 pairs on 15m
+/scan5m → Scan all pairs on 5m
+/scan1h → Scan all pairs on 1h
+
+<b>🤖 AUTO-SCAN</b>
+Auto-scan runs EVERY 15 MINUTES
+No command needed - fully automatic
+
+<b>📊 HOW TO READ SIGNALS</b>
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Example: 🤖 📈 EUR/USD CALL ↑ | 87%
+RSI:32.5 ADX:28.0 UPTREND
+Exp:15min SL:12.5 TP:25.0
+
+MEANING:
+• CALL ↑ = Price expected to go UP
+• 87% = Signal confidence
+• RSI 32.5 = Oversold (bullish)
+• ADX 28.0 = Weak trend
+• UPTREND = Market direction
+• Exp:15min = Trade duration
+• SL:12.5 = Stop loss pips
+• TP:25.0 = Take profit pips
+
+<b>⚠️ DISCLAIMER</b>
+This bot provides signals ONLY.
+You MUST manually execute trades on Pocket Option.
+Past performance does not guarantee future results.
+
+Send /menu to return to main menu`;
+    
+    sendTelegramMessage(help);
+}
+
+function showStatus() {
+    const uptimeMin = Math.floor((Date.now() - botStartTime) / 1000 / 60);
+    const uptimeHours = Math.floor(uptimeMin / 60);
+    const uptimeRemainMin = uptimeMin % 60;
+    
+    const status = `📊 <b>OMNI_POCKET_BOT STATUS</b>
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+⏱️ <b>UPTIME:</b> ${uptimeHours}h ${uptimeRemainMin}m
+📡 <b>DATA:</b> Yahoo Finance (LIVE)
+👥 <b>PAIRS:</b> 27 FOREX PAIRS
+🔄 <b>AUTO-SCAN:</b> 15 MINUTE (active)
+📈 <b>MIN CONFIDENCE:</b> 55%
+🟢 <b>STATUS:</b> OPERATIONAL
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+<b>LAST ACTIVITY:</b>
+• Auto-scan runs every 15 min
+• Signals appear automatically
+• Manual scan available via /scan
+
+Send /menu for main menu`;
+    
+    sendTelegramMessage(status);
+}
+
+// ============================================
+// SHORT SIGNAL FORMAT
 // ============================================
 function formatShortSignal(analysis, pairName, isAuto = false) {
     const arrow = analysis.signal === 'CALL' ? '📈' : '📉';
     const direction = analysis.signal === 'CALL' ? 'CALL ↑' : 'PUT ↓';
     
-    // Ultra short format - guaranteed under 200 chars
     let msg = '';
     if (isAuto) {
         msg = `🤖 ${arrow} ${pairName} ${direction} | ${analysis.confidence}%\n`;
@@ -159,7 +247,7 @@ async function analyzePair(pair, timeframe = '15min') {
 }
 
 // ============================================
-// AUTO SCAN 15M
+// AUTO SCAN
 // ============================================
 async function autoScan15m() {
     if (isScanning) return;
@@ -178,82 +266,85 @@ async function autoScan15m() {
             console.log(`🔔 ${pair.name} - ${analysis.signal} @ ${analysis.confidence}%`);
             await new Promise(r => setTimeout(r, 500));
         }
-        await new Promise(r => setTimeout(r, DELAY_BETWEEN_PAIRS_MS));
+        await new Promise(r => setTimeout(r, 300));
     }
     
     if (signalsFound > 0) {
-        sendTelegramMessage(`✅ Scan done: ${signalsFound} signals`);
+        sendTelegramMessage(`✅ Auto-scan complete: ${signalsFound} signals found`);
     }
     console.log(`✅ Auto-scan done: ${signalsFound} signals`);
     isScanning = false;
 }
 
 // ============================================
-// COMMAND HANDLER
+// MANUAL SCAN
 // ============================================
-function handleCommand(text) {
-    console.log(`📥 Command: ${text}`);
-    const cmd = text.toLowerCase().trim();
-    
-    if (cmd === '/start') {
-        sendTelegramMessage(`🏆 OMNI_POCKET_BOT 🏆
-✅ ONLINE | 27 PAIRS
-🔄 15m AUTO-SCAN
-📊 MIN CONF: 55%
-━━━━━━━━━━━━━━━━
-COMMANDS:
-/status - Bot status
-/scan - Manual scan
-/help - Commands`);
+async function manualScan(timeframe = '15min') {
+    if (isScanning) {
+        sendTelegramMessage("⏳ Scan already in progress...");
+        return;
     }
-    else if (cmd === '/status') {
-        const uptimeMin = Math.floor((Date.now() - botStartTime) / 1000 / 60);
-        sendTelegramMessage(`📊 STATUS
-Uptime: ${uptimeMin}m
-Pairs: 27
-Auto-scan: 15m ACTIVE
-✅ Operational`);
-    }
-    else if (cmd === '/scan') {
-        if (isScanning) {
-            sendTelegramMessage("⏳ Scan in progress...");
-            return;
-        }
-        sendTelegramMessage("🔍 Scanning 27 pairs on 15m...");
-        manualScan();
-    }
-    else if (cmd === '/help') {
-        sendTelegramMessage(`📋 COMMANDS
-/start - Welcome
-/status - Bot status
-/scan - Manual scan (15m)
-/help - This menu
-
-Auto-scan runs every 15 min`);
-    }
-    else {
-        sendTelegramMessage(`❌ Unknown: ${text}\nType /help`);
-    }
-}
-
-async function manualScan() {
-    if (isScanning) return;
     isScanning = true;
+    
+    const tfName = timeframe === '15min' ? '15m' : timeframe === '5min' ? '5m' : '1h';
+    sendTelegramMessage(`🔍 Manual scan [${tfName}] started...`);
     
     let signals = 0;
     for (const pair of PAIRS) {
-        const analysis = await analyzePair(pair, '15min');
+        const analysis = await analyzePair(pair, timeframe);
         if (analysis && analysis.confidence >= MIN_CONFIDENCE && analysis.signal !== 'NEUTRAL') {
             signals++;
             const msg = formatShortSignal(analysis, pair.name, false);
             sendTelegramMessage(msg);
             await new Promise(r => setTimeout(r, 500));
         }
-        await new Promise(r => setTimeout(r, DELAY_BETWEEN_PAIRS_MS));
+        await new Promise(r => setTimeout(r, 300));
     }
     
-    sendTelegramMessage(`✅ Manual scan done: ${signals} signals`);
+    sendTelegramMessage(`✅ Manual scan [${tfName}] complete: ${signals} signals found`);
     isScanning = false;
+}
+
+// ============================================
+// COMMAND HANDLER - ALL COMMANDS WORKING
+// ============================================
+function handleCommand(text) {
+    console.log(`📥 Command: ${text}`);
+    const cmd = text.toLowerCase().trim();
+    
+    // Main menu commands
+    if (cmd === '/start' || cmd === '/menu') {
+        showMainMenu();
+    }
+    else if (cmd === '/help') {
+        showHelp();
+    }
+    else if (cmd === '/status') {
+        showStatus();
+    }
+    // Scan commands
+    else if (cmd === '/scan') {
+        manualScan('15min');
+    }
+    else if (cmd === '/scan5m') {
+        manualScan('5min');
+    }
+    else if (cmd === '/scan1h') {
+        manualScan('1h');
+    }
+    else {
+        sendTelegramMessage(`❌ Unknown command: ${text}
+
+Type /menu to see all available commands.
+
+Available commands:
+/start or /menu - Main menu
+/status - Bot status
+/scan - Manual scan (15m)
+/scan5m - Manual scan (5m)
+/scan1h - Manual scan (1h)
+/help - Complete help`);
+    }
 }
 
 // ============================================
@@ -265,7 +356,7 @@ function pollTelegram() {
         return;
     }
     
-    console.log('📡 Polling started. Send /start to Omni_Pocket_Bot!');
+    console.log('📡 Polling started. Send /start to your bot!');
     
     const poll = () => {
         const url = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/getUpdates?offset=${lastUpdateId + 1}&timeout=30`;
@@ -304,12 +395,13 @@ function pollTelegram() {
 // ============================================
 // START
 // ============================================
-console.log('\n' + '█'.repeat(50));
+console.log('\n' + '█'.repeat(60));
 console.log('🏆 OMNI_POCKET_BOT');
-console.log('█'.repeat(50));
+console.log('█'.repeat(60));
 console.log(`Pairs: ${PAIRS.length}`);
 console.log(`Auto-scan: 15m`);
-console.log('█'.repeat(50) + '\n');
+console.log(`Commands: /start, /menu, /status, /scan, /help`);
+console.log('█'.repeat(60) + '\n');
 
 if (TELEGRAM_TOKEN && TELEGRAM_CHAT_ID) {
     console.log('✅ Telegram configured');
@@ -317,8 +409,10 @@ if (TELEGRAM_TOKEN && TELEGRAM_CHAT_ID) {
     
     setTimeout(() => {
         sendTelegramMessage(`🤖 OMNI_POCKET_BOT ONLINE 🤖
-✅ 27 PAIRS | 15m AUTO-SCAN
-Send /start for menu`);
+
+✅ Bot is ready!
+✅ Type /start or /menu to begin
+✅ Auto-scan runs every 15 minutes`);
     }, 3000);
 } else {
     console.log('❌ Telegram NOT configured');
