@@ -1,34 +1,10 @@
 {
-  "description": "Valid Yahoo Finance Forex Pairs for Pocket Option - 28 pairs",
-  "lastUpdated": "2024-01-01",
   "pairs": [
-    { "name": "EUR/USD", "symbol": "EURUSD=X", "enabled": true, "group": "major" },
-    { "name": "GBP/USD", "symbol": "GBPUSD=X", "enabled": true, "group": "major" },
-    { "name": "AUD/USD", "symbol": "AUDUSD=X", "enabled": true, "group": "major" },
-    { "name": "NZD/USD", "symbol": "NZDUSD=X", "enabled": true, "group": "major" },
-    { "name": "USD/CAD", "symbol": "USDCAD=X", "enabled": true, "group": "major" },
-    { "name": "USD/CHF", "symbol": "USDCHF=X", "enabled": true, "group": "major" },
-    { "name": "USD/JPY", "symbol": "USDJPY=X", "enabled": true, "group": "major" },
-    { "name": "AUD/CAD", "symbol": "AUDCAD=X", "enabled": true, "group": "cross" },
-    { "name": "AUD/JPY", "symbol": "AUDJPY=X", "enabled": true, "group": "cross" },
-    { "name": "CAD/JPY", "symbol": "CADJPY=X", "enabled": true, "group": "cross" },
-    { "name": "CHF/JPY", "symbol": "CHFJPY=X", "enabled": true, "group": "cross" },
-    { "name": "EUR/AUD", "symbol": "EURAUD=X", "enabled": true, "group": "cross" },
-    { "name": "EUR/CAD", "symbol": "EURCAD=X", "enabled": true, "group": "cross" },
-    { "name": "EUR/CHF", "symbol": "EURCHF=X", "enabled": true, "group": "cross" },
-    { "name": "EUR/GBP", "symbol": "EURGBP=X", "enabled": true, "group": "cross" },
-    { "name": "EUR/JPY", "symbol": "EURJPY=X", "enabled": true, "group": "cross" },
-    { "name": "EUR/NZD", "symbol": "EURNZD=X", "enabled": true, "group": "cross" },
-    { "name": "GBP/AUD", "symbol": "GBPAUD=X", "enabled": true, "group": "cross" },
-    { "name": "GBP/CAD", "symbol": "GBPCAD=X", "enabled": true, "group": "cross" },
-    { "name": "GBP/CHF", "symbol": "GBPCHF=X", "enabled": true, "group": "cross" },
-    { "name": "GBP/JPY", "symbol": "GBPJPY=X", "enabled": true, "group": "cross" },
-    { "name": "GBP/NZD", "symbol": "GBPNZD=X", "enabled": true, "group": "cross" },
-    { "name": "NZD/CAD", "symbol": "NZDCAD=X", "enabled": true, "group": "cross" },
-    { "name": "NZD/JPY", "symbol": "NZDJPY=X", "enabled": true, "group": "cross" },
-    { "name": "AUD/NZD", "symbol": "AUDNZD=X", "enabled": true, "group": "cross" },
-    { "name": "CAD/CHF", "symbol": "CADCHF=X", "enabled": true, "group": "cross" },
-    { "name": "AUD/CHF", "symbol": "AUDCHF=X", "enabled": true, "group": "cross" },
-    { "name": "USD/MXN", "symbol": "USDMXN=X", "enabled": true, "group": "exotic" }
-  ]
+    "EUR/USD", "GBP/USD", "AUD/USD", "NZD/USD", "USD/CAD", "USD/CHF", "USD/JPY",
+    "AUD/CAD", "AUD/JPY", "CAD/JPY", "CHF/JPY", "EUR/AUD", "EUR/CAD", "EUR/CHF",
+    "EUR/GBP", "EUR/JPY", "EUR/NZD", "GBP/AUD", "GBP/CAD", "GBP/CHF", "GBP/JPY",
+    "GBP/NZD", "NZD/CAD", "NZD/JPY", "AUD/NZD", "CAD/CHF", "AUD/CHF"
+  ],
+  "timeframes": ["1m", "5m", "15m", "30m", "1h", "4h"],
+  "primaryTimeframe": "15m"
 }
