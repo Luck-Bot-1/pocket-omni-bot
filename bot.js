@@ -1,6 +1,6 @@
 // ============================================
-// OMNI_POCKET_BOT v3.0 - COMPLETE TELEGRAM INTERFACE
-// LIVE DATA FROM YAHOO FINANCE
+// OMNI_POCKET_BOT v3.1 - AUTO SCAN ON STARTUP
+// FIXED: Bot now scans immediately
 // ============================================
 
 const { analyzeSignal } = require('./analyzer.js');
@@ -138,7 +138,7 @@ function formatSignalMessage(signal, pair, timeframe, isAuto = false) {
 
 function showMainMenu(messageId = null) {
     const uptime = Math.floor((Date.now() - botStartTime) / 1000 / 60);
-    const menu = `*🏆 OMNI_POCKET_BOT v3.0 🏆*
+    const menu = `*🏆 OMNI_POCKET_BOT v3.1 🏆*
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ✅ *STATUS:* ONLINE (${uptime}m)
 ✅ *DATA:* YAHOO FINANCE (LIVE)
@@ -351,39 +351,61 @@ async function fetchCandles(symbol, interval) {
     });
 }
 
+// ============================================
+// SCAN FUNCTIONS WITH LOGGING
+// ============================================
+
 async function performScan(timeframe, isAuto = false) {
     if (isScanning) {
+        console.log(`⏳ Scan already in progress, skipping...`);
         if (!isAuto) sendMessage("⏳ Scan already in progress...");
         return null;
     }
     isScanning = true;
     
+    console.log(`\n🔍 ========== SCAN STARTED ==========`);
+    console.log(`📊 Timeframe: ${timeframe} | Auto: ${isAuto}`);
+    console.log(`📊 Pairs to scan: ${userSettings.selectedPairs.length}`);
+    
     if (!isAuto) sendMessage(`🔍 Scanning ${userSettings.selectedPairs.length} pairs on [${timeframe}]...`);
-    console.log(`\n🔍 SCAN [${timeframe}] - ${new Date().toLocaleTimeString()}`);
     
     let signalsFound = 0;
+    let pairIndex = 0;
     
     for (const pair of userSettings.selectedPairs) {
+        pairIndex++;
         try {
             const symbol = YAHOO_SYMBOLS[pair];
-            if (!symbol) continue;
+            if (!symbol) {
+                console.log(`❌ No symbol for ${pair}`);
+                continue;
+            }
             
+            console.log(`📊 [${pairIndex}/${userSettings.selectedPairs.length}] Analyzing ${pair}...`);
             const candles = await fetchCandles(symbol, timeframe);
-            if (!candles) continue;
+            if (!candles) {
+                console.log(`⚠️ No candles for ${pair}`);
+                continue;
+            }
             
             const analysis = analyzeSignal(candles, pair, timeframe);
             if (analysis && analysis.signal !== 'NEUTRAL' && analysis.confidence >= 50) {
                 signalsFound++;
                 const msg = formatSignalMessage(analysis, pair, timeframe, isAuto);
                 sendMessage(msg);
-                console.log(`📊 ${pair}: ${analysis.signal} @ ${analysis.confidence}% | RSI:${analysis.rsi} ADX:${analysis.adx}`);
+                console.log(`🔔 SIGNAL: ${pair} - ${analysis.signal} @ ${analysis.confidence}% | RSI:${analysis.rsi} ADX:${analysis.adx}`);
                 await new Promise(r => setTimeout(r, 500));
+            } else {
+                console.log(`📊 ${pair}: ${analysis.signal} | Confidence: ${analysis.confidence}%`);
             }
         } catch(e) {
             console.log(`❌ Error analyzing ${pair}: ${e.message}`);
         }
         await new Promise(r => setTimeout(r, 200));
     }
+    
+    console.log(`\n✅ ========== SCAN COMPLETE ==========`);
+    console.log(`📊 Total signals found: ${signalsFound}`);
     
     if (!isAuto) {
         if (signalsFound === 0) {
@@ -393,24 +415,34 @@ async function performScan(timeframe, isAuto = false) {
         }
     }
     
-    console.log(`✅ SCAN [${timeframe}] complete: ${signalsFound} signals`);
     isScanning = false;
     return signalsFound;
 }
 
 async function autoScan() {
-    if (!userSettings.autoScanEnabled) return;
-    if (isScanning) return;
+    if (!userSettings.autoScanEnabled) {
+        console.log(`⏸️ Auto-scan disabled, skipping...`);
+        return;
+    }
+    if (isScanning) {
+        console.log(`⏳ Scan in progress, auto-scan skipped`);
+        return;
+    }
     
-    console.log(`\n🔄 AUTO-SCAN [${PRIMARY_TF}] - ${new Date().toLocaleTimeString()}`);
+    console.log(`\n🔄 ========== AUTO-SCAN STARTED ==========`);
+    console.log(`🕐 Time: ${new Date().toLocaleTimeString()}`);
+    console.log(`📊 Timeframe: ${PRIMARY_TF} (PRIMARY)`);
     
     let signalsFound = 0;
+    let pairIndex = 0;
     
     for (const pair of userSettings.selectedPairs) {
+        pairIndex++;
         try {
             const symbol = YAHOO_SYMBOLS[pair];
             if (!symbol) continue;
             
+            console.log(`📊 [${pairIndex}/${userSettings.selectedPairs.length}] Auto-analyzing ${pair}...`);
             const candles = await fetchCandles(symbol, PRIMARY_TF);
             if (!candles) continue;
             
@@ -419,15 +451,19 @@ async function autoScan() {
                 signalsFound++;
                 const msg = formatSignalMessage(analysis, pair, PRIMARY_TF, true);
                 sendMessage(msg);
-                console.log(`🔔 AUTO: ${pair} - ${analysis.signal} @ ${analysis.confidence}%`);
+                console.log(`🔔 AUTO SIGNAL: ${pair} - ${analysis.signal} @ ${analysis.confidence}%`);
                 await new Promise(r => setTimeout(r, 500));
             }
         } catch(e) {}
         await new Promise(r => setTimeout(r, 200));
     }
     
-    console.log(`✅ AUTO-SCAN complete: ${signalsFound} signals`);
+    console.log(`✅ AUTO-SCAN complete: ${signalsFound} signals found`);
 }
+
+// ============================================
+// COMMAND HANDLERS
+// ============================================
 
 function handleCallback(query) {
     const data = query.data;
@@ -581,8 +617,25 @@ function pollTelegram() {
     poll();
 }
 
+// ============================================
+// INITIAL SCAN ON STARTUP (FIXED)
+// ============================================
+async function initialScan() {
+    console.log('\n🚀 ========== INITIAL STARTUP SCAN ==========');
+    console.log('📊 Running first scan on 15m PRIMARY timeframe...');
+    console.log('📊 This may take 30-60 seconds...');
+    
+    await performScan(PRIMARY_TF, false);
+    
+    console.log('\n✅ Initial scan complete!');
+    console.log('💡 Bot is now ready. Send /start to see menu.');
+}
+
+// ============================================
+// STARTUP
+// ============================================
 console.log('\n' + '█'.repeat(60));
-console.log('🏆 OMNI_POCKET_BOT v3.0');
+console.log('🏆 OMNI_POCKET_BOT v3.1');
 console.log('█'.repeat(60));
 console.log(`Data Source: YAHOO FINANCE (LIVE)`);
 console.log(`Pairs: ${PAIRS.length}`);
@@ -597,15 +650,11 @@ if (TELEGRAM_TOKEN && TELEGRAM_CHAT_ID) {
     pollTelegram();
     
     setTimeout(() => {
-        sendMessage(`🏆 *OMNI_POCKET_BOT v3.0 ACTIVATED* 🏆
+        sendMessage(`🏆 *OMNI_POCKET_BOT v3.1 ACTIVATED* 🏆
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ✅ *DATA SOURCE:* YAHOO FINANCE (LIVE)
-✅ *FEATURES READY:*
-• 📊 Real technical analysis (Max 85%)
-• 🎯 Manual pair selection
-• ⏰ Multiple timeframes (1m-4h)
-• 🤖 Auto-scan (15m PRIMARY only)
-• 📈 Trade tracking with P&L
+✅ *STATUS:* ONLINE
+✅ *PAIRS:* ${PAIRS.length} FOREX PAIRS
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 📱 *Tap /start to begin*`);
@@ -615,10 +664,12 @@ if (TELEGRAM_TOKEN && TELEGRAM_CHAT_ID) {
     console.log('Add env vars: TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID');
 }
 
+// Run initial scan after 10 seconds
 setTimeout(() => {
-    console.log('📊 Bot ready - Use /start in Telegram');
+    initialScan();
 }, 10000);
 
+// Keep alive
 setInterval(() => {
     const uptime = Math.floor((Date.now() - botStartTime) / 1000 / 60);
     console.log(`💓 Alive | Uptime: ${uptime}m | Data: Yahoo Finance LIVE | Auto-scan: ${userSettings.autoScanEnabled ? 'ON' : 'OFF'}`);
