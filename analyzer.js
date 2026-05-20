@@ -1,7 +1,6 @@
 // ============================================
-// POCKET OPTION LEGENDARY BOT - ANALYZER
-// Version: 20.0 ULTIMATE - NEVER SILENT
-// OPTIMIZED FOR: 15m PRIMARY + ALL TIMEFRAMES
+// POCKET OPTION LEGENDARY BOT v21.0
+// WITH PROBABILITY & TREND ALIGNMENT
 // ============================================
 
 const fs = require('fs');
@@ -10,39 +9,32 @@ const path = require('path');
 const BACKTEST_FILE = path.join(__dirname, 'backtest_stats.json');
 
 // ============================================
-// POCKET OPTIMUM CONFIGURATION
+// ULTIMATE CONFIGURATION
 // ============================================
 const ULTIMATE_CONFIG = {
-    // SIGNAL QUALITY - REDUCED FOR MORE SIGNALS
-    MIN_CONFIDENCE: 55,  // FIXED: Was 70 - now allows more signals
-    SIGNAL_COOLDOWN_MINUTES: 15,  // FIXED: Was 60 - now 15min for more opportunities
-    MAX_CONSECUTIVE_LOSSES: 3,  // FIXED: Was 2 - more tolerant
+    MIN_CONFIDENCE: 55,
+    SIGNAL_COOLDOWN_MINUTES: 15,
+    MAX_CONSECUTIVE_LOSSES: 3,
     
-    // VOLATILITY FILTERS - RELAXED FOR POCKET OPTION
-    MIN_VOLATILITY_PERCENT: 0.12,  // FIXED: Was 0.35 - now allows Asian/quiet markets
-    MAX_VOLATILITY_PERCENT: 2.50,  // FIXED: Was 1.50 - allows more pairs
-    MIN_PIP_MOVEMENT: 3,  // FIXED: Was 10 - now works for 1m/5m
+    MIN_VOLATILITY_PERCENT: 0.12,
+    MAX_VOLATILITY_PERCENT: 2.50,
+    MIN_PIP_MOVEMENT: 3,
     
-    // TREND FILTERS - RELAXED
-    MIN_ADX_FOR_TREND: 20,  // FIXED: Was 28 - more trend signals
-    MAX_ADX_FOR_MEAN_REVERSION: 25,  // FIXED: Was 18 - more mean reversion
-    TREND_CONTRADICTION_REJECTION: false,  // FIXED: Was true - now allows counter-trend (higher RR)
+    MIN_ADX_FOR_TREND: 20,
+    MAX_ADX_FOR_MEAN_REVERSION: 25,
+    TREND_CONTRADICTION_REJECTION: false,
     
-    // DIVERGENCE FILTERS - OPTIMIZED
-    MIN_RSI_BEARISH: 65,  // FIXED: Was 72 - more divergence signals
-    MAX_RSI_BULLISH: 35,  // FIXED: Was 28 - more divergence signals
-    MIN_DIVERGENCE_QUALITY: 50,  // FIXED: Was 65 - more signals
+    MIN_RSI_BEARISH: 65,
+    MAX_RSI_BULLISH: 35,
+    MIN_DIVERGENCE_QUALITY: 50,
     
-    // VOLUME FILTERS - RELAXED
-    MIN_VOLUME_RATIO: 0.60,  // FIXED: Was 0.85 - allows Asian session
+    MIN_VOLUME_RATIO: 0.60,
     MIN_VOLUME_TREND: 0.30,
     
-    // POSITION SIZING - POCKET OPTION OPTIMIZED
     RISK_PER_TRADE_PERCENT: 2.0,
-    ATR_MULTIPLIER_SL: 1.2,  // Tighter for binary options
-    ATR_MULTIPLIER_TP: 2.0,  // 1:1.66 risk-reward
+    ATR_MULTIPLIER_SL: 1.2,
+    ATR_MULTIPLIER_TP: 2.0,
     
-    // ENSEMBLE FACTORS
     FACTOR_WEIGHTS: {
         momentum: 0.25,
         meanReversion: 0.20,
@@ -51,7 +43,6 @@ const ULTIMATE_CONFIG = {
         divergence: 0.20
     },
     
-    // TIMEFRAMES - ALL POCKET OPTION SUPPORTED
     ALLOWED_TIMEFRAMES: {
         '1m':  { enabled: true, name: '1 MINUTE',  expiry: 1,  minBars: 30,  weight: 0.10 },
         '5m':  { enabled: true, name: '5 MINUTE',  expiry: 5,  minBars: 50,  weight: 0.15 },
@@ -61,21 +52,19 @@ const ULTIMATE_CONFIG = {
         '4h':  { enabled: true, name: '4 HOUR',    expiry: 240,minBars: 100, weight: 0.05 }
     },
     
-    // SESSION MULTIPLIERS - ALL SESSIONS TRADEABLE
     SESSIONS: {
         'LONDON_NY': { hours: [13,14,15,16], multiplier: 1.15, tradeable: true },
         'LONDON':    { hours: [8,9,10,11],   multiplier: 1.10, tradeable: true },
-        'ASIAN':     { hours: [1,2,3,4,5,6], multiplier: 0.95, tradeable: true },  // FIXED: Now tradeable
-        'OFF_HOURS': { hours: [0,7,12,17,18,19,20,21,22,23], multiplier: 0.85, tradeable: true }  // FIXED: Now tradeable
+        'ASIAN':     { hours: [1,2,3,4,5,6], multiplier: 0.95, tradeable: true },
+        'OFF_HOURS': { hours: [0,7,12,17,18,19,20,21,22,23], multiplier: 0.85, tradeable: true }
     },
     
-    // ECONOMIC CALENDAR - REDUCED AVOIDANCE
-    AVOID_NEWS_MINUTES: 15,  // FIXED: Was 30 - less blocking
+    AVOID_NEWS_MINUTES: 15,
     HIGH_IMPACT_NEWS: ['NFP', 'CPI', 'FOMC', 'GDP', 'UNEMPLOYMENT', 'PPI', 'PMI']
 };
 
 // ============================================
-// PERFORMANCE TRACKER (SAME BUT KEEPS WORKING)
+// PERFORMANCE TRACKER
 // ============================================
 class UltimatePerformanceTracker {
     constructor() {
@@ -241,7 +230,7 @@ class UltimatePerformanceTracker {
 const performanceTracker = new UltimatePerformanceTracker();
 
 // ============================================
-// CORE INDICATORS (SAME RELIABLE FUNCTIONS)
+// CORE INDICATORS
 // ============================================
 
 function calculateRSI(closes, period = 14) {
@@ -352,19 +341,6 @@ function calculateVWAP(candles) {
     } catch(e) { return 1.0; }
 }
 
-function calculateBollingerBands(closes, period = 20, stdDev = 2.0) {
-    try {
-        const sma = closes.slice(-period).reduce((a, b) => a + b, 0) / period;
-        const variance = closes.slice(-period).map(x => Math.pow(x - sma, 2)).reduce((a, b) => a + b, 0) / period;
-        const std = Math.sqrt(variance);
-        return { upper: sma + (std * stdDev), middle: sma, lower: sma - (std * stdDev), bandwidth: (2 * stdDev * std) / sma * 100 };
-    } catch(e) { return { upper: 0, middle: 0, lower: 0, bandwidth: 0 }; }
-}
-
-// ============================================
-// VOLUME ANALYSIS - RELAXED FOR MORE SIGNALS
-// ============================================
-
 function calculateVolumeConfidence(candles) {
     try {
         if (!candles || candles.length < 30) return { confidence: 0, reason: 'INSUFFICIENT', volumeRatio: 1, volumeTrend: 0, imbalance: 0 };
@@ -374,7 +350,6 @@ function calculateVolumeConfidence(candles) {
         const currentVolume = volumes[volumes.length - 1] || 1000;
         const volumeRatio = avgVolume > 0 ? currentVolume / avgVolume : 1;
         
-        // RELAXED: Only reject extremely low volume
         if (volumeRatio < 0.40) {
             return { confidence: -40, reason: `LOW VOLUME: ${(volumeRatio*100).toFixed(0)}%`, volumeRatio, volumeTrend: 0, imbalance: 0 };
         }
@@ -406,7 +381,7 @@ function calculateVolumeConfidence(candles) {
 }
 
 // ============================================
-// DIVERGENCE DETECTION - RELAXED GATES
+// DIVERGENCE DETECTION
 // ============================================
 
 function findSignificantSwings(data, minBars = 6, depthPercent = 0.0020) {
@@ -446,7 +421,6 @@ function detectDivergence(price, indicator) {
         const indSwings = findSignificantSwings(indicator, 6, 0.0015);
         let divergence = { type: 'None', strength: 0, quality: 0 };
         
-        // BEARISH DIVERGENCE - RELAXED RSI GATE
         if (priceSwings.highs.length >= 2 && indSwings.highs.length >= 2) {
             const lastPH = priceSwings.highs[priceSwings.highs.length - 1].value;
             const prevPH = priceSwings.highs[priceSwings.highs.length - 2].value;
@@ -462,7 +436,6 @@ function detectDivergence(price, indicator) {
             }
         }
         
-        // BULLISH DIVERGENCE - RELAXED RSI GATE
         if (priceSwings.lows.length >= 2 && indSwings.lows.length >= 2) {
             const lastPL = priceSwings.lows[priceSwings.lows.length - 1].value;
             const prevPL = priceSwings.lows[priceSwings.lows.length - 2].value;
@@ -481,10 +454,6 @@ function detectDivergence(price, indicator) {
         return divergence;
     } catch(e) { return { type: 'None', strength: 0, quality: 0 }; }
 }
-
-// ============================================
-// FACTOR-BASED ANALYSIS
-// ============================================
 
 function calculateFactorScores(candles, rsi, adx, priceChange, volumeRatio) {
     let momentumFactor = 0;
@@ -512,15 +481,10 @@ function calculateFactorScores(candles, rsi, adx, priceChange, volumeRatio) {
     return { momentumFactor, meanReversionFactor, volatilityFactor, volumeFactor };
 }
 
-// ============================================
-// MARKET VALIDATION - RELAXED FOR POCKET OPTION
-// ============================================
-
 function validateMarketConditions(volatilityPercent, atr, price) {
     try {
         const expectedPipMovement = (atr / price) * 10000;
         
-        // RELAXED: Only reject truly dead markets
         if (volatilityPercent < 0.08) {
             return { tradeable: false, reason: `💀 DEAD MARKET: ${volatilityPercent}% vol`, penalty: 50 };
         }
@@ -574,7 +538,7 @@ function calculateOptimalExpiry(atr, price, volatilityPercent, timeframe) {
 }
 
 // ============================================
-// MAIN ANALYSIS ENGINE - NEVER SILENT
+// MAIN ANALYSIS ENGINE
 // ============================================
 
 async function analyzeSignal(priceData, config, tf, higherPriceData = null, lowerPriceData = null, openPositions = [], accountBalance = 10000) {
@@ -588,7 +552,6 @@ async function analyzeSignal(priceData, config, tf, higherPriceData = null, lowe
         const timeframe = tf || '15m';
         const tfConfig = ULTIMATE_CONFIG.ALLOWED_TIMEFRAMES[timeframe] || { name: timeframe, expiry: 15 };
         
-        // LOG HEADER - ALWAYS SHOW
         console.log(`\n${'█'.repeat(80)}`);
         console.log(`🏆 [${tfConfig.name}] ULTIMATE ANALYSIS - ${pairName} (LIVE DATA)`);
         console.log(`${'█'.repeat(80)}`);
@@ -608,16 +571,11 @@ async function analyzeSignal(priceData, config, tf, higherPriceData = null, lowe
         const hullMA20 = calculateHullMA(closes, 20);
         const hullMA50 = calculateHullMA(closes, 50);
         
-        console.log(`📊 INDICATORS:`);
-        console.log(`   RSI: ${rsi.toFixed(1)} | ADX: ${adx.toFixed(1)} | ATR: ${(atr/price*10000).toFixed(1)}p`);
+        console.log(`📊 INDICATORS: RSI: ${rsi.toFixed(1)} | ADX: ${adx.toFixed(1)} | ATR: ${(atr/price*10000).toFixed(1)}p`);
         console.log(`   Volatility: ${volatilityPercent.toFixed(2)}% | Price Change: ${priceChange.toFixed(2)}%`);
-        console.log(`   HMA20: ${hullMA20.toFixed(5)} | HMA50: ${hullMA50.toFixed(5)}`);
-        console.log(`   VWAP: ${vwap.toFixed(5)} | Current: ${price.toFixed(5)}`);
         
         const volumeConf = calculateVolumeConfidence(candles);
-        console.log(`📊 VOLUME:`);
-        console.log(`   Ratio: ${(volumeConf.volumeRatio*100).toFixed(0)}% of avg | ${volumeConf.reason}`);
-        console.log(`   Flow Imbalance: ${(volumeConf.imbalance*100).toFixed(1)}%`);
+        console.log(`📊 VOLUME: Ratio: ${(volumeConf.volumeRatio*100).toFixed(0)}% | Flow: ${(volumeConf.imbalance*100).toFixed(1)}%`);
         
         const rsiVals = [];
         for (let i = 0; i < closes.length; i++) {
@@ -625,10 +583,6 @@ async function analyzeSignal(priceData, config, tf, higherPriceData = null, lowe
             rsiVals.push(slice.length < 14 ? 50 : calculateRSI(slice, 14));
         }
         const divergence = detectDivergence(closes, rsiVals);
-        if (divergence.type !== 'None') {
-            console.log(`🔄 DIVERGENCE:`);
-            console.log(`   Type: ${divergence.type} | Quality: ${divergence.quality.toFixed(0)}/100`);
-        }
         
         let trendDirection = 'Neutral';
         let trendScore = 0;
@@ -640,83 +594,46 @@ async function analyzeSignal(priceData, config, tf, higherPriceData = null, lowe
             trendScore = -1;
         }
         
-        console.log(`📈 TREND:`);
-        console.log(`   Direction: ${trendDirection} | ADX: ${adx.toFixed(1)}`);
-        console.log(`   +DI: ${plusDI.toFixed(1)} | -DI: ${minusDI.toFixed(1)}`);
+        console.log(`📈 TREND: ${trendDirection} | ADX: ${adx.toFixed(1)} | +DI: ${plusDI.toFixed(1)} | -DI: ${minusDI.toFixed(1)}`);
         
         const factors = calculateFactorScores(candles, rsi, adx, priceChange, volumeConf.volumeRatio);
-        console.log(`📊 FACTOR SCORES:`);
-        console.log(`   Momentum: ${factors.momentumFactor.toFixed(2)} | MeanRev: ${factors.meanReversionFactor.toFixed(2)}`);
-        
         const sentiment = performanceTracker.getFearGreedIndex();
-        console.log(`🧠 SENTIMENT: ${sentiment.sentiment} (Score: ${sentiment.score})`);
-        
-        const newsCheck = performanceTracker.isNewsEvent();
-        if (newsCheck.isNews) {
-            console.log(`📰 NEWS: ${newsCheck.event} in ${newsCheck.minutesToEvent} min`);
-        }
-        
         const session = getSessionMultiplier();
-        console.log(`⏰ SESSION: ${session.name} | Multiplier: ${session.multiplier}x`);
-        
-        // RELAXED: All sessions are tradeable now
-        const marketValid = validateMarketConditions(volatilityPercent, atr, price);
-        if (!marketValid.tradeable) {
-            console.log(`⚠️ MARKET CONDITION: ${marketValid.reason} - Still analyzing but with lower confidence`);
-        }
         
         // ============================================
-        // ENSEMBLE SIGNAL GENERATION - ALWAYS GENERATES SIGNAL
+        // ENSEMBLE SIGNAL GENERATION
         // ============================================
         let signals = [];
         let weights = [];
         
-        // Signal 1: Divergence
         if (divergence.type !== 'None' && divergence.quality >= ULTIMATE_CONFIG.MIN_DIVERGENCE_QUALITY) {
-            const divSignal = divergence.type === 'Bullish' ? 'CALL' : 'PUT';
-            signals.push(divSignal);
+            signals.push(divergence.type === 'Bullish' ? 'CALL' : 'PUT');
             weights.push(ULTIMATE_CONFIG.FACTOR_WEIGHTS.divergence);
-            console.log(`🎯 ENSEMBLE 1: ${divSignal} from DIVERGENCE`);
         }
         
-        // Signal 2: Momentum
         if (factors.momentumFactor > 0.5) {
-            const momSignal = priceChange > 0 ? 'CALL' : 'PUT';
-            signals.push(momSignal);
+            signals.push(priceChange > 0 ? 'CALL' : 'PUT');
             weights.push(ULTIMATE_CONFIG.FACTOR_WEIGHTS.momentum);
-            console.log(`🎯 ENSEMBLE 2: ${momSignal} from MOMENTUM`);
         }
         
-        // Signal 3: Mean Reversion
         if (factors.meanReversionFactor > 0.5 && adx <= ULTIMATE_CONFIG.MAX_ADX_FOR_MEAN_REVERSION) {
-            const mrSignal = rsi < 40 ? 'CALL' : (rsi > 60 ? 'PUT' : (priceChange > 0 ? 'CALL' : 'PUT'));
-            signals.push(mrSignal);
+            signals.push(rsi < 40 ? 'CALL' : (rsi > 60 ? 'PUT' : (priceChange > 0 ? 'CALL' : 'PUT')));
             weights.push(ULTIMATE_CONFIG.FACTOR_WEIGHTS.meanReversion);
-            console.log(`🎯 ENSEMBLE 3: ${mrSignal} from MEAN REVERSION`);
         }
         
-        // Signal 4: Volume Flow
         if (Math.abs(volumeConf.imbalance) > 0.2) {
-            const flowSignal = volumeConf.imbalance > 0 ? 'CALL' : 'PUT';
-            signals.push(flowSignal);
+            signals.push(volumeConf.imbalance > 0 ? 'CALL' : 'PUT');
             weights.push(ULTIMATE_CONFIG.FACTOR_WEIGHTS.volume);
-            console.log(`🎯 ENSEMBLE 4: ${flowSignal} from VOLUME FLOW`);
         }
         
-        // Signal 5: Trend Following
         if (trendScore !== 0 && adx >= ULTIMATE_CONFIG.MIN_ADX_FOR_TREND) {
-            const trendSignal = trendScore === 1 ? 'CALL' : 'PUT';
-            signals.push(trendSignal);
+            signals.push(trendScore === 1 ? 'CALL' : 'PUT');
             weights.push(ULTIMATE_CONFIG.FACTOR_WEIGHTS.volatility);
-            console.log(`🎯 ENSEMBLE 5: ${trendSignal} from TREND`);
         }
         
-        // Signal 6: VWAP ALWAYS (FALLBACK)
         signals.push(price > vwap ? 'CALL' : 'PUT');
         weights.push(0.10);
-        console.log(`🎯 ENSEMBLE 6: ${price > vwap ? 'CALL' : 'PUT'} from VWAP (ALWAYS ACTIVE)`);
         
-        // ENSEMBLE VOTING
         let callWeight = 0, putWeight = 0, totalWeight = 0;
         for (let i = 0; i < signals.length; i++) {
             if (signals[i] === 'CALL') callWeight += weights[i];
@@ -731,9 +648,6 @@ async function analyzeSignal(priceData, config, tf, higherPriceData = null, lowe
             const callPercentage = (callWeight / totalWeight) * 100;
             const putPercentage = (putWeight / totalWeight) * 100;
             
-            console.log(`📊 ENSEMBLE VOTE:`);
-            console.log(`   CALL: ${callWeight.toFixed(2)} (${callPercentage.toFixed(1)}%) | PUT: ${putWeight.toFixed(2)} (${putPercentage.toFixed(1)}%)`);
-            
             if (callPercentage > putPercentage) {
                 finalSignal = 'CALL';
                 ensembleConfidence = callPercentage;
@@ -743,23 +657,32 @@ async function analyzeSignal(priceData, config, tf, higherPriceData = null, lowe
             }
         }
         
-        console.log(`🎯 ENSEMBLE VERDICT: ${finalSignal} with ${ensembleConfidence.toFixed(0)}% consensus`);
-        
-        // CONFIDENCE CALCULATION
+        // ============================================
+        // PROBABILITY CALCULATION
+        // ============================================
         let finalConfidence = ensembleConfidence;
         finalConfidence += (adx >= 35 ? 10 : adx >= 25 ? 6 : adx >= 18 ? 3 : 0);
         finalConfidence += volumeConf.confidence;
         finalConfidence += divergence.quality / 6;
         finalConfidence += sentiment.score * 8;
-        finalConfidence -= marketValid.penalty;
         
-        // TREND ALIGNMENT (Now bonus, not rejection)
+        // TREND ALIGNMENT STATUS
+        let trendAlignment = 'NEUTRAL';
+        let trendAlignmentBonus = 0;
+        
         if ((trendScore === 1 && finalSignal === 'CALL') || (trendScore === -1 && finalSignal === 'PUT')) {
+            trendAlignment = 'WITH TREND ✅';
+            trendAlignmentBonus = 12;
             finalConfidence += 12;
-            console.log(`✅ TREND ALIGNMENT: +12%`);
+            console.log(`✅ TREND ALIGNMENT: WITH TREND (+12%)`);
         } else if ((trendScore === 1 && finalSignal === 'PUT') || (trendScore === -1 && finalSignal === 'CALL')) {
-            finalConfidence += 5;  // Still positive for counter-trend with good RR
-            console.log(`🔄 COUNTER-TREND: +5% (higher risk-reward potential)`);
+            trendAlignment = 'AGAINST TREND ⚠️';
+            trendAlignmentBonus = 5;
+            finalConfidence += 5;
+            console.log(`🔄 COUNTER-TREND: AGAINST TREND (+5% for higher RR)`);
+        } else {
+            trendAlignment = 'NO CLEAR TREND ⚪';
+            console.log(`⚪ NO CLEAR TREND DIRECTION`);
         }
         
         if (finalSignal === 'CALL' && rsi < 35) finalConfidence += 8;
@@ -767,6 +690,14 @@ async function analyzeSignal(priceData, config, tf, higherPriceData = null, lowe
         
         finalConfidence = finalConfidence * session.multiplier;
         finalConfidence = Math.min(96, Math.max(45, finalConfidence));
+        
+        // PROBABILITY % (Historical win rate adjusted)
+        const historicalWR = performanceTracker.getStrategyWinRate('ULTIMATE_ENSEMBLE');
+        let probability = finalConfidence;
+        if (historicalWR > 55 && historicalWR !== 55) {
+            probability = (finalConfidence * 0.6) + (historicalWR * 0.4);
+        }
+        probability = Math.min(94, Math.max(45, probability));
         
         const calibratedConfidence = performanceTracker.getCalibratedConfidence(finalConfidence, 'ULTIMATE_ENSEMBLE');
         const skipCheck = performanceTracker.shouldSkip('ULTIMATE_ENSEMBLE', calibratedConfidence, pairName, finalSignal, timeframe);
@@ -784,35 +715,18 @@ async function analyzeSignal(priceData, config, tf, higherPriceData = null, lowe
                          calibratedConfidence >= 68 ? '🟠 MODERATE' :
                          calibratedConfidence >= 58 ? '🟡 WEAK' : '⚪ LOW';
         
-        let recommendation = '';
-        if (calibratedConfidence >= 85) recommendation = '🏆 ULTIMATE SIGNAL - HIGH PROBABILITY';
-        else if (calibratedConfidence >= 75) recommendation = '✅ STRONG SIGNAL';
-        else if (calibratedConfidence >= 65) recommendation = '✅ GOOD SIGNAL';
-        else if (calibratedConfidence >= 55) recommendation = '⚠️ WEAK SIGNAL - Consider';
-        else recommendation = '⚠️ LOW CONFIDENCE - Skip';
-        
-        if (skipCheck.skip) recommendation = `⚠️ SKIPPED: ${skipCheck.reason}`;
-        
-        const shouldTrade = (calibratedConfidence >= ULTIMATE_CONFIG.MIN_CONFIDENCE && !skipCheck.skip) ? '✅ READY TO EXECUTE' : '⚠️ SKIP';
-        
-        // FINAL LOG OUTPUT - ALWAYS SHOWS SIGNAL
-        console.log(`${'█'.repeat(80)}`);
-        console.log(`🎯 ULTIMATE VERDICT: ${finalSignal} @ ${calibratedConfidence}% - ${intensity}`);
-        console.log(`   ${recommendation}`);
-        console.log(`   Expiry: ${expiry}min | Strategy: ULTIMATE_ENSEMBLE`);
-        console.log(`   Position: ${position.size.toFixed(4)} units | SL: ${(position.stopLoss/price*10000).toFixed(1)}p | TP: ${(position.takeProfit/price*10000).toFixed(1)}p`);
-        console.log(`   Risk: $${position.riskAmount.toFixed(2)} | Reward: ${(position.takeProfit/position.stopLoss).toFixed(1)}:1`);
-        console.log(`${'█'.repeat(80)}\n`);
-        
         return {
             signal: finalSignal,
             confidence: Math.round(calibratedConfidence),
+            probability: Math.round(probability),
             intensity,
             rsi: rsi.toFixed(1),
             adx: adx.toFixed(1),
             adxStrength: adx >= 40 ? 'STRONG TREND' : adx >= 25 ? 'WEAK TREND' : 'SIDEWAYS',
             priceChange: priceChange.toFixed(2),
             trendDirection,
+            trendAlignment,
+            trendAlignmentBonus,
             volatilityPercent: volatilityPercent.toFixed(2),
             divergence: divergence.type,
             divergenceQuality: divergence.quality.toFixed(0),
@@ -822,6 +736,7 @@ async function analyzeSignal(priceData, config, tf, higherPriceData = null, lowe
             sentiment: sentiment.sentiment,
             sentimentScore: sentiment.score.toFixed(2),
             session: session.name,
+            sessionMultiplier: session.multiplier,
             strategyUsed: 'ULTIMATE_ENSEMBLE',
             ensembleVotes: signals.length,
             riskReward: `${ULTIMATE_CONFIG.ATR_MULTIPLIER_SL}:${ULTIMATE_CONFIG.ATR_MULTIPLIER_TP}`,
@@ -830,8 +745,10 @@ async function analyzeSignal(priceData, config, tf, higherPriceData = null, lowe
             stopLossPips: (position.stopLoss / price * 10000).toFixed(1),
             takeProfitPips: (position.takeProfit / price * 10000).toFixed(1),
             riskAmount: `$${position.riskAmount.toFixed(2)}`,
-            recommendation,
-            shouldTrade,
+            recommendation: calibratedConfidence >= 75 ? '✅ STRONG SIGNAL - Consider trading' : 
+                           calibratedConfidence >= 65 ? '⚠️ MODERATE SIGNAL - Low risk size' :
+                           '⚠️ WEAK SIGNAL - Skip or minimal size',
+            shouldTrade: (calibratedConfidence >= ULTIMATE_CONFIG.MIN_CONFIDENCE && !skipCheck.skip) ? '✅ READY TO EXECUTE' : '⚠️ SKIP',
             skipReason: skipCheck.skip ? skipCheck.reason : null,
             timeframe: tfConfig.name,
             timestamp: new Date().toISOString()
@@ -843,27 +760,14 @@ async function analyzeSignal(priceData, config, tf, higherPriceData = null, lowe
     }
 }
 
-function createRejectResponse(reason, message, rsi, adx, volatilityPercent, priceChange, session, timeframe) {
-    return {
-        signal: 'CALL', confidence: 50, intensity: 'LOW',
-        rsi: rsi?.toFixed(1) || '50', adx: adx?.toFixed(1) || '20', adxStrength: 'Rejected',
-        trendDirection: 'Unknown', divergence: 'None', strategyUsed: reason,
-        volatilityPercent: volatilityPercent?.toFixed(2) || 'N/A', priceChange: priceChange?.toFixed(2) || '0',
-        volumeQuality: 'N/A', session: session || 'Unknown',
-        riskReward: 'N/A', expiry: 15, recommendation: message, shouldTrade: 'SKIP',
-        positionSize: 0, stopLossPips: 0, takeProfitPips: 0, riskAmount: '$0',
-        skipReason: message, timeframe: timeframe || '15m'
-    };
-}
-
 function createErrorResponse(timeframe) {
     return {
-        signal: 'NEUTRAL', confidence: 50, intensity: 'LOW',
+        signal: 'NEUTRAL', confidence: 50, probability: 50, intensity: 'LOW',
         rsi: '50', adx: '20', adxStrength: 'Error', trendDirection: 'Unknown',
-        divergence: 'None', strategyUsed: 'Error', volatilityPercent: 'N/A',
-        priceChange: '0', volumeQuality: 'Normal', session: 'Unknown',
-        riskReward: 'N/A', expiry: 15, recommendation: 'ERROR - Check data', shouldTrade: 'SKIP',
-        positionSize: 0, stopLossPips: 0, takeProfitPips: 0, riskAmount: '$0',
+        trendAlignment: 'UNKNOWN', divergence: 'None', strategyUsed: 'Error',
+        volatilityPercent: 'N/A', priceChange: '0', volumeQuality: 'Normal',
+        session: 'Unknown', riskReward: 'N/A', expiry: 15,
+        recommendation: 'ERROR - Check data', shouldTrade: 'SKIP',
         timeframe: timeframe || '15m'
     };
 }
