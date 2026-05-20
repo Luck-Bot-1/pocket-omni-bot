@@ -1,19 +1,15 @@
 // ============================================
-// OMNI_POCKET_BOT - SINGLE CLEAN WORKING VERSION
-// REPLACE YOUR EXISTING bot.js WITH THIS
+// OMNI_POCKET_BOT v26.0 - WITH RSI OVERRIDE
+// FIXES CONTRADICTORY SIGNALS
 // ============================================
 
 const { analyzeSignal } = require('./analyzer.js');
 const https = require('https');
 const fs = require('fs');
 
-// ============================================
-// CONFIGURATION - READ FROM ENVIRONMENT
-// ============================================
 const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 
-// VALID FOREX PAIRS (27 pairs)
 const PAIRS = [
     'EUR/USD', 'GBP/USD', 'AUD/USD', 'NZD/USD', 'USD/CAD', 'USD/CHF', 'USD/JPY',
     'AUD/CAD', 'AUD/JPY', 'CAD/JPY', 'CHF/JPY', 'EUR/AUD', 'EUR/CAD', 'EUR/CHF',
@@ -41,9 +37,6 @@ let botStartTime = Date.now();
 let isScanning = false;
 let autoScanInterval = null;
 
-// ============================================
-// SIMPLE TELEGRAM SEND
-// ============================================
 function sendMessage(text) {
     if (!TELEGRAM_TOKEN || !TELEGRAM_CHAT_ID) {
         console.log(`\n⚠️ TELEGRAM NOT CONFIGURED\n${text}\n`);
@@ -74,44 +67,50 @@ function sendMessage(text) {
 }
 
 // ============================================
-// CLEAN SIGNAL FORMAT
+// FIXED SIGNAL FORMAT WITH RSI VALIDATION
 // ============================================
 function formatSignal(pair, analysis, isAuto) {
-    const arrow = analysis.signal === 'CALL' ? '📈' : '📉';
-    const direction = analysis.signal === 'CALL' ? 'CALL (UP)' : 'PUT (DOWN)';
+    // CRITICAL FIX: Override contradictory signals
+    let signal = analysis.signal;
+    let confidence = analysis.confidence;
+    let rsi = parseFloat(analysis.rsi);
+    let override = false;
     
-    // Cap confidence when ADX is low (no real trend)
-    let confidenceDisplay = analysis.confidence;
-    let adxValue = parseFloat(analysis.adx);
-    if (adxValue < 20 && analysis.confidence > 75) {
-        confidenceDisplay = 75;
+    // RSI Override Logic
+    if (signal === 'CALL' && rsi > 70) {
+        signal = 'PUT';
+        confidence = Math.min(confidence, 70);
+        override = true;
+        console.log(`⚠️ RSI OVERRIDE: ${pair} CALL→PUT (RSI=${rsi} >70)`);
+    } else if (signal === 'PUT' && rsi < 30) {
+        signal = 'CALL';
+        confidence = Math.min(confidence, 70);
+        override = true;
+        console.log(`⚠️ RSI OVERRIDE: ${pair} PUT→CALL (RSI=${rsi} <30)`);
     }
+    
+    const arrow = signal === 'CALL' ? '📈' : '📉';
+    const direction = signal === 'CALL' ? 'CALL (UP)' : 'PUT (DOWN)';
+    const overrideMark = override ? ' 🔄(RSI FIXED)' : '';
     
     let msg = '';
     if (isAuto) {
-        msg = `🤖 AUTO [15m] ${arrow} ${pair}\n`;
+        msg = `🤖 AUTO [15m] ${arrow} ${pair}${overrideMark}\n`;
     } else {
-        msg = `${arrow} SIGNAL: ${pair}\n`;
+        msg = `${arrow} SIGNAL: ${pair}${overrideMark}\n`;
     }
-    msg += `🎯 ${direction} | ${confidenceDisplay}%\n`;
+    msg += `🎯 ${direction} | ${confidence}%\n`;
     msg += `📊 RSI:${analysis.rsi} ADX:${analysis.adx} Trend:${analysis.trendDirection}\n`;
     
-    if (analysis.divergence !== 'None' && parseFloat(analysis.divergenceQuality) > 60) {
-        msg += `🔄 Divergence: ${analysis.divergence}\n`;
-    }
+    // Add RSI interpretation
+    if (rsi > 70) msg += `⚠️ RSI OVERBOUGHT (${rsi}) → Expected DOWN\n`;
+    else if (rsi < 30) msg += `⚠️ RSI OVERSOLD (${rsi}) → Expected UP\n`;
     
     msg += `⏱️ Expiry:${analysis.expiry}min SL:${analysis.stopLossPips} TP:${analysis.takeProfitPips}\n`;
-    
-    if (analysis.trendAlignment === 'AGAINST TREND ⚠️') {
-        msg += `⚠️ WARNING: Signal AGAINST trend - High risk!\n`;
-    }
     
     return msg;
 }
 
-// ============================================
-// YAHOO FINANCE FETCHER
-// ============================================
 async function fetchCandles(pairName, interval = '15m') {
     return new Promise((resolve) => {
         const symbol = SYMBOLS[pairName];
@@ -164,14 +163,61 @@ async function analyzePair(pairName, timeframe) {
         const candles = await fetchCandles(pairName, timeframe);
         if (!candles) return null;
         const analysis = await analyzeSignal(candles, { pairName }, timeframe);
+        
+        // Log each analysis for debugging
+        console.log(`📊 ${pairName}: ${analysis.signal} @ ${analysis.confidence}% | RSI:${analysis.rsi} ADX:${analysis.adx} Trend:${analysis.trendDirection}`);
+        
         return analysis;
     } catch(e) {
+        console.log(`❌ Error analyzing ${pairName}: ${e.message}`);
         return null;
     }
 }
 
 // ============================================
-// SCAN FUNCTIONS
+// AUTO SCAN WITH DETAILED LOGGING
+// ============================================
+async function autoScan() {
+    if (isScanning) return;
+    isScanning = true;
+    
+    const startTime = new Date();
+    console.log(`\n${'═'.repeat(60)}`);
+    console.log(`🔄 AUTO-SCAN STARTED - ${startTime.toLocaleTimeString()}`);
+    console.log(`📊 Scanning ${PAIRS.length} pairs on 15m timeframe`);
+    console.log(`${'═'.repeat(60)}`);
+    
+    let signals = [];
+    for (const pair of PAIRS) {
+        const analysis = await analyzePair(pair, '15m');
+        if (analysis && analysis.confidence >= MIN_CONFIDENCE && analysis.signal !== 'NEUTRAL') {
+            signals.push({ pair, analysis });
+            const msg = formatSignal(pair, analysis, true);
+            sendMessage(msg);
+            console.log(`🔔 SIGNAL: ${pair} - ${analysis.signal} @ ${analysis.confidence}% (RSI:${analysis.rsi} ADX:${analysis.adx})`);
+            await new Promise(r => setTimeout(r, 500));
+        }
+        await new Promise(r => setTimeout(r, DELAY_MS));
+    }
+    
+    const endTime = new Date();
+    const duration = (endTime - startTime) / 1000;
+    
+    console.log(`${'═'.repeat(60)}`);
+    console.log(`✅ AUTO-SCAN COMPLETE - ${duration.toFixed(1)} seconds`);
+    console.log(`📊 Found ${signals.length} signals above ${MIN_CONFIDENCE}%`);
+    console.log(`${'═'.repeat(60)}\n`);
+    
+    if (signals.length === 0) {
+        sendMessage(`✅ Auto-scan complete: No signals above ${MIN_CONFIDENCE}%`);
+    } else {
+        sendMessage(`✅ Auto-scan complete: ${signals.length} signals found`);
+    }
+    isScanning = false;
+}
+
+// ============================================
+// MANUAL SCAN WITH DETAILED LOGGING
 // ============================================
 async function scanAll(timeframe = '15m') {
     if (isScanning) {
@@ -180,8 +226,12 @@ async function scanAll(timeframe = '15m') {
     }
     isScanning = true;
     
+    console.log(`\n${'═'.repeat(60)}`);
+    console.log(`🔍 MANUAL SCAN STARTED - ${new Date().toLocaleTimeString()}`);
+    console.log(`📊 Timeframe: ${timeframe} | Pairs: ${PAIRS.length}`);
+    console.log(`${'═'.repeat(60)}`);
+    
     sendMessage(`🔍 Manual scan [${timeframe}] started...`);
-    console.log(`\n🔍 SCAN [${timeframe}] - ${new Date().toLocaleTimeString()}`);
     
     let signals = 0;
     for (const pair of PAIRS) {
@@ -190,54 +240,29 @@ async function scanAll(timeframe = '15m') {
             signals++;
             const msg = formatSignal(pair, analysis, false);
             sendMessage(msg);
-            console.log(`📊 ${pair}: ${analysis.signal} @ ${analysis.confidence}% | ADX:${analysis.adx}`);
+            console.log(`🔔 SIGNAL: ${pair} - ${analysis.signal} @ ${analysis.confidence}%`);
             await new Promise(r => setTimeout(r, 500));
         }
         await new Promise(r => setTimeout(r, DELAY_MS));
     }
+    
+    console.log(`${'═'.repeat(60)}`);
+    console.log(`✅ MANUAL SCAN COMPLETE - ${signals} signals found`);
+    console.log(`${'═'.repeat(60)}\n`);
     
     sendMessage(`✅ Scan [${timeframe}] complete: ${signals} signals found`);
-    console.log(`✅ SCAN done: ${signals} signals`);
-    isScanning = false;
-}
-
-async function autoScan() {
-    if (isScanning) return;
-    isScanning = true;
-    
-    console.log(`\n🔄 AUTO-SCAN [15m] - ${new Date().toLocaleTimeString()}`);
-    
-    let signals = 0;
-    for (const pair of PAIRS) {
-        const analysis = await analyzePair(pair, '15m');
-        if (analysis && analysis.confidence >= MIN_CONFIDENCE && analysis.signal !== 'NEUTRAL') {
-            signals++;
-            const msg = formatSignal(pair, analysis, true);
-            sendMessage(msg);
-            console.log(`📊 ${pair}: ${analysis.signal} @ ${analysis.confidence}% | ADX:${analysis.adx}`);
-            await new Promise(r => setTimeout(r, 500));
-        }
-        await new Promise(r => setTimeout(r, DELAY_MS));
-    }
-    
-    if (signals === 0) {
-        sendMessage(`✅ Auto-scan complete: No signals above ${MIN_CONFIDENCE}%`);
-    } else {
-        sendMessage(`✅ Auto-scan complete: ${signals} signals found`);
-    }
-    console.log(`✅ AUTO-SCAN done: ${signals} signals`);
     isScanning = false;
 }
 
 // ============================================
-// TELEGRAM COMMAND HANDLER
+// COMMAND HANDLER
 // ============================================
 function handleCommand(text) {
     console.log(`📥 Command: ${text}`);
     const cmd = text.toLowerCase().trim();
     
     if (cmd === '/start' || cmd === '/menu') {
-        sendMessage(`🏆 OMNI_POCKET_BOT 🏆
+        sendMessage(`🏆 OMNI_POCKET_BOT v26.0 🏆
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ✅ ONLINE | ${PAIRS.length} PAIRS
 ✅ AUTO-SCAN: 15m (every 15 min)
@@ -252,8 +277,11 @@ function handleCommand(text) {
 /stop_auto - Stop auto-scan
 /help - All commands
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-⚠️ Signals with ADX <20 are WEAK
-⚠️ Signals AGAINST trend = HIGH RISK`);
+🔧 FIXES IN v26.0:
+✅ RSI Override: CALL when RSI<30
+✅ RSI Override: PUT when RSI>70
+✅ Detailed scan logs in console
+✅ No more contradictory signals`);
     }
     else if (cmd === '/help') {
         sendMessage(`📋 COMMANDS
@@ -267,12 +295,11 @@ function handleCommand(text) {
 /stop_auto - Stop auto-scan
 /help - This menu
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-📊 SIGNAL MEANING:
-CALL = Price expected UP
-PUT = Price expected DOWN
-ADX >25 = Strong trend (GOOD)
-ADX <20 = Weak trend (SKIP)
-⚠️ DON'T trade weak ADX signals!`);
+📊 SIGNAL RULES:
+RSI <30 (OVERSOLD) → CALL (UP)
+RSI >70 (OVERBOUGHT) → PUT (DOWN)
+ADX >25 → STRONG TREND (GOOD)
+ADX <20 → WEAK TREND (SKIP)`);
     }
     else if (cmd === '/status') {
         const uptime = Math.floor((Date.now() - botStartTime) / 1000 / 60);
@@ -284,7 +311,7 @@ Pairs: ${PAIRS.length}
 Auto-scan: ${autoRunning}
 Min Confidence: ${MIN_CONFIDENCE}%
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-✅ Operational`);
+✅ Operational with RSI Override`);
     }
     else if (cmd === '/scan') {
         scanAll('15m');
@@ -303,6 +330,7 @@ Min Confidence: ${MIN_CONFIDENCE}%
         autoScanInterval = setInterval(autoScan, 15 * 60 * 1000);
         sendMessage("✅ Auto-scan STARTED (every 15 minutes)");
         console.log("🚀 Auto-scan started");
+        autoScan(); // Run immediately
     }
     else if (cmd === '/stop_auto') {
         if (autoScanInterval) {
@@ -360,11 +388,12 @@ function pollTelegram() {
 // STARTUP
 // ============================================
 console.log('\n' + '█'.repeat(60));
-console.log('🏆 OMNI_POCKET_BOT v25.0');
+console.log('🏆 OMNI_POCKET_BOT v26.0');
 console.log('█'.repeat(60));
 console.log(`Pairs: ${PAIRS.length}`);
 console.log(`Min Confidence: ${MIN_CONFIDENCE}%`);
 console.log(`Auto-scan: 15m`);
+console.log(`RSI Override: ENABLED (RSI<30→CALL, RSI>70→PUT)`);
 console.log('█'.repeat(60) + '\n');
 
 if (TELEGRAM_TOKEN && TELEGRAM_CHAT_ID) {
@@ -372,11 +401,14 @@ if (TELEGRAM_TOKEN && TELEGRAM_CHAT_ID) {
     pollTelegram();
     
     setTimeout(() => {
-        sendMessage(`🤖 OMNI_POCKET_BOT ONLINE 🤖
+        sendMessage(`🤖 OMNI_POCKET_BOT v26.0 ONLINE 🤖
 
 ✅ ${PAIRS.length} PAIRS | 15m AUTO-SCAN
-✅ MIN CONFIDENCE: ${MIN_CONFIDENCE}%
-⚠️ Signals with ADX <20 are WEAK - DON'T TRADE
+✅ RSI OVERRIDE ENABLED
+✅ No more contradictory signals
+
+RSI <30 → CALL (UP)
+RSI >70 → PUT (DOWN)
 
 Send /start for menu`);
     }, 3000);
