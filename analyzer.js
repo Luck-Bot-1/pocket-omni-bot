@@ -1,15 +1,34 @@
 // ============================================
-// POCKET OPTION LEGENDARY BOT v21.0
-// WITH PROBABILITY & TREND ALIGNMENT
+// POCKET OPTION LEGENDARY BOT v22.0
+// INTEGRATED ANALYZER - WORKS WITH BOTH bot.js AND bot-v22.js
 // ============================================
 
 const fs = require('fs');
 const path = require('path');
 
+// Load pairs from your existing pairs.json if it exists
+let PAIRS_LIST = [];
+try {
+    if (fs.existsSync('pairs.json')) {
+        const pairsData = JSON.parse(fs.readFileSync('pairs.json', 'utf8'));
+        PAIRS_LIST = pairsData.pairs || pairsData || [];
+    }
+} catch(e) {
+    console.log('⚠️ Could not load pairs.json, using defaults');
+}
+
+// Load session config from your existing session.json if it exists
+let SESSION_CONFIG = {};
+try {
+    if (fs.existsSync('session.json')) {
+        SESSION_CONFIG = JSON.parse(fs.readFileSync('session.json', 'utf8'));
+    }
+} catch(e) {}
+
 const BACKTEST_FILE = path.join(__dirname, 'backtest_stats.json');
 
 // ============================================
-// ULTIMATE CONFIGURATION
+// CONFIGURATION (MERGED FROM BOTH SOURCES)
 // ============================================
 const ULTIMATE_CONFIG = {
     MIN_CONFIDENCE: 55,
@@ -43,6 +62,14 @@ const ULTIMATE_CONFIG = {
         divergence: 0.20
     },
     
+    // Merge with session.json if available
+    SESSIONS: SESSION_CONFIG.sessions || {
+        'LONDON_NY': { hours: [13,14,15,16], multiplier: 1.15, tradeable: true },
+        'LONDON':    { hours: [8,9,10,11],   multiplier: 1.10, tradeable: true },
+        'ASIAN':     { hours: [1,2,3,4,5,6], multiplier: 0.95, tradeable: true },
+        'OFF_HOURS': { hours: [0,7,12,17,18,19,20,21,22,23], multiplier: 0.85, tradeable: true }
+    },
+    
     ALLOWED_TIMEFRAMES: {
         '1m':  { enabled: true, name: '1 MINUTE',  expiry: 1,  minBars: 30,  weight: 0.10 },
         '5m':  { enabled: true, name: '5 MINUTE',  expiry: 5,  minBars: 50,  weight: 0.15 },
@@ -52,19 +79,12 @@ const ULTIMATE_CONFIG = {
         '4h':  { enabled: true, name: '4 HOUR',    expiry: 240,minBars: 100, weight: 0.05 }
     },
     
-    SESSIONS: {
-        'LONDON_NY': { hours: [13,14,15,16], multiplier: 1.15, tradeable: true },
-        'LONDON':    { hours: [8,9,10,11],   multiplier: 1.10, tradeable: true },
-        'ASIAN':     { hours: [1,2,3,4,5,6], multiplier: 0.95, tradeable: true },
-        'OFF_HOURS': { hours: [0,7,12,17,18,19,20,21,22,23], multiplier: 0.85, tradeable: true }
-    },
-    
     AVOID_NEWS_MINUTES: 15,
     HIGH_IMPACT_NEWS: ['NFP', 'CPI', 'FOMC', 'GDP', 'UNEMPLOYMENT', 'PPI', 'PMI']
 };
 
 // ============================================
-// PERFORMANCE TRACKER
+// PERFORMANCE TRACKER (PRESERVED)
 // ============================================
 class UltimatePerformanceTracker {
     constructor() {
@@ -230,7 +250,7 @@ class UltimatePerformanceTracker {
 const performanceTracker = new UltimatePerformanceTracker();
 
 // ============================================
-// CORE INDICATORS
+// CORE INDICATORS (PRESERVED FROM YOUR EXISTING)
 // ============================================
 
 function calculateRSI(closes, period = 14) {
@@ -552,10 +572,6 @@ async function analyzeSignal(priceData, config, tf, higherPriceData = null, lowe
         const timeframe = tf || '15m';
         const tfConfig = ULTIMATE_CONFIG.ALLOWED_TIMEFRAMES[timeframe] || { name: timeframe, expiry: 15 };
         
-        console.log(`\n${'█'.repeat(80)}`);
-        console.log(`🏆 [${tfConfig.name}] ULTIMATE ANALYSIS - ${pairName} (LIVE DATA)`);
-        console.log(`${'█'.repeat(80)}`);
-        
         const closes = candles.map(c => c.close);
         const highs = candles.map(c => c.high);
         const lows = candles.map(c => c.low);
@@ -569,13 +585,8 @@ async function analyzeSignal(priceData, config, tf, higherPriceData = null, lowe
         const avgPrice = closes.slice(-20).reduce((a, b) => a + b, 0) / 20;
         const volatilityPercent = (atr / avgPrice) * 100;
         const hullMA20 = calculateHullMA(closes, 20);
-        const hullMA50 = calculateHullMA(closes, 50);
-        
-        console.log(`📊 INDICATORS: RSI: ${rsi.toFixed(1)} | ADX: ${adx.toFixed(1)} | ATR: ${(atr/price*10000).toFixed(1)}p`);
-        console.log(`   Volatility: ${volatilityPercent.toFixed(2)}% | Price Change: ${priceChange.toFixed(2)}%`);
         
         const volumeConf = calculateVolumeConfidence(candles);
-        console.log(`📊 VOLUME: Ratio: ${(volumeConf.volumeRatio*100).toFixed(0)}% | Flow: ${(volumeConf.imbalance*100).toFixed(1)}%`);
         
         const rsiVals = [];
         for (let i = 0; i < closes.length; i++) {
@@ -594,15 +605,11 @@ async function analyzeSignal(priceData, config, tf, higherPriceData = null, lowe
             trendScore = -1;
         }
         
-        console.log(`📈 TREND: ${trendDirection} | ADX: ${adx.toFixed(1)} | +DI: ${plusDI.toFixed(1)} | -DI: ${minusDI.toFixed(1)}`);
-        
         const factors = calculateFactorScores(candles, rsi, adx, priceChange, volumeConf.volumeRatio);
         const sentiment = performanceTracker.getFearGreedIndex();
         const session = getSessionMultiplier();
         
-        // ============================================
         // ENSEMBLE SIGNAL GENERATION
-        // ============================================
         let signals = [];
         let weights = [];
         
@@ -657,16 +664,14 @@ async function analyzeSignal(priceData, config, tf, higherPriceData = null, lowe
             }
         }
         
-        // ============================================
-        // PROBABILITY CALCULATION
-        // ============================================
+        // CONFIDENCE & PROBABILITY CALCULATION
         let finalConfidence = ensembleConfidence;
         finalConfidence += (adx >= 35 ? 10 : adx >= 25 ? 6 : adx >= 18 ? 3 : 0);
         finalConfidence += volumeConf.confidence;
         finalConfidence += divergence.quality / 6;
         finalConfidence += sentiment.score * 8;
         
-        // TREND ALIGNMENT STATUS
+        // TREND ALIGNMENT
         let trendAlignment = 'NEUTRAL';
         let trendAlignmentBonus = 0;
         
@@ -674,15 +679,10 @@ async function analyzeSignal(priceData, config, tf, higherPriceData = null, lowe
             trendAlignment = 'WITH TREND ✅';
             trendAlignmentBonus = 12;
             finalConfidence += 12;
-            console.log(`✅ TREND ALIGNMENT: WITH TREND (+12%)`);
         } else if ((trendScore === 1 && finalSignal === 'PUT') || (trendScore === -1 && finalSignal === 'CALL')) {
             trendAlignment = 'AGAINST TREND ⚠️';
             trendAlignmentBonus = 5;
             finalConfidence += 5;
-            console.log(`🔄 COUNTER-TREND: AGAINST TREND (+5% for higher RR)`);
-        } else {
-            trendAlignment = 'NO CLEAR TREND ⚪';
-            console.log(`⚪ NO CLEAR TREND DIRECTION`);
         }
         
         if (finalSignal === 'CALL' && rsi < 35) finalConfidence += 8;
@@ -691,7 +691,7 @@ async function analyzeSignal(priceData, config, tf, higherPriceData = null, lowe
         finalConfidence = finalConfidence * session.multiplier;
         finalConfidence = Math.min(96, Math.max(45, finalConfidence));
         
-        // PROBABILITY % (Historical win rate adjusted)
+        // PROBABILITY %
         const historicalWR = performanceTracker.getStrategyWinRate('ULTIMATE_ENSEMBLE');
         let probability = finalConfidence;
         if (historicalWR > 55 && historicalWR !== 55) {
