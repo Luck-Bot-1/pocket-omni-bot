@@ -1,5 +1,5 @@
 // ============================================
-// POCKET OPTION BOT v21.0 - WEB DASHBOARD SERVER
+// DASHBOARD SERVER - Web Control Interface
 // ============================================
 
 const express = require('express');
@@ -12,12 +12,18 @@ const PORT = 3000;
 
 app.use(cors());
 app.use(express.json());
-app.use(express.static('public'));
+app.use(express.static(__dirname));
 
 // Store signals in memory
 let signalsStore = [];
 let maxSignals = 200;
 let activityLogs = [];
+let globalStatus = {
+    enabledPairs: 0,
+    activeScans: 0,
+    pairsList: [],
+    autoscanStatus: []
+};
 
 // Load existing signals from file
 function loadSignals() {
@@ -42,20 +48,19 @@ function addLog(message) {
     if (activityLogs.length > 200) activityLogs.pop();
     console.log(logEntry);
     
-    // Also write to file
     try {
         fs.appendFileSync('dashboard.log', logEntry + '\n');
     } catch(e) {}
 }
 
-// Store signal from bot
+// Add signal from bot
 function addSignal(signalData) {
     signalData.timestamp = new Date().toISOString();
     signalData.time = new Date().toLocaleTimeString();
     signalsStore.unshift(signalData);
     if (signalsStore.length > maxSignals) signalsStore.pop();
     saveSignals();
-    addLog(`📡 SIGNAL: ${signalData.pair} - ${signalData.signal} @ ${signalData.confidence}% | ${signalData.trendAlignment}`);
+    addLog(`📡 SIGNAL: ${signalData.pair} - ${signalData.signal} @ ${signalData.confidence}% | ${signalData.trendAlignment || 'N/A'}`);
 }
 
 // API Routes
@@ -67,19 +72,19 @@ app.get('/api/signals', (req, res) => {
 
 app.get('/api/status', (req, res) => {
     res.json({
-        enabledPairs: global.enabledPairsCount || 0,
-        activeScans: global.activeScansCount || 0,
+        enabledPairs: globalStatus.enabledPairs || 0,
+        activeScans: globalStatus.activeScans || 0,
         totalSignals: signalsStore.length,
         uptime: process.uptime()
     });
 });
 
 app.get('/api/pairs', (req, res) => {
-    res.json(global.pairsList || []);
+    res.json(globalStatus.pairsList || []);
 });
 
 app.get('/api/autoscan', (req, res) => {
-    res.json(global.autoscanStatus || []);
+    res.json(globalStatus.autoscanStatus || []);
 });
 
 app.get('/api/logs', (req, res) => {
@@ -89,6 +94,11 @@ app.get('/api/logs', (req, res) => {
 app.post('/api/signal', (req, res) => {
     const signal = req.body;
     addSignal(signal);
+    res.json({ status: 'ok' });
+});
+
+app.post('/api/status-update', (req, res) => {
+    globalStatus = { ...globalStatus, ...req.body };
     res.json({ status: 'ok' });
 });
 
@@ -118,7 +128,7 @@ app.get('/api/check-command', (req, res) => {
     }
 });
 
-// Serve dashboard
+// Serve dashboard HTML
 app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'dashboard.html'));
 });
@@ -132,5 +142,15 @@ app.listen(PORT, () => {
 });
 
 loadSignals();
+
+// Update status periodically
+setInterval(() => {
+    try {
+        if (fs.existsSync('bot-status.json')) {
+            const status = JSON.parse(fs.readFileSync('bot-status.json', 'utf8'));
+            globalStatus = { ...globalStatus, ...status };
+        }
+    } catch(e) {}
+}, 2000);
 
 module.exports = { addSignal, addLog };
