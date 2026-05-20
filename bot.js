@@ -1,6 +1,6 @@
 // ============================================
-// OMNI_POCKET_BOT v26.0 - WITH RSI OVERRIDE
-// FIXES CONTRADICTORY SIGNALS
+// OMNI_POCKET_BOT v3.0 - COMPLETE TELEGRAM INTERFACE
+// LIVE DATA FROM YAHOO FINANCE
 // ============================================
 
 const { analyzeSignal } = require('./analyzer.js');
@@ -10,14 +10,31 @@ const fs = require('fs');
 const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 
-const PAIRS = [
-    'EUR/USD', 'GBP/USD', 'AUD/USD', 'NZD/USD', 'USD/CAD', 'USD/CHF', 'USD/JPY',
-    'AUD/CAD', 'AUD/JPY', 'CAD/JPY', 'CHF/JPY', 'EUR/AUD', 'EUR/CAD', 'EUR/CHF',
-    'EUR/GBP', 'EUR/JPY', 'EUR/NZD', 'GBP/AUD', 'GBP/CAD', 'GBP/CHF', 'GBP/JPY',
-    'GBP/NZD', 'NZD/CAD', 'NZD/JPY', 'AUD/NZD', 'CAD/CHF', 'AUD/CHF'
-];
+const config = JSON.parse(fs.readFileSync('./pairs.json', 'utf8'));
+const PAIRS = config.pairs;
+const TIMEFRAMES = config.timeframes;
+const PRIMARY_TF = config.primaryTimeframe;
 
-const SYMBOLS = {
+let trades = [];
+let userSettings = {
+    selectedPairs: [...PAIRS],
+    selectedTimeframe: PRIMARY_TF,
+    autoScanEnabled: false,
+    riskPerTrade: 20
+};
+
+try {
+    if (fs.existsSync('./trades.json')) {
+        trades = JSON.parse(fs.readFileSync('./trades.json', 'utf8'));
+    }
+} catch(e) {}
+
+let autoScanInterval = null;
+let isScanning = false;
+let lastUpdateId = 0;
+let botStartTime = Date.now();
+
+const YAHOO_SYMBOLS = {
     'EUR/USD': 'EURUSD=X', 'GBP/USD': 'GBPUSD=X', 'AUD/USD': 'AUDUSD=X',
     'NZD/USD': 'NZDUSD=X', 'USD/CAD': 'USDCAD=X', 'USD/CHF': 'USDCHF=X',
     'USD/JPY': 'USDJPY=X', 'AUD/CAD': 'AUDCAD=X', 'AUD/JPY': 'AUDJPY=X',
@@ -29,93 +46,268 @@ const SYMBOLS = {
     'AUD/NZD': 'AUDNZD=X', 'CAD/CHF': 'CADCHF=X', 'AUD/CHF': 'AUDCHF=X'
 };
 
-const MIN_CONFIDENCE = 65;
-const DELAY_MS = 500;
-
-let lastUpdateId = 0;
-let botStartTime = Date.now();
-let isScanning = false;
-let autoScanInterval = null;
-
-function sendMessage(text) {
+function sendMessage(text, replyMarkup = null) {
     if (!TELEGRAM_TOKEN || !TELEGRAM_CHAT_ID) {
-        console.log(`\n⚠️ TELEGRAM NOT CONFIGURED\n${text}\n`);
+        console.log(`\n📱 MESSAGE:\n${text}\n`);
         return false;
     }
     
-    let msg = text;
-    if (msg.length > 4000) msg = msg.substring(0, 3950) + "\n\n... (truncated)";
+    let data = { chat_id: TELEGRAM_CHAT_ID, text: text, parse_mode: "Markdown" };
+    if (replyMarkup) data.reply_markup = JSON.stringify(replyMarkup);
     
-    const data = JSON.stringify({
-        chat_id: TELEGRAM_CHAT_ID,
-        text: msg,
-        parse_mode: "",
-        disable_web_page_preview: true
-    });
+    const postData = JSON.stringify(data);
     
     const req = https.request({
         hostname: 'api.telegram.org',
         path: `/bot${TELEGRAM_TOKEN}/sendMessage`,
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Content-Length': data.length }
+        headers: { 'Content-Type': 'application/json', 'Content-Length': postData.length }
     });
     
     req.on('error', (e) => console.log(`❌ Send error: ${e.message}`));
-    req.write(data);
+    req.write(postData);
     req.end();
     return true;
 }
 
-// ============================================
-// FIXED SIGNAL FORMAT WITH RSI VALIDATION
-// ============================================
-function formatSignal(pair, analysis, isAuto) {
-    // CRITICAL FIX: Override contradictory signals
-    let signal = analysis.signal;
-    let confidence = analysis.confidence;
-    let rsi = parseFloat(analysis.rsi);
-    let override = false;
+function editMessage(text, messageId, replyMarkup = null) {
+    if (!TELEGRAM_TOKEN || !TELEGRAM_CHAT_ID) return false;
     
-    // RSI Override Logic
-    if (signal === 'CALL' && rsi > 70) {
-        signal = 'PUT';
-        confidence = Math.min(confidence, 70);
-        override = true;
-        console.log(`⚠️ RSI OVERRIDE: ${pair} CALL→PUT (RSI=${rsi} >70)`);
-    } else if (signal === 'PUT' && rsi < 30) {
-        signal = 'CALL';
-        confidence = Math.min(confidence, 70);
-        override = true;
-        console.log(`⚠️ RSI OVERRIDE: ${pair} PUT→CALL (RSI=${rsi} <30)`);
-    }
+    let data = { chat_id: TELEGRAM_CHAT_ID, message_id: messageId, text: text, parse_mode: "Markdown" };
+    if (replyMarkup) data.reply_markup = JSON.stringify(replyMarkup);
     
-    const arrow = signal === 'CALL' ? '📈' : '📉';
-    const direction = signal === 'CALL' ? 'CALL (UP)' : 'PUT (DOWN)';
-    const overrideMark = override ? ' 🔄(RSI FIXED)' : '';
+    const postData = JSON.stringify(data);
     
-    let msg = '';
-    if (isAuto) {
-        msg = `🤖 AUTO [15m] ${arrow} ${pair}${overrideMark}\n`;
-    } else {
-        msg = `${arrow} SIGNAL: ${pair}${overrideMark}\n`;
-    }
-    msg += `🎯 ${direction} | ${confidence}%\n`;
-    msg += `📊 RSI:${analysis.rsi} ADX:${analysis.adx} Trend:${analysis.trendDirection}\n`;
+    const req = https.request({
+        hostname: 'api.telegram.org',
+        path: `/bot${TELEGRAM_TOKEN}/editMessageText`,
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Content-Length': postData.length }
+    });
     
-    // Add RSI interpretation
-    if (rsi > 70) msg += `⚠️ RSI OVERBOUGHT (${rsi}) → Expected DOWN\n`;
-    else if (rsi < 30) msg += `⚠️ RSI OVERSOLD (${rsi}) → Expected UP\n`;
+    req.on('error', (e) => console.log(`❌ Edit error: ${e.message}`));
+    req.write(postData);
+    req.end();
+    return true;
+}
+
+function answerCallback(queryId, text, showAlert = false) {
+    if (!TELEGRAM_TOKEN) return;
     
-    msg += `⏱️ Expiry:${analysis.expiry}min SL:${analysis.stopLossPips} TP:${analysis.takeProfitPips}\n`;
+    const data = JSON.stringify({
+        callback_query_id: queryId,
+        text: text,
+        show_alert: showAlert
+    });
+    
+    const req = https.request({
+        hostname: 'api.telegram.org',
+        path: `/bot${TELEGRAM_TOKEN}/answerCallbackQuery`,
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Content-Length': data.length }
+    });
+    
+    req.write(data);
+    req.end();
+}
+
+function formatSignalMessage(signal, pair, timeframe, isAuto = false) {
+    const arrow = signal.signal === 'CALL' ? '📈' : (signal.signal === 'PUT' ? '📉' : '⚪');
+    const direction = signal.signal === 'CALL' ? 'CALL (UP)' : (signal.signal === 'PUT' ? 'PUT (DOWN)' : 'NEUTRAL');
+    
+    let msg = `*${arrow} SIGNAL ${arrow}*\n`;
+    msg += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+    msg += `📊 *${pair}* | [${timeframe}]\n`;
+    msg += `🎯 *${direction}* | Confidence: *${signal.confidence}%*\n`;
+    msg += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+    msg += `📈 *TECHNICAL ANALYSIS:*\n`;
+    msg += `   RSI: ${signal.rsi} ${signal.rsi < 30 ? '(OVERSOLD 🔥)' : (signal.rsi > 70 ? '(OVERBOUGHT ❄️)' : '')}\n`;
+    msg += `   ADX: ${signal.adx} ${signal.adx > 25 ? '(TRENDING 💪)' : '(SIDEWAYS 🔄)'}\n`;
+    msg += `   Trend: ${signal.trend}\n`;
+    msg += `   Volatility: ${signal.volatility}%\n`;
+    msg += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+    msg += `💡 *REASON:* ${signal.direction}\n`;
+    msg += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+    msg += `⏱️ *Expiry:* ${signal.expiry} minutes\n`;
+    msg += `🛡️ *SL:* ${signal.stopLoss} pips | *TP:* ${signal.takeProfit} pips\n`;
+    msg += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+    msg += `⚠️ *Risk Warning:* Never risk more than 2% per trade`;
     
     return msg;
 }
 
-async function fetchCandles(pairName, interval = '15m') {
+function showMainMenu(messageId = null) {
+    const uptime = Math.floor((Date.now() - botStartTime) / 1000 / 60);
+    const menu = `*🏆 OMNI_POCKET_BOT v3.0 🏆*
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+✅ *STATUS:* ONLINE (${uptime}m)
+✅ *DATA:* YAHOO FINANCE (LIVE)
+✅ *PAIRS:* ${userSettings.selectedPairs.length}/${PAIRS.length}
+✅ *TIMEFRAME:* ${userSettings.selectedTimeframe} ${userSettings.selectedTimeframe === PRIMARY_TF ? '⭐' : ''}
+✅ *AUTO-SCAN:* ${userSettings.autoScanEnabled ? '🟢 ACTIVE' : '🔴 STOPPED'}
+✅ *RISK:* $${userSettings.riskPerTrade}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📊 *BOT FEATURES:*
+• Real technical analysis (Max 85%)
+• Manual pair selection
+• Multiple timeframes (1m-4h)
+• Auto-scan every 15 min (15m PRIMARY)
+• Trade tracking with P&L
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Choose an option:`;
+    
+    const keyboard = {
+        inline_keyboard: [
+            [{ text: "🔍 MANUAL SCAN", callback_data: "menu_scan" }],
+            [{ text: "🎯 SELECT PAIRS", callback_data: "menu_pairs" }, { text: "⏰ SELECT TIMEFRAME", callback_data: "menu_timeframe" }],
+            [{ text: "🤖 AUTO-SCAN", callback_data: "menu_autoscan" }, { text: "📊 MY TRADES", callback_data: "menu_trades" }],
+            [{ text: "💰 SET RISK", callback_data: "menu_risk" }, { text: "📈 STATUS", callback_data: "menu_status" }],
+            [{ text: "❓ HELP", callback_data: "menu_help" }]
+        ]
+    };
+    
+    if (messageId) {
+        editMessage(menu, messageId, keyboard);
+    } else {
+        sendMessage(menu, keyboard);
+    }
+}
+
+function showPairSelection(page = 0, messageId = null) {
+    const itemsPerPage = 10;
+    const totalPages = Math.ceil(PAIRS.length / itemsPerPage);
+    const start = page * itemsPerPage;
+    const end = start + itemsPerPage;
+    const currentPairs = PAIRS.slice(start, end);
+    
+    let menu = `*🎯 SELECT PAIRS TO MONITOR*
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Selected: ${userSettings.selectedPairs.length}/${PAIRS.length}
+Page ${page + 1}/${totalPages}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+*Tap to toggle:*\n`;
+    
+    const keyboard = { inline_keyboard: [] };
+    
+    for (const pair of currentPairs) {
+        const isSelected = userSettings.selectedPairs.includes(pair);
+        const emoji = isSelected ? '✅' : '⬜';
+        keyboard.inline_keyboard.push([{ text: `${emoji} ${pair}`, callback_data: `toggle_pair_${pair}` }]);
+    }
+    
+    const navButtons = [];
+    if (page > 0) navButtons.push({ text: "◀️ PREV", callback_data: `pairs_page_${page - 1}` });
+    if (page < totalPages - 1) navButtons.push({ text: "NEXT ▶️", callback_data: `pairs_page_${page + 1}` });
+    if (navButtons.length > 0) keyboard.inline_keyboard.push(navButtons);
+    
+    keyboard.inline_keyboard.push([
+        { text: "✅ SELECT ALL", callback_data: "pairs_select_all" },
+        { text: "❌ CLEAR ALL", callback_data: "pairs_clear_all" }
+    ]);
+    keyboard.inline_keyboard.push([{ text: "🔙 BACK TO MENU", callback_data: "menu_main" }]);
+    
+    if (messageId) {
+        editMessage(menu, messageId, keyboard);
+    } else {
+        sendMessage(menu, keyboard);
+    }
+}
+
+function showTimeframeSelection(messageId = null) {
+    let menu = `*⏰ SELECT TIMEFRAME*
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Current: *${userSettings.selectedTimeframe}*
+${userSettings.selectedTimeframe === PRIMARY_TF ? '⭐ PRIMARY (15m) recommended' : ''}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+*Choose timeframe:*`;
+    
+    const keyboard = { inline_keyboard: [] };
+    
+    for (const tf of TIMEFRAMES) {
+        const emoji = userSettings.selectedTimeframe === tf ? '✅' : '🔘';
+        const star = tf === PRIMARY_TF ? ' ⭐' : '';
+        keyboard.inline_keyboard.push([{ text: `${emoji} ${tf}${star}`, callback_data: `set_tf_${tf}` }]);
+    }
+    
+    keyboard.inline_keyboard.push([{ text: "🔙 BACK TO MENU", callback_data: "menu_main" }]);
+    
+    if (messageId) {
+        editMessage(menu, messageId, keyboard);
+    } else {
+        sendMessage(menu, keyboard);
+    }
+}
+
+function showAutoScanMenu(messageId = null) {
+    const status = userSettings.autoScanEnabled ? "🟢 ACTIVE" : "🔴 STOPPED";
+    const buttonText = userSettings.autoScanEnabled ? "⏸️ STOP AUTO-SCAN" : "▶️ START AUTO-SCAN";
+    const buttonData = userSettings.autoScanEnabled ? "autoscan_stop" : "autoscan_start";
+    
+    let menu = `*🤖 AUTO-SCAN CONTROL*
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Status: ${status}
+Interval: 15 minutes
+Primary Timeframe: ${PRIMARY_TF} ⭐
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+When enabled, bot automatically scans
+all selected pairs every 15 minutes
+and sends signals when found.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
+    
+    const keyboard = {
+        inline_keyboard: [
+            [{ text: buttonText, callback_data: buttonData }],
+            [{ text: "🔙 BACK TO MENU", callback_data: "menu_main" }]
+        ]
+    };
+    
+    if (messageId) {
+        editMessage(menu, messageId, keyboard);
+    } else {
+        sendMessage(menu, keyboard);
+    }
+}
+
+function showTrades(messageId = null) {
+    const totalTrades = trades.length;
+    const wins = trades.filter(t => t.result === 'win').length;
+    const losses = trades.filter(t => t.result === 'loss').length;
+    const winRate = totalTrades > 0 ? ((wins / totalTrades) * 100).toFixed(1) : 0;
+    const totalPnL = trades.reduce((sum, t) => sum + (t.result === 'win' ? t.profit : -t.loss), 0);
+    
+    let menu = `*📊 MY TRADES*
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Total Trades: ${totalTrades}
+Wins: ${wins} | Losses: ${losses}
+Win Rate: ${winRate}%
+Total P&L: $${totalPnL.toFixed(2)}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+*Recent Trades:*`;
+    
+    const recent = trades.slice(-5).reverse();
+    for (const trade of recent) {
+        const resultEmoji = trade.result === 'win' ? '✅' : '❌';
+        menu += `\n\n${resultEmoji} *${trade.pair}* | ${trade.direction}\n`;
+        menu += `   Risk: $${trade.risk} | ${trade.result === 'win' ? `Profit: +$${trade.profit}` : `Loss: -$${trade.loss}`}`;
+    }
+    
+    const keyboard = {
+        inline_keyboard: [
+            [{ text: "🗑️ CLEAR HISTORY", callback_data: "trades_clear" }],
+            [{ text: "🔙 BACK TO MENU", callback_data: "menu_main" }]
+        ]
+    };
+    
+    if (messageId) {
+        editMessage(menu, messageId, keyboard);
+    } else {
+        sendMessage(menu, keyboard);
+    }
+}
+
+async function fetchCandles(symbol, interval) {
     return new Promise((resolve) => {
-        const symbol = SYMBOLS[pairName];
-        if (!symbol) { resolve(null); return; }
-        
         let period1;
         switch(interval) {
             case '1m': period1 = Math.floor((Date.now() / 1000) - 86400); break;
@@ -123,6 +315,7 @@ async function fetchCandles(pairName, interval = '15m') {
             case '15m': period1 = Math.floor((Date.now() / 1000) - 604800); break;
             case '30m': period1 = Math.floor((Date.now() / 1000) - 1209600); break;
             case '1h': period1 = Math.floor((Date.now() / 1000) - 2592000); break;
+            case '4h': period1 = Math.floor((Date.now() / 1000) - 8640000); break;
             default: period1 = Math.floor((Date.now() / 1000) - 604800);
         }
         const period2 = Math.floor(Date.now() / 1000);
@@ -148,7 +341,7 @@ async function fetchCandles(pairName, interval = '15m') {
                             });
                         }
                     }
-                    resolve(candles.length > 30 ? { values: candles } : null);
+                    resolve(candles.length > 30 ? candles : null);
                 } catch(e) { resolve(null); }
             });
         });
@@ -158,198 +351,189 @@ async function fetchCandles(pairName, interval = '15m') {
     });
 }
 
-async function analyzePair(pairName, timeframe) {
-    try {
-        const candles = await fetchCandles(pairName, timeframe);
-        if (!candles) return null;
-        const analysis = await analyzeSignal(candles, { pairName }, timeframe);
-        
-        // Log each analysis for debugging
-        console.log(`📊 ${pairName}: ${analysis.signal} @ ${analysis.confidence}% | RSI:${analysis.rsi} ADX:${analysis.adx} Trend:${analysis.trendDirection}`);
-        
-        return analysis;
-    } catch(e) {
-        console.log(`❌ Error analyzing ${pairName}: ${e.message}`);
+async function performScan(timeframe, isAuto = false) {
+    if (isScanning) {
+        if (!isAuto) sendMessage("⏳ Scan already in progress...");
         return null;
     }
-}
-
-// ============================================
-// AUTO SCAN WITH DETAILED LOGGING
-// ============================================
-async function autoScan() {
-    if (isScanning) return;
     isScanning = true;
     
-    const startTime = new Date();
-    console.log(`\n${'═'.repeat(60)}`);
-    console.log(`🔄 AUTO-SCAN STARTED - ${startTime.toLocaleTimeString()}`);
-    console.log(`📊 Scanning ${PAIRS.length} pairs on 15m timeframe`);
-    console.log(`${'═'.repeat(60)}`);
+    if (!isAuto) sendMessage(`🔍 Scanning ${userSettings.selectedPairs.length} pairs on [${timeframe}]...`);
+    console.log(`\n🔍 SCAN [${timeframe}] - ${new Date().toLocaleTimeString()}`);
     
-    let signals = [];
-    for (const pair of PAIRS) {
-        const analysis = await analyzePair(pair, '15m');
-        if (analysis && analysis.confidence >= MIN_CONFIDENCE && analysis.signal !== 'NEUTRAL') {
-            signals.push({ pair, analysis });
-            const msg = formatSignal(pair, analysis, true);
-            sendMessage(msg);
-            console.log(`🔔 SIGNAL: ${pair} - ${analysis.signal} @ ${analysis.confidence}% (RSI:${analysis.rsi} ADX:${analysis.adx})`);
-            await new Promise(r => setTimeout(r, 500));
+    let signalsFound = 0;
+    
+    for (const pair of userSettings.selectedPairs) {
+        try {
+            const symbol = YAHOO_SYMBOLS[pair];
+            if (!symbol) continue;
+            
+            const candles = await fetchCandles(symbol, timeframe);
+            if (!candles) continue;
+            
+            const analysis = analyzeSignal(candles, pair, timeframe);
+            if (analysis && analysis.signal !== 'NEUTRAL' && analysis.confidence >= 50) {
+                signalsFound++;
+                const msg = formatSignalMessage(analysis, pair, timeframe, isAuto);
+                sendMessage(msg);
+                console.log(`📊 ${pair}: ${analysis.signal} @ ${analysis.confidence}% | RSI:${analysis.rsi} ADX:${analysis.adx}`);
+                await new Promise(r => setTimeout(r, 500));
+            }
+        } catch(e) {
+            console.log(`❌ Error analyzing ${pair}: ${e.message}`);
         }
-        await new Promise(r => setTimeout(r, DELAY_MS));
+        await new Promise(r => setTimeout(r, 200));
     }
     
-    const endTime = new Date();
-    const duration = (endTime - startTime) / 1000;
-    
-    console.log(`${'═'.repeat(60)}`);
-    console.log(`✅ AUTO-SCAN COMPLETE - ${duration.toFixed(1)} seconds`);
-    console.log(`📊 Found ${signals.length} signals above ${MIN_CONFIDENCE}%`);
-    console.log(`${'═'.repeat(60)}\n`);
-    
-    if (signals.length === 0) {
-        sendMessage(`✅ Auto-scan complete: No signals above ${MIN_CONFIDENCE}%`);
-    } else {
-        sendMessage(`✅ Auto-scan complete: ${signals.length} signals found`);
+    if (!isAuto) {
+        if (signalsFound === 0) {
+            sendMessage(`✅ Scan [${timeframe}] complete: No signals found`);
+        } else {
+            sendMessage(`✅ Scan [${timeframe}] complete: ${signalsFound} signals found`);
+        }
     }
+    
+    console.log(`✅ SCAN [${timeframe}] complete: ${signalsFound} signals`);
     isScanning = false;
+    return signalsFound;
 }
 
-// ============================================
-// MANUAL SCAN WITH DETAILED LOGGING
-// ============================================
-async function scanAll(timeframe = '15m') {
-    if (isScanning) {
-        sendMessage("⏳ Scan already running...");
+async function autoScan() {
+    if (!userSettings.autoScanEnabled) return;
+    if (isScanning) return;
+    
+    console.log(`\n🔄 AUTO-SCAN [${PRIMARY_TF}] - ${new Date().toLocaleTimeString()}`);
+    
+    let signalsFound = 0;
+    
+    for (const pair of userSettings.selectedPairs) {
+        try {
+            const symbol = YAHOO_SYMBOLS[pair];
+            if (!symbol) continue;
+            
+            const candles = await fetchCandles(symbol, PRIMARY_TF);
+            if (!candles) continue;
+            
+            const analysis = analyzeSignal(candles, pair, PRIMARY_TF);
+            if (analysis && analysis.signal !== 'NEUTRAL' && analysis.confidence >= 55) {
+                signalsFound++;
+                const msg = formatSignalMessage(analysis, pair, PRIMARY_TF, true);
+                sendMessage(msg);
+                console.log(`🔔 AUTO: ${pair} - ${analysis.signal} @ ${analysis.confidence}%`);
+                await new Promise(r => setTimeout(r, 500));
+            }
+        } catch(e) {}
+        await new Promise(r => setTimeout(r, 200));
+    }
+    
+    console.log(`✅ AUTO-SCAN complete: ${signalsFound} signals`);
+}
+
+function handleCallback(query) {
+    const data = query.data;
+    const messageId = query.message.message_id;
+    const chatId = query.message.chat.id;
+    
+    if (chatId.toString() !== TELEGRAM_CHAT_ID) {
+        answerCallback(query.id, "Unauthorized", true);
         return;
     }
-    isScanning = true;
     
-    console.log(`\n${'═'.repeat(60)}`);
-    console.log(`🔍 MANUAL SCAN STARTED - ${new Date().toLocaleTimeString()}`);
-    console.log(`📊 Timeframe: ${timeframe} | Pairs: ${PAIRS.length}`);
-    console.log(`${'═'.repeat(60)}`);
-    
-    sendMessage(`🔍 Manual scan [${timeframe}] started...`);
-    
-    let signals = 0;
-    for (const pair of PAIRS) {
-        const analysis = await analyzePair(pair, timeframe);
-        if (analysis && analysis.confidence >= MIN_CONFIDENCE && analysis.signal !== 'NEUTRAL') {
-            signals++;
-            const msg = formatSignal(pair, analysis, false);
-            sendMessage(msg);
-            console.log(`🔔 SIGNAL: ${pair} - ${analysis.signal} @ ${analysis.confidence}%`);
-            await new Promise(r => setTimeout(r, 500));
-        }
-        await new Promise(r => setTimeout(r, DELAY_MS));
+    if (data === "menu_main") {
+        showMainMenu(messageId);
+        answerCallback(query.id, "Main menu");
     }
-    
-    console.log(`${'═'.repeat(60)}`);
-    console.log(`✅ MANUAL SCAN COMPLETE - ${signals} signals found`);
-    console.log(`${'═'.repeat(60)}\n`);
-    
-    sendMessage(`✅ Scan [${timeframe}] complete: ${signals} signals found`);
-    isScanning = false;
-}
-
-// ============================================
-// COMMAND HANDLER
-// ============================================
-function handleCommand(text) {
-    console.log(`📥 Command: ${text}`);
-    const cmd = text.toLowerCase().trim();
-    
-    if (cmd === '/start' || cmd === '/menu') {
-        sendMessage(`🏆 OMNI_POCKET_BOT v26.0 🏆
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-✅ ONLINE | ${PAIRS.length} PAIRS
-✅ AUTO-SCAN: 15m (every 15 min)
-✅ MIN CONFIDENCE: ${MIN_CONFIDENCE}%
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-📋 COMMANDS:
-/status - Bot status
-/scan - Manual scan (15m)
-/scan5m - Manual scan (5m)
-/scan1h - Manual scan (1h)
-/start_auto - Start auto-scan
-/stop_auto - Stop auto-scan
-/help - All commands
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-🔧 FIXES IN v26.0:
-✅ RSI Override: CALL when RSI<30
-✅ RSI Override: PUT when RSI>70
-✅ Detailed scan logs in console
-✅ No more contradictory signals`);
+    else if (data === "menu_scan") {
+        answerCallback(query.id, "Starting manual scan...");
+        performScan(userSettings.selectedTimeframe, false);
+        showMainMenu(messageId);
     }
-    else if (cmd === '/help') {
-        sendMessage(`📋 COMMANDS
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-/start or /menu - Main menu
-/status - Bot status
-/scan - Manual scan (15m)
-/scan5m - Manual scan (5m)
-/scan1h - Manual scan (1h)
-/start_auto - Start 15m auto-scan
-/stop_auto - Stop auto-scan
-/help - This menu
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-📊 SIGNAL RULES:
-RSI <30 (OVERSOLD) → CALL (UP)
-RSI >70 (OVERBOUGHT) → PUT (DOWN)
-ADX >25 → STRONG TREND (GOOD)
-ADX <20 → WEAK TREND (SKIP)`);
+    else if (data === "menu_pairs") {
+        showPairSelection(0, messageId);
+        answerCallback(query.id, "Select pairs to monitor");
     }
-    else if (cmd === '/status') {
+    else if (data === "menu_timeframe") {
+        showTimeframeSelection(messageId);
+        answerCallback(query.id, "Select timeframe");
+    }
+    else if (data === "menu_autoscan") {
+        showAutoScanMenu(messageId);
+        answerCallback(query.id, "Auto-scan settings");
+    }
+    else if (data === "menu_trades") {
+        showTrades(messageId);
+        answerCallback(query.id, "Trade history");
+    }
+    else if (data === "menu_risk") {
+        answerCallback(query.id, `Current risk: $${userSettings.riskPerTrade}`, true);
+    }
+    else if (data === "menu_status") {
         const uptime = Math.floor((Date.now() - botStartTime) / 1000 / 60);
-        const autoRunning = autoScanInterval ? "🟢 RUNNING" : "🔴 STOPPED";
-        sendMessage(`📊 BOT STATUS
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Uptime: ${uptime} minutes
-Pairs: ${PAIRS.length}
-Auto-scan: ${autoRunning}
-Min Confidence: ${MIN_CONFIDENCE}%
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-✅ Operational with RSI Override`);
+        const status = `📊 BOT STATUS\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nUptime: ${uptime} min\nPairs: ${userSettings.selectedPairs.length}/${PAIRS.length}\nTimeframe: ${userSettings.selectedTimeframe}\nAuto-scan: ${userSettings.autoScanEnabled ? 'ON' : 'OFF'}\nRisk: $${userSettings.riskPerTrade}\nData: Yahoo Finance LIVE`;
+        answerCallback(query.id, status, true);
     }
-    else if (cmd === '/scan') {
-        scanAll('15m');
+    else if (data === "menu_help") {
+        const help = `📋 HELP\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n• MANUAL SCAN: Scans selected pairs\n• SELECT PAIRS: Choose which to monitor\n• TIMEFRAME: 1m,5m,15m,30m,1h,4h\n• AUTO-SCAN: Every 15 min on 15m PRIMARY\n• MY TRADES: Track your P&L\n• SIGNAL TRUST: Only trade 65%+ confidence\n• DATA SOURCE: Yahoo Finance LIVE`;
+        answerCallback(query.id, help, true);
     }
-    else if (cmd === '/scan5m') {
-        scanAll('5m');
-    }
-    else if (cmd === '/scan1h') {
-        scanAll('1h');
-    }
-    else if (cmd === '/start_auto') {
-        if (autoScanInterval) {
-            sendMessage("⚠️ Auto-scan already running");
-            return;
-        }
-        autoScanInterval = setInterval(autoScan, 15 * 60 * 1000);
-        sendMessage("✅ Auto-scan STARTED (every 15 minutes)");
-        console.log("🚀 Auto-scan started");
-        autoScan(); // Run immediately
-    }
-    else if (cmd === '/stop_auto') {
-        if (autoScanInterval) {
-            clearInterval(autoScanInterval);
-            autoScanInterval = null;
-            sendMessage("⏸️ Auto-scan STOPPED");
-            console.log("🛑 Auto-scan stopped");
+    else if (data.startsWith("toggle_pair_")) {
+        const pair = data.replace("toggle_pair_", "");
+        if (userSettings.selectedPairs.includes(pair)) {
+            userSettings.selectedPairs = userSettings.selectedPairs.filter(p => p !== pair);
+            answerCallback(query.id, `Removed ${pair}`);
         } else {
-            sendMessage("⚠️ No auto-scan running");
+            userSettings.selectedPairs.push(pair);
+            answerCallback(query.id, `Added ${pair}`);
         }
+        showPairSelection(0, messageId);
+    }
+    else if (data.startsWith("pairs_page_")) {
+        const page = parseInt(data.replace("pairs_page_", ""));
+        showPairSelection(page, messageId);
+        answerCallback(query.id, `Page ${page + 1}`);
+    }
+    else if (data === "pairs_select_all") {
+        userSettings.selectedPairs = [...PAIRS];
+        answerCallback(query.id, `Selected all ${PAIRS.length} pairs`);
+        showPairSelection(0, messageId);
+    }
+    else if (data === "pairs_clear_all") {
+        userSettings.selectedPairs = [];
+        answerCallback(query.id, "Cleared all pairs");
+        showPairSelection(0, messageId);
+    }
+    else if (data.startsWith("set_tf_")) {
+        const tf = data.replace("set_tf_", "");
+        userSettings.selectedTimeframe = tf;
+        answerCallback(query.id, `Timeframe set to ${tf}`);
+        showTimeframeSelection(messageId);
+    }
+    else if (data === "autoscan_start") {
+        if (autoScanInterval) clearInterval(autoScanInterval);
+        userSettings.autoScanEnabled = true;
+        autoScanInterval = setInterval(autoScan, 15 * 60 * 1000);
+        answerCallback(query.id, "Auto-scan STARTED (every 15 min on 15m PRIMARY)");
+        showAutoScanMenu(messageId);
+        autoScan();
+    }
+    else if (data === "autoscan_stop") {
+        if (autoScanInterval) clearInterval(autoScanInterval);
+        autoScanInterval = null;
+        userSettings.autoScanEnabled = false;
+        answerCallback(query.id, "Auto-scan STOPPED");
+        showAutoScanMenu(messageId);
+    }
+    else if (data === "trades_clear") {
+        trades = [];
+        fs.writeFileSync('./trades.json', JSON.stringify(trades, null, 2));
+        answerCallback(query.id, "Trade history cleared");
+        showTrades(messageId);
     }
     else {
-        sendMessage(`❌ Unknown: ${text}\nType /help for commands`);
+        answerCallback(query.id, "Option not available", true);
     }
 }
 
-// ============================================
-// TELEGRAM POLLING
-// ============================================
 function pollTelegram() {
     if (!TELEGRAM_TOKEN) {
         console.log('❌ No TELEGRAM_TOKEN');
@@ -370,8 +554,21 @@ function pollTelegram() {
                     if (json.ok && json.result) {
                         for (const update of json.result) {
                             lastUpdateId = update.update_id;
-                            const msgText = update.message?.text;
-                            if (msgText) handleCommand(msgText);
+                            
+                            if (update.message && update.message.text) {
+                                const text = update.message.text;
+                                const chatId = update.message.chat.id;
+                                
+                                if (chatId.toString() !== TELEGRAM_CHAT_ID) continue;
+                                
+                                if (text === '/start') {
+                                    showMainMenu();
+                                }
+                            }
+                            
+                            if (update.callback_query) {
+                                handleCallback(update.callback_query);
+                            }
                         }
                     }
                 } catch(e) {}
@@ -384,47 +581,45 @@ function pollTelegram() {
     poll();
 }
 
-// ============================================
-// STARTUP
-// ============================================
 console.log('\n' + '█'.repeat(60));
-console.log('🏆 OMNI_POCKET_BOT v26.0');
+console.log('🏆 OMNI_POCKET_BOT v3.0');
 console.log('█'.repeat(60));
+console.log(`Data Source: YAHOO FINANCE (LIVE)`);
 console.log(`Pairs: ${PAIRS.length}`);
-console.log(`Min Confidence: ${MIN_CONFIDENCE}%`);
-console.log(`Auto-scan: 15m`);
-console.log(`RSI Override: ENABLED (RSI<30→CALL, RSI>70→PUT)`);
+console.log(`Timeframes: ${TIMEFRAMES.join(', ')}`);
+console.log(`Primary: ${PRIMARY_TF} ⭐`);
+console.log(`Max Confidence: 85% (Realistic)`);
 console.log('█'.repeat(60) + '\n');
 
 if (TELEGRAM_TOKEN && TELEGRAM_CHAT_ID) {
     console.log('✅ Telegram configured');
+    console.log('✅ Yahoo Finance LIVE data enabled');
     pollTelegram();
     
     setTimeout(() => {
-        sendMessage(`🤖 OMNI_POCKET_BOT v26.0 ONLINE 🤖
+        sendMessage(`🏆 *OMNI_POCKET_BOT v3.0 ACTIVATED* 🏆
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+✅ *DATA SOURCE:* YAHOO FINANCE (LIVE)
+✅ *FEATURES READY:*
+• 📊 Real technical analysis (Max 85%)
+• 🎯 Manual pair selection
+• ⏰ Multiple timeframes (1m-4h)
+• 🤖 Auto-scan (15m PRIMARY only)
+• 📈 Trade tracking with P&L
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-✅ ${PAIRS.length} PAIRS | 15m AUTO-SCAN
-✅ RSI OVERRIDE ENABLED
-✅ No more contradictory signals
-
-RSI <30 → CALL (UP)
-RSI >70 → PUT (DOWN)
-
-Send /start for menu`);
+📱 *Tap /start to begin*`);
     }, 3000);
 } else {
     console.log('❌ Telegram NOT configured!');
     console.log('Add env vars: TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID');
 }
 
-// Start auto-scan
 setTimeout(() => {
-    console.log('📊 Starting auto-scan...');
-    autoScanInterval = setInterval(autoScan, 15 * 60 * 1000);
-    autoScan();
-}, 15000);
+    console.log('📊 Bot ready - Use /start in Telegram');
+}, 10000);
 
 setInterval(() => {
     const uptime = Math.floor((Date.now() - botStartTime) / 1000 / 60);
-    console.log(`💓 Alive | Uptime: ${uptime}m`);
+    console.log(`💓 Alive | Uptime: ${uptime}m | Data: Yahoo Finance LIVE | Auto-scan: ${userSettings.autoScanEnabled ? 'ON' : 'OFF'}`);
 }, 60000);
