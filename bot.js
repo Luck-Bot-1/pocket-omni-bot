@@ -1,4 +1,5 @@
 const { LegendaryAnalyzer } = require('./analyzer.js');
+const yahooFinance = require('yahoo-finance2').default;
 const https = require('https');
 const http = require('http');
 const fs = require('fs');
@@ -46,7 +47,7 @@ const YAHOO_SYMBOLS = {
     'AUD/CHF': 'AUDCHF=X'
 };
 
-// ---------- Bounded Cache ----------
+// ---------- Bounded Cache with TTL ----------
 const CACHE_MAX_SIZE = 200;
 const CACHE_TTL = 60000;
 const candleCache = new Map();
@@ -92,200 +93,59 @@ class TokenBucket {
 }
 const telegramRateLimiter = new TokenBucket(20, 5);
 
-// ---------- Rotating User-Agent ----------
-const userAgents = [
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-];
-let userAgentIndex = 0;
-function getRandomUserAgent() {
-    userAgentIndex = (userAgentIndex + 1) % userAgents.length;
-    return userAgents[userAgentIndex];
-}
+// ---------- Yahoo Finance fetch using official package ----------
+async function fetchYahoo(symbol, interval, retries = 3) {
+    const intervalMap = {
+        '1m': '1m', '5m': '5m', '15m': '15m', '30m': '30m', '1h': '1h', '4h': '1h'
+    };
+    const yahooInterval = intervalMap[interval] || '15m';
+    const endDate = new Date();
+    let startDate = new Date();
+    switch (interval) {
+        case '1m': startDate.setDate(startDate.getDate() - 1); break;
+        case '5m': startDate.setDate(startDate.getDate() - 2); break;
+        case '15m': startDate.setDate(startDate.getDate() - 7); break;
+        case '30m': startDate.setDate(startDate.getDate() - 14); break;
+        case '1h': startDate.setDate(startDate.getDate() - 30); break;
+        case '4h': startDate.setDate(startDate.getDate() - 30); break;
+        default: startDate.setDate(startDate.getDate() - 7);
+    }
 
-// ---------- Yahoo Finance fetch with logging & retries ----------
-async function fetchYahoo(symbol, interval, timeoutMs = 10000, retries = 3) {
-    let delay = 1000;
     for (let attempt = 1; attempt <= retries; attempt++) {
         try {
             logger.info(`📡 Fetching ${symbol} (${interval}) attempt ${attempt}...`);
-            const result = await new Promise((resolve) => {
-                let req = null, timer = null;
-                const cleanup = () => {
-                    if (timer) clearTimeout(timer);
-                    if (req && !req.destroyed) req.destroy();
-                };
-                timer = setTimeout(() => { cleanup(); resolve(null); }, timeoutMs);
-                let period1;
-                switch (interval) {
-                    case '1m': period1 = Math.floor(Date.now() / 1000) - 86400; break;
-                    case '5m': period1 = Math.floor(Date.now() / 1000) - 259200; break;
-                    case '15m': period1 = Math.floor(Date.now() / 1000) - 604800; break;
-                    case '30m': period1 = Math.floor(Date.now() / 1000) - 1209600; break;
-                    case '1h': period1 = Math.floor(Date.now() / 1000) - 2592000; break;
-                    case '4h': period1 = Math.floor(Date.now() / 1000) - 8640000; break;
-                    default: period1 = Math.floor(Date.now() / 1000) - 604800;
-                }
-                const period2 = Math.floor(Date.now() / 1000);
-                const url = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?period1=${period1}&period2=${period2}&interval=${interval}`;
-                req = https.get(url, { headers: { 'User-Agent': getRandomUserAgent() }, timeout: timeoutMs }, (res) => {
-                    let data = '';
-                    res.on('data', chunk => data += chunk);
-                    res.on('end', () => {
-                        try {
-                            const json = JSON.parse(data);
-                            if (!json.chart?.result?.[0]) { cleanup(); resolve(null); return; }
-                            const quotes = json.chart.result[0].indicators.quote[0];
-                            if (!quotes || !quotes.open) { cleanup(); resolve(null); return; }
-                            const candles = [];
-                            const timestamps = json.chart.result[0].timestamp;
-                            for (let i = 0; i < timestamps.length; i++) {
-                                if (quotes.open[i] && quotes.high[i] && quotes.low[i] && quotes.close[i]) {
-                                    candles.push({
-                                        open: quotes.open[i], high: quotes.high[i], low: quotes.low[i],
-                                        close: quotes.close[i], volume: quotes.volume[i] || 1000,
-                                        time: timestamps[i] * 1000
-                                    });
-                                }
-                            }
-                            cleanup();
-                            resolve(candles.length > 30 ? candles : null);
-                        } catch (e) { cleanup(); resolve(null); }
-                    });
-                });
-                req.on('error', () => { cleanup(); resolve(null); });
-                req.end();
+            const result = await yahooFinance.historical(symbol, {
+                period1: startDate,
+                period2: endDate,
+                interval: yahooInterval
             });
-            if (result) {
-                logger.info(`✅ Successfully fetched ${result.length} candles for ${symbol}`);
-                return result;
-            } else {
+            if (!result || result.length === 0) {
                 logger.warn(`Attempt ${attempt} for ${symbol} returned no data`);
+                continue;
             }
-        } catch (e) { logger.warn(`Yahoo attempt ${attempt} failed for ${symbol}`, { error: e.message }); }
-        if (attempt < retries) {
-            await new Promise(r => setTimeout(r, delay));
-            delay = Math.min(30000, delay * 2);
+            const candles = result.map(item => ({
+                open: item.open,
+                high: item.high,
+                low: item.low,
+                close: item.close,
+                volume: item.volume || 1000,
+                time: item.date.getTime()
+            }));
+            logger.info(`✅ Successfully fetched ${candles.length} candles for ${symbol}`);
+            return candles;
+        } catch (error) {
+            logger.warn(`Yahoo attempt ${attempt} failed for ${symbol}: ${error.message}`);
+            if (attempt === retries) {
+                logger.error(`❌ All Yahoo attempts failed for ${symbol}`);
+                return null;
+            }
+            await new Promise(r => setTimeout(r, 1000 * Math.pow(2, attempt)));
         }
     }
-    logger.error(`❌ All Yahoo attempts failed for ${symbol}`);
     return null;
 }
 
-// ---------- Fallback: Alpha Vantage ----------
-async function fetchAlphaVantage(symbol, interval) {
-    const apiKey = process.env.ALPHA_VANTAGE_KEY;
-    if (!apiKey) {
-        if (!global.avWarningShown) {
-            logger.warn('Alpha Vantage fallback disabled: ALPHA_VANTAGE_KEY not set');
-            global.avWarningShown = true;
-        }
-        return null;
-    }
-    const avInterval = { '1m': '1min', '5m': '5min', '15m': '15min', '30m': '30min', '1h': '60min' }[interval];
-    if (!avInterval) return null;
-    const url = `https://www.alphavantage.co/query?function=TIME_SERIES_INTRADAY&symbol=${symbol.replace('=X', '')}&interval=${avInterval}&apikey=${apiKey}&outputsize=full`;
-    try {
-        const result = await new Promise((resolve) => {
-            const req = https.get(url, { headers: { 'User-Agent': getRandomUserAgent() } }, (res) => {
-                let data = '';
-                res.on('data', d => data += d);
-                res.on('end', () => {
-                    try {
-                        const json = JSON.parse(data);
-                        const timeSeries = json[`Time Series (${avInterval})`];
-                        if (!timeSeries) { resolve(null); return; }
-                        const candles = [];
-                        for (const [timestamp, values] of Object.entries(timeSeries)) {
-                            candles.push({
-                                time: new Date(timestamp).getTime(),
-                                open: parseFloat(values['1. open']),
-                                high: parseFloat(values['2. high']),
-                                low: parseFloat(values['3. low']),
-                                close: parseFloat(values['4. close']),
-                                volume: parseInt(values['5. volume']) || 1000
-                            });
-                        }
-                        candles.sort((a, b) => a.time - b.time);
-                        resolve(candles.length > 30 ? candles.slice(-100) : null);
-                    } catch (e) { resolve(null); }
-                });
-            });
-            req.on('error', () => resolve(null));
-            req.end();
-        });
-        if (result) logger.info(`✅ Alpha Vantage fallback succeeded for ${symbol}`);
-        return result;
-    } catch (e) { return null; }
-}
-
-// ---------- Fallback: Twelve Data ----------
-async function fetchTwelveData(symbol, interval) {
-    const apiKey = process.env.TWELVE_DATA_KEY;
-    if (!apiKey) {
-        if (!global.tdWarningShown) {
-            logger.warn('Twelve Data fallback disabled: TWELVE_DATA_KEY not set');
-            global.tdWarningShown = true;
-        }
-        return null;
-    }
-    const tdInterval = { '1m': '1min', '5m': '5min', '15m': '15min', '30m': '30min', '1h': '1h', '4h': '4h' }[interval];
-    if (!tdInterval) return null;
-    const url = `https://api.twelvedata.com/time_series?symbol=${symbol.replace('=X', '')}&interval=${tdInterval}&apikey=${apiKey}&outputsize=120`;
-    try {
-        const result = await new Promise((resolve) => {
-            const req = https.get(url, { headers: { 'User-Agent': getRandomUserAgent() } }, (res) => {
-                let data = '';
-                res.on('data', d => data += d);
-                res.on('end', () => {
-                    try {
-                        const json = JSON.parse(data);
-                        if (!json.values) { resolve(null); return; }
-                        const candles = [];
-                        for (const v of json.values) {
-                            candles.push({
-                                time: new Date(v.datetime).getTime(),
-                                open: parseFloat(v.open),
-                                high: parseFloat(v.high),
-                                low: parseFloat(v.low),
-                                close: parseFloat(v.close),
-                                volume: parseInt(v.volume) || 1000
-                            });
-                        }
-                        candles.sort((a, b) => a.time - b.time);
-                        resolve(candles.length > 30 ? candles : null);
-                    } catch (e) { resolve(null); }
-                });
-            });
-            req.on('error', () => resolve(null));
-            req.end();
-        });
-        if (result) logger.info(`✅ Twelve Data fallback succeeded for ${symbol}`);
-        return result;
-    } catch (e) { return null; }
-}
-
-// ---------- Mock data for fallback when all APIs fail (for testing) ----------
-function generateMockCandles(symbol, interval, count = 100) {
-    logger.warn(`⚠️ Using MOCK data for ${symbol} – no real API available`);
-    const basePrice = 1.1000;
-    const candles = [];
-    const now = Date.now();
-    const intervalMs = { '1m': 60000, '5m': 300000, '15m': 900000, '30m': 1800000, '1h': 3600000, '4h': 14400000 }[interval] || 900000;
-    for (let i = 0; i < count; i++) {
-        const time = now - (count - i) * intervalMs;
-        const volatility = 0.001;
-        const open = basePrice + (Math.random() - 0.5) * volatility;
-        const close = open + (Math.random() - 0.5) * volatility;
-        const high = Math.max(open, close) + Math.random() * volatility;
-        const low = Math.min(open, close) - Math.random() * volatility;
-        candles.push({ open, high, low, close, volume: Math.floor(Math.random() * 1000) + 500, time });
-    }
-    return candles;
-}
-
-// ---------- Main fetch with cache & fallback chain ----------
+// ---------- Main fetch with cache ----------
 async function fetchCandles(symbol, interval, timeoutMs = 10000) {
     const cacheKey = `${symbol}_${interval}`;
     const cached = cacheGet(cacheKey);
@@ -294,30 +154,35 @@ async function fetchCandles(symbol, interval, timeoutMs = 10000) {
         return cached;
     }
 
-    let candles = await fetchYahoo(symbol, interval, timeoutMs, 3);
+    const candles = await fetchYahoo(symbol, interval, 3);
     if (candles && candles.length > 0) {
         cacheSet(cacheKey, candles);
         return candles;
     }
 
-    logger.warn(`Yahoo failed for ${symbol}, trying Alpha Vantage...`);
-    candles = await fetchAlphaVantage(symbol, interval);
-    if (candles && candles.length > 0) {
-        cacheSet(cacheKey, candles);
-        return candles;
-    }
+    logger.error(`❌ No data for ${symbol} after all retries`);
+    return null;
+}
 
-    logger.warn(`Alpha Vantage failed for ${symbol}, trying Twelve Data...`);
-    candles = await fetchTwelveData(symbol, interval);
-    if (candles && candles.length > 0) {
-        cacheSet(cacheKey, candles);
-        return candles;
+// ---------- Startup connectivity test ----------
+async function testYahooConnectivity() {
+    try {
+        const testSymbol = 'EURUSD=X';
+        const result = await yahooFinance.historical(testSymbol, {
+            period1: new Date(Date.now() - 24 * 60 * 60 * 1000),
+            interval: '15m'
+        });
+        if (result && result.length > 0) {
+            logger.info('✅ Yahoo Finance connectivity test PASSED');
+            return true;
+        } else {
+            logger.error('❌ Yahoo Finance connectivity test FAILED (no data)');
+            return false;
+        }
+    } catch (error) {
+        logger.error(`❌ Yahoo Finance connectivity test FAILED: ${error.message}`);
+        return false;
     }
-
-    logger.error(`❌ All real data sources failed for ${symbol}. Using MOCK data.`);
-    candles = generateMockCandles(symbol, interval, 100);
-    cacheSet(cacheKey, candles);
-    return candles;
 }
 
 // ---------- Immutable State Manager ----------
@@ -379,7 +244,6 @@ class StateManager {
 
 const stateManager = new StateManager();
 stateManager.load();
-let userSettings = stateManager.state.settings;
 
 // ---------- Telegram API helpers ----------
 async function sendMessage(text, replyMarkup = null, priority = 5) {
@@ -465,122 +329,6 @@ process.on('unhandledRejection', (r) => { logger.error('Unhandled rejection', { 
 
 const analyzer = new LegendaryAnalyzer();
 
-// ---------- Backtesting Engine ----------
-async function runBacktest(pair, startDate, endDate) {
-    const symbol = YAHOO_SYMBOLS[pair];
-    if (!symbol) return { error: `Invalid pair: ${pair}` };
-    const start = new Date(startDate);
-    const end = new Date(endDate);
-    if (isNaN(start) || isNaN(end)) return { error: 'Invalid date format. Use YYYY-MM-DD' };
-
-    // Fetch historical data (using Yahoo with larger period)
-    const interval = '15m';
-    const period1 = Math.floor(start.getTime() / 1000);
-    const period2 = Math.floor(end.getTime() / 1000);
-    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?period1=${period1}&period2=${period2}&interval=${interval}`;
-    let candles = await new Promise((resolve) => {
-        const req = https.get(url, { headers: { 'User-Agent': getRandomUserAgent() } }, (res) => {
-            let data = '';
-            res.on('data', d => data += d);
-            res.on('end', () => {
-                try {
-                    const json = JSON.parse(data);
-                    if (!json.chart?.result?.[0]) { resolve(null); return; }
-                    const quotes = json.chart.result[0].indicators.quote[0];
-                    if (!quotes || !quotes.open) { resolve(null); return; }
-                    const candlesArr = [];
-                    const timestamps = json.chart.result[0].timestamp;
-                    for (let i = 0; i < timestamps.length; i++) {
-                        if (quotes.open[i] && quotes.high[i] && quotes.low[i] && quotes.close[i]) {
-                            candlesArr.push({
-                                open: quotes.open[i], high: quotes.high[i], low: quotes.low[i],
-                                close: quotes.close[i], volume: quotes.volume[i] || 1000,
-                                time: timestamps[i] * 1000
-                            });
-                        }
-                    }
-                    resolve(candlesArr);
-                } catch (e) { resolve(null); }
-            });
-        });
-        req.on('error', () => resolve(null));
-        req.end();
-    });
-    if (!candles || candles.length < 100) return { error: 'Insufficient historical data' };
-
-    // Simulate trading
-    let balance = 10000;
-    let position = null;
-    let trades = [];
-    for (let i = 50; i < candles.length; i++) {
-        const windowCandles = candles.slice(i - 50, i);
-        const analysis = analyzer.calculateProbability(windowCandles, pair, interval);
-        if (analysis.signal !== 'NEUTRAL' && analysis.probability >= 45) {
-            const entryPrice = candles[i].close;
-            const stopLoss = entryPrice * (1 - analysis.stopLoss / 10000);
-            const takeProfit = entryPrice * (1 + analysis.takeProfit / 10000);
-            let exitPrice = null;
-            let exitReason = null;
-            for (let j = i + 1; j < candles.length; j++) {
-                if (analysis.signal === 'CALL') {
-                    if (candles[j].high >= takeProfit) {
-                        exitPrice = takeProfit;
-                        exitReason = 'TP';
-                        break;
-                    }
-                    if (candles[j].low <= stopLoss) {
-                        exitPrice = stopLoss;
-                        exitReason = 'SL';
-                        break;
-                    }
-                } else {
-                    if (candles[j].low <= takeProfit) {
-                        exitPrice = takeProfit;
-                        exitReason = 'TP';
-                        break;
-                    }
-                    if (candles[j].high >= stopLoss) {
-                        exitPrice = stopLoss;
-                        exitReason = 'SL';
-                        break;
-                    }
-                }
-            }
-            if (!exitPrice) exitPrice = candles[candles.length - 1].close;
-            const pnl = (exitPrice - entryPrice) / entryPrice * (analysis.signal === 'CALL' ? 1 : -1) * balance * (parseFloat(analysis.suggestedRisk) / 100);
-            balance += pnl;
-            trades.push({
-                entryTime: new Date(candles[i].time),
-                exitTime: new Date(exitTime),
-                signal: analysis.signal,
-                probability: analysis.probability,
-                entryPrice,
-                exitPrice,
-                pnl,
-                exitReason
-            });
-            i += 3; // cooldown
-        }
-    }
-    const winRate = trades.filter(t => t.pnl > 0).length / trades.length * 100;
-    const totalReturn = (balance - 10000) / 10000 * 100;
-    const maxDrawdown = calculateMaxDrawdown(trades);
-    return { pair, startDate, endDate, trades: trades.length, winRate: winRate.toFixed(2), totalReturn: totalReturn.toFixed(2), maxDrawdown: maxDrawdown.toFixed(2), balance: balance.toFixed(2) };
-}
-
-function calculateMaxDrawdown(trades) {
-    let peak = 10000;
-    let maxDD = 0;
-    let balance = 10000;
-    for (const t of trades) {
-        balance += t.pnl;
-        if (balance > peak) peak = balance;
-        const dd = (peak - balance) / peak * 100;
-        if (dd > maxDD) maxDD = dd;
-    }
-    return maxDD;
-}
-
 // ---------- Scan with progress bar ----------
 async function performScan(timeframe, isAuto = false, userId = null) {
     return stateManager.withMutex('scan', async (snapshot) => {
@@ -600,6 +348,7 @@ async function performScan(timeframe, isAuto = false, userId = null) {
             await sendTypingAction();
         }
         let signals = 0, legendary = 0, exceptional = 0, high = 0, good = 0, moderate = 0, low = 0;
+        let dataFailures = 0;
         const pairsList = [...stateManager.state.settings.selectedPairs];
         for (let idx = 0; idx < pairsList.length; idx++) {
             const pair = pairsList[idx];
@@ -607,7 +356,8 @@ async function performScan(timeframe, isAuto = false, userId = null) {
             if (!symbol) continue;
             const candles = await fetchCandles(symbol, timeframe);
             if (!candles || candles.length < 50) {
-                logger.warn(`Insufficient candles for ${pair}: ${candles ? candles.length : 0}`);
+                dataFailures++;
+                logger.warn(`Insufficient candles for ${pair}`);
                 continue;
             }
             const analysis = analyzer.calculateProbability(candles, pair, timeframe);
@@ -632,9 +382,12 @@ async function performScan(timeframe, isAuto = false, userId = null) {
             await new Promise(r => setTimeout(r, 200));
         }
         stateManager.update({ scanning: { active: false, progressMsgId: null } });
-        logger.info(`SCAN COMPLETE: ${signals} signals | L:${legendary} E:${exceptional} H:${high} G:${good} M:${moderate} Lw:${low}`);
+        logger.info(`SCAN COMPLETE: ${signals} signals | Data failures: ${dataFailures} | L:${legendary} E:${exceptional} H:${high} G:${good} M:${moderate} Lw:${low}`);
         if (!isAuto && progressMsgId) {
-            const completionMsg = `✅ *SCAN COMPLETE*: ${signals} signals\n👑${legendary} 🔥${exceptional} 🔥${high} 📊${good} ⚡${moderate} ⚠️${low}\n━━━━━━━━━━━━━━━━━━━━━━\nReview probabilities above. YOU decide.`;
+            let completionMsg = `✅ *SCAN COMPLETE*: ${signals} signals\n👑${legendary} 🔥${exceptional} 🔥${high} 📊${good} ⚡${moderate} ⚠️${low}\n━━━━━━━━━━━━━━━━━━━━━━\nReview probabilities above. YOU decide.`;
+            if (dataFailures > 0) {
+                completionMsg += `\n⚠️ ${dataFailures} pairs had no data – check Yahoo Finance connectivity.`;
+            }
             await editMessageText(progressMsgId, completionMsg);
         }
         return signals;
@@ -656,7 +409,7 @@ function formatSignal(analysis, pair, timeframe, isAuto) {
     return `${isAuto ? '🤖 AUTO-SCAN\n' : ''}*${arrow} PROBABILITY SIGNAL ${arrow}*\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n📊 *${pair}* | [${timeframe}]\n🎯 *${dir}* | Probability: *${analysis.probability}%* ${analysis.probabilityEmoji}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n📊 *PROBABILITY METER:*\n\`${bar}\` ${analysis.probability}%\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n📈 *TECHNICALS:* RSI ${analysis.rsi} | ADX ${analysis.adx} | Vol ${analysis.volatility}%\n📊 Strategies: ${analysis.activeStrategies.length}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n💡 *${analysis.guidance}*\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n🛡️ *SL:* ${analysis.stopLoss} pips | *TP:* ${analysis.takeProfit} pips\n💰 *Entry:* ${analysis.currentPrice} | *Risk:* ${analysis.suggestedRisk}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n⚠️ *Probability ≠ Certainty* | YOU decide\n🕐 ${new Date().toLocaleTimeString()}`;
 }
 
-// ---------- Telegram UI (full implementation) ----------
+// ---------- Telegram UI functions (fully populated) ----------
 function getMainKeyboard() {
     return { inline_keyboard: [
         [{ text: "🔍 PROBABILITY SCAN", callback_data: "scan_manual" }],
@@ -670,7 +423,7 @@ function getMainKeyboard() {
 async function showMainMenu(messageId = null) {
     const uptime = Math.floor((Date.now() - global.botStartTime || 0) / 1000 / 60);
     const s = stateManager.state.settings;
-    const menu = `🏆 *OMNI v26* | ${uptime}m\n━━━━━━━━━━━━━━━━━━━━━━\n📊 ${s.selectedPairs.length}/${PAIRS.length} pairs\n⏰ ${s.selectedTimeframe} ⭐\n🤖 ${s.autoScanEnabled ? 'ON' : 'OFF'}\n━━━━━━━━━━━━━━━━━━━━━━\n📊 92%+ 👑 MAX (3%)\n📊 85-91% 🔥🔥🔥 STRONG (2.5%)\n📊 78-84% 🔥🔥 CONFIDENT (2%)\n📊 70-77% 🔥 NORMAL (1.5%)\n📊 62-69% ⚡ CAUTIOUS (1%)\n📊 55-61% ⚠️ SKIP (0.5%)\n━━━━━━━━━━━━━━━━━━━━━━\n*YOU decide. Not the bot.*`;
+    const menu = `🏆 *OMNI v27* | ${uptime}m\n━━━━━━━━━━━━━━━━━━━━━━\n📊 ${s.selectedPairs.length}/${PAIRS.length} pairs\n⏰ ${s.selectedTimeframe} ⭐\n🤖 ${s.autoScanEnabled ? 'ON' : 'OFF'}\n━━━━━━━━━━━━━━━━━━━━━━\n📊 92%+ 👑 MAX (3%)\n📊 85-91% 🔥🔥🔥 STRONG (2.5%)\n📊 78-84% 🔥🔥 CONFIDENT (2%)\n📊 70-77% 🔥 NORMAL (1.5%)\n📊 62-69% ⚡ CAUTIOUS (1%)\n📊 55-61% ⚠️ SKIP (0.5%)\n━━━━━━━━━━━━━━━━━━━━━━\n*YOU decide. Not the bot.*`;
     const kb = getMainKeyboard();
     if (messageId) {
         await editMessageText(messageId, menu, kb);
@@ -776,7 +529,7 @@ async function showGuide(messageId = null) {
 }
 
 async function showHelp(messageId = null) {
-    const msg = `*📋 HELP*\n━━━━━━━━━━━━━━━━━━━━━━\n*COMMANDS:*\n/start - Menu\n/scan - Manual scan\n/status - Status\n/help - Help\n/backtest <pair> <start> <end> - Run backtest (e.g. /backtest EUR/USD 2024-01-01 2024-02-01)\n━━━━━━━━━━━━━━━━━━━━━━\n*HOW TO USE:*\n1. Bot shows EVERY signal with %\n2. Check probability level\n3. YOU decide to trade or skip\n4. Higher % = Larger position\n━━━━━━━━━━━━━━━━━━━━━━\n*EXAMPLE:*\n85% CALL → 2.5% risk\n65% PUT → 1% risk\n55% CALL → Skip\n━━━━━━━━━━━━━━━━━━━━━━\n*YOU are the decision maker*`;
+    const msg = `*📋 HELP*\n━━━━━━━━━━━━━━━━━━━━━━\n*COMMANDS:*\n/start - Menu\n/scan - Manual scan\n/status - Status\n/help - Help\n━━━━━━━━━━━━━━━━━━━━━━\n*HOW TO USE:*\n1. Bot shows EVERY signal with %\n2. Check probability level\n3. YOU decide to trade or skip\n4. Higher % = Larger position\n━━━━━━━━━━━━━━━━━━━━━━\n*EXAMPLE:*\n85% CALL → 2.5% risk\n65% PUT → 1% risk\n55% CALL → Skip\n━━━━━━━━━━━━━━━━━━━━━━\n*YOU are the decision maker*`;
     const keyboard = { inline_keyboard: [[{ text: "🔙 BACK TO MENU", callback_data: "menu_main" }]] };
     if (messageId) {
         await editMessageText(messageId, msg, keyboard);
@@ -872,25 +625,7 @@ async function handleCommand(text, chatId) {
     else if (text === '/status') await showStatus();
     else if (text === '/scan') await performScan(stateManager.state.settings.selectedTimeframe, false);
     else if (text === '/help') await showHelp();
-    else if (text.startsWith('/backtest')) {
-        const parts = text.split(' ');
-        if (parts.length !== 4) {
-            await sendMessage(`❌ Usage: /backtest <pair> <start-date> <end-date>\nExample: /backtest EUR/USD 2025-01-01 2025-03-01`);
-            return;
-        }
-        const pair = parts[1];
-        const start = parts[2];
-        const end = parts[3];
-        await sendMessage(`⏳ Running backtest for ${pair} from ${start} to ${end}... This may take a minute.`);
-        const result = await runBacktest(pair, start, end);
-        if (result.error) {
-            await sendMessage(`❌ Backtest failed: ${result.error}`);
-        } else {
-            await sendMessage(`📊 *BACKTEST RESULTS* for ${result.pair}\n━━━━━━━━━━━━━━━━━━━━━━\n📅 Period: ${result.startDate} to ${result.endDate}\n📈 Trades: ${result.trades}\n🎯 Win Rate: ${result.winRate}%\n💰 Total Return: ${result.totalReturn}%\n📉 Max Drawdown: ${result.maxDrawdown}%\n💵 Final Balance: $${result.balance}\n━━━━━━━━━━━━━━━━━━━━━━\n⚠️ Past performance does not guarantee future results.`);
-        }
-    } else {
-        await sendMessage(`❌ Unknown command. Send /start for menu.`);
-    }
+    else await sendMessage(`❌ Unknown. Send /start for menu.`);
 }
 
 // ---------- Long polling ----------
@@ -950,22 +685,27 @@ function startHealthServer() {
 // ---------- Main ----------
 global.botStartTime = Date.now();
 console.log('\n' + '█'.repeat(60));
-console.log('🏆 OMNI_BOT v26 - INSTITUTIONAL FINAL');
+console.log('🏆 OMNI_BOT v27 - YAHOO FINANCE FIXED (FINAL)');
 console.log('█'.repeat(60));
 console.log(`Strategy: NO REJECTION | YOU decide`);
 console.log(`Indicators: HMA (zero‑lag) + RSI + ADX + MACD + BB`);
 console.log(`Risk: Kelly Criterion + regime‑adaptive`);
 console.log(`Telegram: ${TELEGRAM_TOKEN ? '✅' : '❌'}`);
 console.log(`HTTP Port: ${PORT}`);
-console.log(`Fallback: Alpha Vantage ${process.env.ALPHA_VANTAGE_KEY ? '✅' : '❌'} | Twelve Data ${process.env.TWELVE_DATA_KEY ? '✅' : '❌'}`);
 console.log('█'.repeat(60) + '\n');
+
+testYahooConnectivity().then(connected => {
+    if (!connected) {
+        logger.error('⚠️ Yahoo Finance is not reachable. Check network or API access.');
+    }
+});
 
 startHealthServer();
 startPolling();
 
 setTimeout(async () => {
     if (TELEGRAM_TOKEN && TELEGRAM_CHAT_ID) {
-        await sendMessage(`🤖 *OMNI_BOT v26 ONLINE*\n━━━━━━━━━━━━━━━━━━━━━━\n✅ Resilient data fetching (Yahoo + fallbacks + mock)\n✅ Full backtesting engine\n✅ NO SIGNAL REJECTION\n✅ YOU decide based on %\n━━━━━━━━━━━━━━━━━━━━━━\n📱 *Send /start to begin*`);
+        await sendMessage(`🤖 *OMNI_BOT v27 ONLINE*\n━━━━━━━━━━━━━━━━━━━━━━\n✅ Yahoo Finance data fetching (official package)\n✅ NO mock data – only real signals\n✅ YOU decide based on %\n━━━━━━━━━━━━━━━━━━━━━━\n📱 *Send /start to begin*`);
     }
     console.log('🚀 Bot ready! Send /start');
 }, 3000);
