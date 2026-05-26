@@ -1,234 +1,278 @@
-// ============================================
-// OMNI_POCKET_BOT v3.0 - ANALYZER
-// GOD-LEVEL SIGNAL GENERATION
-// ============================================
+const technicalIndicators = require('technicalindicators');
+const pairsConfig = require('./pairs.json');
+const { MarketRegimeDetector } = require('./src/core/regimeDetector');
+const { PredictiveSignalEngine } = require('./src/core/predictiveEngine');
 
-function calculateRSI(closes, period = 14) {
-    if (!closes || closes.length < period + 1) return 50;
-    let gains = 0, losses = 0;
-    for (let i = 1; i <= period; i++) {
-        const diff = closes[i] - closes[i-1];
-        if (diff >= 0) gains += diff;
-        else losses -= diff;
+// ===== TRUE DIVERGENCE DETECTION (swing‑based) =====
+function detectTrueDivergence(closes, rsiValues) {
+    if (closes.length < 50 || rsiValues.length < 50) return null;
+    const swingLows = [], swingHighs = [];
+    for (let i = 5; i < closes.length - 5; i++) {
+        let isLow = true, isHigh = true;
+        for (let j = -5; j <= 5; j++) {
+            if (j === 0) continue;
+            if (closes[i] > closes[i + j]) isLow = false;
+            if (closes[i] < closes[i + j]) isHigh = false;
+        }
+        if (isLow) swingLows.push({ price: closes[i], rsi: rsiValues[i] });
+        if (isHigh) swingHighs.push({ price: closes[i], rsi: rsiValues[i] });
     }
-    let avgGain = gains / period, avgLoss = losses / period;
-    for (let i = period + 1; i < closes.length; i++) {
-        const diff = closes[i] - closes[i-1];
-        if (diff >= 0) {
-            avgGain = (avgGain * (period - 1) + diff) / period;
-            avgLoss = (avgLoss * (period - 1)) / period;
-        } else {
-            avgGain = (avgGain * (period - 1)) / period;
-            avgLoss = (avgLoss * (period - 1) - diff) / period;
+    if (swingLows.length >= 2) {
+        const last = swingLows[swingLows.length - 1];
+        const prev = swingLows[swingLows.length - 2];
+        if (last.price < prev.price && last.rsi > prev.rsi) {
+            const diff = ((last.rsi - prev.rsi) / prev.rsi) * 100;
+            return { type: 'BULLISH', strength: diff > 15 ? 'STRONG' : 'WEAK', confidence: Math.min(90, 60 + diff) };
         }
     }
-    const rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
-    const rsi = 100 - (100 / (1 + rs));
-    return isNaN(rsi) ? 50 : rsi;
+    if (swingHighs.length >= 2) {
+        const last = swingHighs[swingHighs.length - 1];
+        const prev = swingHighs[swingHighs.length - 2];
+        if (last.price > prev.price && last.rsi < prev.rsi) {
+            const diff = ((prev.rsi - last.rsi) / prev.rsi) * 100;
+            return { type: 'BEARISH', strength: diff > 15 ? 'STRONG' : 'WEAK', confidence: Math.min(90, 60 + diff) };
+        }
+    }
+    return null;
 }
 
-function calculateADX(high, low, close, period = 14) {
-    if (!high || !low || !close || high.length < period + 1) {
-        return { adx: 20, plusDI: 20, minusDI: 20 };
+// ===== KELLY CRITERION SIZER (dynamic) =====
+class KellyPositionSizer {
+    constructor() {
+        this.trades = [];
+        this.winRate = 0.55;
+        this.avgWinLoss = 1.8;
+        this.maxRisk = 0.03;
+        this.minRisk = 0.005;
+        this.kellyFraction = 0.25;
     }
-    const tr = [];
-    for (let i = 1; i < high.length; i++) {
-        const hl = high[i] - low[i];
-        const hc = Math.abs(high[i] - close[i-1]);
-        const lc = Math.abs(low[i] - close[i-1]);
-        tr.push(Math.max(hl, hc, lc));
+    update(win, pnl) {
+        this.trades.push({ win, pnl });
+        if (this.trades.length > 200) this.trades.shift();
+        const wins = this.trades.filter(t => t.win).length;
+        const total = this.trades.length;
+        this.winRate = total ? wins / total : 0.55;
+        const avgWin = this.trades.filter(t => t.win).reduce((s, t) => s + t.pnl, 0) / (wins || 1);
+        const avgLoss = Math.abs(this.trades.filter(t => !t.win).reduce((s, t) => s + t.pnl, 0) / (total - wins || 1));
+        this.avgWinLoss = avgWin / (avgLoss || 1);
     }
-    const plusDM = [], minusDM = [];
-    for (let i = 1; i < high.length; i++) {
-        const up = high[i] - high[i-1];
-        const down = low[i-1] - low[i];
-        plusDM.push((up > down && up > 0) ? up : 0);
-        minusDM.push((down > up && down > 0) ? down : 0);
+    getRisk(probability) {
+        const winProb = probability / 100;
+        const lossProb = 1 - winProb;
+        const b = this.avgWinLoss;
+        let kelly = (winProb * b - lossProb) / b;
+        kelly = Math.max(0, Math.min(this.maxRisk, kelly * this.kellyFraction));
+        return Math.max(this.minRisk, Math.min(this.maxRisk, kelly));
     }
-    const smoothTR = tr.slice(-period).reduce((a, b) => a + b, 0) / period;
-    const smoothPlus = plusDM.slice(-period).reduce((a, b) => a + b, 0) / period;
-    const smoothMinus = minusDM.slice(-period).reduce((a, b) => a + b, 0) / period;
-    const plusDI = (smoothPlus / smoothTR) * 100;
-    const minusDI = (smoothMinus / smoothTR) * 100;
-    const dx = Math.abs(plusDI - minusDI) / (plusDI + minusDI) * 100;
-    return { adx: isNaN(dx) ? 20 : dx, plusDI: isNaN(plusDI) ? 20 : plusDI, minusDI: isNaN(minusDI) ? 20 : minusDI };
 }
 
-function calculateATR(high, low, close, period = 14) {
-    if (!high || !low || !close || high.length < period + 1) return 0.001;
-    const tr = [];
-    for (let i = 1; i < high.length; i++) {
-        const hl = high[i] - low[i];
-        const hc = Math.abs(high[i] - close[i-1]);
-        const lc = Math.abs(low[i] - close[i-1]);
-        tr.push(Math.max(hl, hc, lc));
+class LegendaryAnalyzer {
+    constructor() {
+        this.config = pairsConfig;
+        this.tech = this.config.technicalParameters;
+        this.probLevels = this.config.probabilityLevels;
+        this.regimeDetector = new MarketRegimeDetector();
+        this.predictive = new PredictiveSignalEngine();
+        this.kelly = new KellyPositionSizer();
     }
-    const atr = tr.slice(-period).reduce((a, b) => a + b, 0) / period;
-    return isNaN(atr) ? 0.001 : atr;
-}
 
-function calculateEMA(data, period) {
-    const k = 2 / (period + 1);
-    let ema = data[0];
-    const result = [ema];
-    for (let i = 1; i < data.length; i++) {
-        ema = data[i] * k + ema * (1 - k);
-        result.push(ema);
+    calculateRSI(closes, period) {
+        if (closes.length < period + 1) return 50;
+        let gains = 0, losses = 0;
+        for (let i = 1; i <= period; i++) {
+            const diff = closes[i] - closes[i-1];
+            diff >= 0 ? gains += diff : losses -= diff;
+        }
+        let avgGain = gains / period, avgLoss = losses / period;
+        for (let i = period + 1; i < closes.length; i++) {
+            const diff = closes[i] - closes[i-1];
+            if (diff >= 0) {
+                avgGain = (avgGain * (period - 1) + diff) / period;
+                avgLoss = (avgLoss * (period - 1)) / period;
+            } else {
+                avgGain = (avgGain * (period - 1)) / period;
+                avgLoss = (avgLoss * (period - 1) - diff) / period;
+            }
+        }
+        if (avgLoss === 0) return 100;
+        const rs = avgGain / avgLoss;
+        return Math.min(100, Math.max(0, Math.round((100 - 100 / (1 + rs)) * 10) / 10));
     }
-    return result;
-}
 
-function analyzeSignal(candles, pairName, timeframe) {
-    try {
-        const closes = candles.map(c => c.close);
-        const highs = candles.map(c => c.high);
-        const lows = candles.map(c => c.low);
-        const price = closes[closes.length - 1];
-        
-        const rsi = calculateRSI(closes, 14);
-        const { adx, plusDI, minusDI } = calculateADX(highs, lows, closes, 14);
-        const atr = calculateATR(highs, lows, closes, 14);
-        const ema20 = calculateEMA(closes, 20);
-        const ema50 = calculateEMA(closes, 50);
-        const currentEMA20 = ema20[ema20.length - 1];
-        const currentEMA50 = ema50[ema50.length - 1];
-        
-        const avgPrice = closes.slice(-20).reduce((a, b) => a + b, 0) / 20;
-        const volatility = (atr / avgPrice) * 100;
-        
-        // Trend detection
-        let trend = "NEUTRAL";
-        let trendStrength = 0;
-        
-        if (price > currentEMA20 && price > currentEMA50 && plusDI > minusDI && adx > 25) {
-            trend = "UPTREND";
-            trendStrength = 1;
-        } else if (price < currentEMA20 && price < currentEMA50 && minusDI > plusDI && adx > 25) {
-            trend = "DOWNTREND";
-            trendStrength = -1;
-        } else if (adx > 25) {
-            trend = trendStrength === 1 ? "UPTREND" : (trendStrength === -1 ? "DOWNTREND" : "TRENDING");
-        } else {
-            trend = "SIDEWAYS";
+    calculateATR(highs, lows, closes, period) {
+        if (highs.length < period + 1) return 0.001;
+        const tr = [];
+        for (let i = 1; i < highs.length; i++) {
+            const hl = highs[i] - lows[i];
+            const hc = Math.abs(highs[i] - closes[i-1]);
+            const lc = Math.abs(lows[i] - closes[i-1]);
+            tr.push(Math.max(hl, hc, lc));
         }
-        
-        // Signal determination
-        let signal = "NEUTRAL";
-        let confidence = 50;
-        let direction = "";
-        
-        // RSI-based signals (PRIMARY)
-        if (rsi < 30) {
-            signal = "CALL";
-            confidence = 65 + (30 - rsi);
-            direction = `RSI is OVERSOLD at ${rsi.toFixed(1)} → Price likely to bounce UP`;
-        } 
-        else if (rsi > 70) {
-            signal = "PUT";
-            confidence = 65 + (rsi - 70);
-            direction = `RSI is OVERBOUGHT at ${rsi.toFixed(1)} → Price likely to drop DOWN`;
-        }
-        // Trend-based signals (SECONDARY)
-        else if (trend === "UPTREND" && rsi < 60) {
-            signal = "CALL";
-            confidence = 55 + (adx / 4);
-            direction = `Strong UPTREND with ADX ${adx.toFixed(1)} → Continue higher`;
-        }
-        else if (trend === "DOWNTREND" && rsi > 40) {
-            signal = "PUT";
-            confidence = 55 + (adx / 4);
-            direction = `Strong DOWNTREND with ADX ${adx.toFixed(1)} → Continue lower`;
-        }
-        // Momentum signals (TERTIARY)
-        else if (adx > 30 && plusDI > minusDI && rsi < 55) {
-            signal = "CALL";
-            confidence = 55;
-            direction = `Bullish momentum detected (ADX ${adx.toFixed(1)})`;
-        }
-        else if (adx > 30 && minusDI > plusDI && rsi > 45) {
-            signal = "PUT";
-            confidence = 55;
-            direction = `Bearish momentum detected (ADX ${adx.toFixed(1)})`;
-        }
-        
-        // Confidence adjustments
-        if (adx < 20 && signal !== "NEUTRAL") {
-            confidence -= 15;
-            direction += ` ⚠️ Weak trend (ADX ${adx.toFixed(1)}) - Reduce position size`;
-        }
-        
-        if (volatility < 0.12) {
-            confidence -= 20;
-            direction += ` ⚠️ Low volatility market - Skip or minimal risk`;
-        }
-        
-        if ((trend === "UPTREND" && signal === "CALL") || (trend === "DOWNTREND" && signal === "PUT")) {
-            confidence += 10;
-            direction += ` ✅ Trading WITH the trend`;
-        }
-        
-        if ((trend === "UPTREND" && signal === "PUT") || (trend === "DOWNTREND" && signal === "CALL")) {
-            confidence -= 15;
-            direction += ` ⚠️ Trading AGAINST trend - High risk!`;
-        }
-        
-        confidence = Math.min(85, Math.max(30, Math.round(confidence)));
-        
-        if (confidence < 50) {
-            signal = "NEUTRAL";
-            direction = "Insufficient confidence - No trade";
-        }
-        
-        // Expiry and risk management
-        let expiry = 15;
-        if (timeframe === '1m') expiry = 2;
-        else if (timeframe === '5m') expiry = 5;
-        else if (timeframe === '15m') expiry = 15;
-        else if (timeframe === '30m') expiry = 30;
-        else if (timeframe === '1h') expiry = 60;
-        else if (timeframe === '4h') expiry = 240;
-        
-        const atrPips = (atr / price) * 10000;
-        let stopLoss = Math.max(5, Math.round(atrPips * 1.5));
-        let takeProfit = Math.round(stopLoss * 1.8);
-        
-        if (volatility < 0.2) {
-            stopLoss = Math.max(3, Math.round(stopLoss * 0.7));
-            takeProfit = Math.round(stopLoss * 1.8);
-        } else if (volatility > 1.0) {
-            stopLoss = Math.min(30, Math.round(stopLoss * 1.3));
-            takeProfit = Math.round(stopLoss * 1.8);
-        }
-        
+        return tr.slice(-period).reduce((a, b) => a + b, 0) / period;
+    }
+
+    calculateADX(highs, lows, closes, period) {
+        if (highs.length < period + 2) return { adx: 20, trend: 'RANGING' };
+        try {
+            const adx = technicalIndicators.ADX({ high: highs, low: lows, close: closes, period });
+            const last = adx[adx.length - 1] || 20;
+            let trend = 'RANGING';
+            if (last >= 35) trend = 'STRONG_TRENDING';
+            else if (last >= 22) trend = 'WEAK_TRENDING';
+            return { adx: last, trend };
+        } catch { return { adx: 20, trend: 'RANGING' }; }
+    }
+
+    calculateBollingerBands(closes, period, stdDev) {
+        if (closes.length < period) return { lower: null, upper: null };
+        try {
+            const bb = technicalIndicators.BollingerBands({ period, values: closes, stdDev });
+            const last = bb[bb.length - 1];
+            return { lower: last.lower, upper: last.upper };
+        } catch { return { lower: null, upper: null }; }
+    }
+
+    calculateMACD(closes, fast, slow, signal) {
+        if (closes.length < slow + signal) return { cross: 'NEUTRAL' };
+        try {
+            const macd = technicalIndicators.MACD({ values: closes, fastPeriod: fast, slowPeriod: slow, signalPeriod: signal });
+            const last = macd[macd.length - 1];
+            let cross = 'NEUTRAL';
+            if (macd.length >= 2) {
+                const prev = macd[macd.length - 2];
+                if (prev.MACD <= prev.signal && last.MACD > last.signal) cross = 'BULLISH';
+                else if (prev.MACD >= prev.signal && last.MACD < last.signal) cross = 'BEARISH';
+            }
+            return { cross };
+        } catch { return { cross: 'NEUTRAL' }; }
+    }
+
+    getCurrentSession() {
+        const hour = new Date().getUTCHours();
+        if (hour >= 12 && hour < 16) return { session: 'LONDON_NY_OVERLAP', liquidityBoost: 1.5 };
+        return { session: 'REGULAR', liquidityBoost: 1.0 };
+    }
+
+    calculateProbability(candles, pair, timeframe) {
+        try {
+            if (!candles || candles.length < 50) return this.neutral("Insufficient data");
+
+            const closes = candles.map(c => c.close);
+            const highs = candles.map(c => c.high);
+            const lows = candles.map(c => c.low);
+            const volumes = candles.map(c => c.volume);
+            const price = closes[closes.length - 1];
+            const atr = this.calculateATR(highs, lows, closes, 14);
+            const vol = (atr / price) * 100;
+            const adx = this.calculateADX(highs, lows, closes, this.tech.adxPeriod);
+            const rsi = this.calculateRSI(closes, this.tech.rsiPeriod);
+            const avgVol = volumes.slice(-20).reduce((a, b) => a + b, 0) / 20;
+
+            // Build RSI array for divergence
+            const rsiArr = [];
+            for (let i = 30; i <= closes.length; i++) rsiArr.push(this.calculateRSI(closes.slice(0, i), 14));
+            const divergence = detectTrueDivergence(closes, rsiArr);
+
+            const regime = this.regimeDetector.detectRegime(adx.adx, vol, rsi);
+            const predictive = this.predictive.detectPredictiveEntry(candles);
+            const session = this.getCurrentSession();
+            const bb = this.calculateBollingerBands(closes, this.tech.bbPeriod, this.tech.bbStdDev);
+            const macd = this.calculateMACD(closes, this.tech.macdFast, this.tech.macdSlow, this.tech.macdSignal);
+
+            let direction = "NEUTRAL";
+            let prob = 50;
+            let active = [];
+
+            if (predictive && predictive.signal !== 'NEUTRAL') {
+                direction = predictive.signal;
+                prob = predictive.probability;
+                active.push({ name: "PREDICTIVE", signal: predictive.signal, probability: predictive.probability });
+            }
+            if (rsi <= 30 && bb.lower && price <= bb.lower) {
+                direction = "CALL";
+                prob = Math.max(prob, 75);
+                active.push({ name: "MEAN_REVERSION", signal: "CALL", probability: 75 });
+            } else if (rsi >= 70 && bb.upper && price >= bb.upper) {
+                direction = "PUT";
+                prob = Math.max(prob, 75);
+                active.push({ name: "MEAN_REVERSION", signal: "PUT", probability: 75 });
+            }
+            if (macd.cross === 'BULLISH') {
+                if (direction === "NEUTRAL") direction = "CALL";
+                prob = Math.max(prob, 70);
+                active.push({ name: "MOMENTUM", signal: "CALL", probability: 70 });
+            } else if (macd.cross === 'BEARISH') {
+                if (direction === "NEUTRAL") direction = "PUT";
+                prob = Math.max(prob, 70);
+                active.push({ name: "MOMENTUM", signal: "PUT", probability: 70 });
+            }
+
+            let finalProb = prob * regime.positionMultiplier * session.liquidityBoost;
+            if (vol < 0.18) finalProb = Math.min(finalProb, 40);
+            else if (vol < 0.25) finalProb = Math.min(finalProb, 55);
+            else if (vol >= 0.35 && vol <= 0.85) finalProb *= 1.1;
+            if (active.length >= 2) finalProb *= 1.05;
+            if (active.length >= 3) finalProb *= 1.1;
+            if (divergence && ((direction === "CALL" && divergence.type === "BULLISH") || (direction === "PUT" && divergence.type === "BEARISH")))
+                finalProb += 12;
+
+            finalProb = Math.min(98, Math.max(0, Math.round(finalProb)));
+            const level = this.getLevel(finalProb);
+            const kellyRisk = this.kelly.getRisk(finalProb);
+            const stop = Math.min(45, Math.max(10, Math.round((atr / price) * 10000 * 1.5)));
+            const tp = Math.round(stop * 1.8);
+
+            return {
+                signal: finalProb >= 55 ? direction : "NEUTRAL",
+                probability: finalProb,
+                probabilityLevel: level.level,
+                probabilityEmoji: level.emoji,
+                recommendedAction: level.action,
+                suggestedRisk: kellyRisk.toFixed(1) + '%',
+                rsi: rsi.toFixed(1),
+                adx: adx.adx.toFixed(1),
+                trend: adx.trend,
+                volatility: vol.toFixed(2),
+                currentPrice: price.toFixed(5),
+                regime: regime.regime,
+                activeStrategies: active,
+                divergence: divergence ? `${divergence.type} (${divergence.strength})` : 'None',
+                session: session.session,
+                guidance: this.buildGuidance(level, finalProb, active.length, regime.regime),
+                stopLoss: stop,
+                takeProfit: tp,
+                riskRewardRatio: (tp / stop).toFixed(2),
+                timestamp: new Date().toISOString(),
+                pair, timeframe,
+                version: "16.0-LEGENDARY"
+            };
+        } catch (e) { return this.neutral(`Error: ${e.message}`); }
+    }
+
+    getLevel(p) {
+        const l = this.probLevels;
+        if (p >= l.legendary.min) return l.legendary;
+        if (p >= l.exceptional.min) return l.exceptional;
+        if (p >= l.high.min) return l.high;
+        if (p >= l.good.min) return l.good;
+        if (p >= l.moderate.min) return l.moderate;
+        if (p >= l.low.min) return l.low;
+        return l.veryLow;
+    }
+
+    buildGuidance(level, prob, stratCount, regime) {
+        return `${level.emoji} ${level.action} (${prob}%)\n━━━━━━━━━━━━━━━━━━━━━━\n📊 ${stratCount} strategies\n📈 Regime: ${regime.toUpperCase()}\n━━━━━━━━━━━━━━━━━━━━━━\n💡 YOUR DECISION:\n• ${prob}%+ → Full position\n• 70-84% → Normal\n• 55-69% → Cautious\n• <55% → Skip`;
+    }
+
+    neutral(reason) {
         return {
-            signal,
-            confidence,
-            rsi: rsi.toFixed(1),
-            adx: adx.toFixed(1),
-            trend,
-            volatility: volatility.toFixed(2),
-            direction,
-            expiry,
-            stopLoss,
-            takeProfit,
-            timestamp: new Date().toISOString()
-        };
-        
-    } catch(e) {
-        console.error("Analysis error:", e);
-        return {
-            signal: "NEUTRAL",
-            confidence: 0,
-            rsi: "50",
-            adx: "20",
-            trend: "ERROR",
-            volatility: "0",
-            direction: "Analysis error",
-            expiry: 15,
-            stopLoss: 10,
-            takeProfit: 18
+            signal: "NEUTRAL", probability: 30, probabilityLevel: "VERY_LOW", probabilityEmoji: "❌",
+            recommendedAction: "NO_TRADE", suggestedRisk: "0%", rsi: "50", adx: "20", trend: "UNKNOWN",
+            volatility: "0", currentPrice: "0", regime: "unknown", activeStrategies: [], divergence: "None",
+            session: "UNKNOWN", guidance: reason, stopLoss: 15, takeProfit: 27, riskRewardRatio: "1.80",
+            timestamp: new Date().toISOString(), pair: "UNKNOWN", timeframe: "UNKNOWN", version: "16.0-LEGENDARY"
         };
     }
 }
 
-module.exports = { analyzeSignal };
+module.exports = { LegendaryAnalyzer };
