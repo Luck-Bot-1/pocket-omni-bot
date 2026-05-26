@@ -1,7 +1,7 @@
 {
   "name": "omni-pocket-bot",
-  "version": "16.0.0",
-  "description": "PRODUCTION GRADE – Zero‑Lag HMA, Kelly Sizing, Divergence Detection",
+  "version": "17.0.0",
+  "description": "PRODUCTION GRADE – Zero‑Lag HMA, Kelly Sizing, Divergence Detection, Immutable State",
   "main": "bot.js",
   "scripts": {
     "start": "node bot.js",
@@ -9,7 +9,8 @@
     "pm2:stop": "pm2 stop omni-bot"
   },
   "dependencies": {
-    "technicalindicators": "^3.1.0"
+    "technicalindicators": "^3.1.0",
+    "winston": "^3.13.0"
   },
   "engines": { "node": ">=18.0.0" }
 }
