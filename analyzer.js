@@ -36,7 +36,7 @@ function detectTrueDivergence(closes, rsiValues) {
     return null;
 }
 
-// ===== KELLY CRITERION SIZER (dynamic) =====
+// ===== KELLY CRITERION SIZER (dynamic, history‑based) =====
 class KellyPositionSizer {
     constructor() {
         this.trades = [];
@@ -244,7 +244,7 @@ class LegendaryAnalyzer {
                 riskRewardRatio: (tp / stop).toFixed(2),
                 timestamp: new Date().toISOString(),
                 pair, timeframe,
-                version: "16.0-LEGENDARY"
+                version: "17.0-LEGENDARY"
             };
         } catch (e) { return this.neutral(`Error: ${e.message}`); }
     }
@@ -270,7 +270,7 @@ class LegendaryAnalyzer {
             recommendedAction: "NO_TRADE", suggestedRisk: "0%", rsi: "50", adx: "20", trend: "UNKNOWN",
             volatility: "0", currentPrice: "0", regime: "unknown", activeStrategies: [], divergence: "None",
             session: "UNKNOWN", guidance: reason, stopLoss: 15, takeProfit: 27, riskRewardRatio: "1.80",
-            timestamp: new Date().toISOString(), pair: "UNKNOWN", timeframe: "UNKNOWN", version: "16.0-LEGENDARY"
+            timestamp: new Date().toISOString(), pair: "UNKNOWN", timeframe: "UNKNOWN", version: "17.0-LEGENDARY"
         };
     }
 }
