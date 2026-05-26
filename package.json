@@ -1,11 +1,10 @@
 {
   "name": "omni-pocket-bot",
-  "version": "26.0.0",
-  "description": "INSTITUTIONAL GRADE – Resilient data fetching, backtesting, adaptive signals",
+  "version": "27.0.0",
+  "description": "PRODUCTION GRADE – Yahoo Finance official package, no mock data",
   "main": "bot.js",
   "scripts": {
     "start": "node bot.js",
-    "backtest": "node bot.js --backtest",
     "pm2:start": "pm2 start bot.js --name omni-bot --max-memory-restart 500M",
     "pm2:stop": "pm2 stop omni-bot",
     "pm2:restart": "pm2 restart omni-bot"
@@ -14,7 +13,6 @@
     "technicalindicators": "^3.1.0",
     "winston": "^3.13.0",
     "yahoo-finance2": "^2.11.3"
-}
   },
   "engines": {
     "node": ">=18.0.0"
