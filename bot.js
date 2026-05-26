@@ -46,7 +46,251 @@ const YAHOO_SYMBOLS = {
     'AUD/CHF': 'AUDCHF=X'
 };
 
-// ---------- Immutable State Manager (prevents race conditions) ----------
+// ---------- Bounded Cache with TTL ----------
+const CACHE_MAX_SIZE = 200;
+const CACHE_TTL = 60000;
+const candleCache = new Map();
+
+function cacheSet(key, data) {
+    if (candleCache.size >= CACHE_MAX_SIZE) {
+        const oldest = candleCache.keys().next().value;
+        candleCache.delete(oldest);
+    }
+    candleCache.set(key, { data, timestamp: Date.now() });
+}
+
+function cacheGet(key) {
+    const entry = candleCache.get(key);
+    if (entry && Date.now() - entry.timestamp < CACHE_TTL) return entry.data;
+    if (entry) candleCache.delete(key);
+    return null;
+}
+
+// ---------- Token Bucket Rate Limiter (prevents 429) ----------
+class TokenBucket {
+    constructor(tokensPerSecond = 20, burst = 5) {
+        this.capacity = burst;
+        this.tokens = burst;
+        this.refillRate = tokensPerSecond / 1000;
+        this.lastRefill = Date.now();
+    }
+    async consume(tokens = 1, timeoutMs = 5000) {
+        const start = Date.now();
+        while (true) {
+            const now = Date.now();
+            const elapsed = now - this.lastRefill;
+            this.tokens = Math.min(this.capacity, this.tokens + elapsed * this.refillRate);
+            this.lastRefill = now;
+            if (this.tokens >= tokens) {
+                this.tokens -= tokens;
+                return true;
+            }
+            if (Date.now() - start > timeoutMs) return true;
+            await new Promise(r => setTimeout(r, 10));
+        }
+    }
+}
+const telegramRateLimiter = new TokenBucket(20, 5);
+
+// ---------- Rotating User-Agent ----------
+const userAgents = [
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+];
+let userAgentIndex = 0;
+function getRandomUserAgent() {
+    userAgentIndex = (userAgentIndex + 1) % userAgents.length;
+    return userAgents[userAgentIndex];
+}
+
+// ---------- Yahoo Finance fetch with exponential backoff ----------
+async function fetchYahoo(symbol, interval, timeoutMs = 10000, retries = 3) {
+    let delay = 1000;
+    for (let attempt = 1; attempt <= retries; attempt++) {
+        try {
+            const result = await new Promise((resolve) => {
+                let req = null, timer = null;
+                const cleanup = () => {
+                    if (timer) clearTimeout(timer);
+                    if (req && !req.destroyed) req.destroy();
+                };
+                timer = setTimeout(() => { cleanup(); resolve(null); }, timeoutMs);
+                let period1;
+                switch (interval) {
+                    case '1m': period1 = Math.floor(Date.now() / 1000) - 86400; break;
+                    case '5m': period1 = Math.floor(Date.now() / 1000) - 259200; break;
+                    case '15m': period1 = Math.floor(Date.now() / 1000) - 604800; break;
+                    case '30m': period1 = Math.floor(Date.now() / 1000) - 1209600; break;
+                    case '1h': period1 = Math.floor(Date.now() / 1000) - 2592000; break;
+                    case '4h': period1 = Math.floor(Date.now() / 1000) - 8640000; break;
+                    default: period1 = Math.floor(Date.now() / 1000) - 604800;
+                }
+                const period2 = Math.floor(Date.now() / 1000);
+                const url = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?period1=${period1}&period2=${period2}&interval=${interval}`;
+                req = https.get(url, { headers: { 'User-Agent': getRandomUserAgent() }, timeout: timeoutMs }, (res) => {
+                    let data = '';
+                    res.on('data', chunk => data += chunk);
+                    res.on('end', () => {
+                        try {
+                            const json = JSON.parse(data);
+                            if (!json.chart?.result?.[0]) { cleanup(); resolve(null); return; }
+                            const quotes = json.chart.result[0].indicators.quote[0];
+                            if (!quotes || !quotes.open) { cleanup(); resolve(null); return; }
+                            const candles = [];
+                            const timestamps = json.chart.result[0].timestamp;
+                            for (let i = 0; i < timestamps.length; i++) {
+                                if (quotes.open[i] && quotes.high[i] && quotes.low[i] && quotes.close[i]) {
+                                    candles.push({
+                                        open: quotes.open[i], high: quotes.high[i], low: quotes.low[i],
+                                        close: quotes.close[i], volume: quotes.volume[i] || 1000,
+                                        time: timestamps[i] * 1000
+                                    });
+                                }
+                            }
+                            cleanup();
+                            resolve(candles.length > 30 ? candles : null);
+                        } catch (e) { cleanup(); resolve(null); }
+                    });
+                });
+                req.on('error', () => { cleanup(); resolve(null); });
+                req.end();
+            });
+            if (result) return result;
+        } catch (e) { logger.warn(`Yahoo attempt ${attempt} failed for ${symbol}`, { error: e.message }); }
+        if (attempt < retries) {
+            await new Promise(r => setTimeout(r, delay));
+            delay = Math.min(30000, delay * 2);
+        }
+    }
+    return null;
+}
+
+// ---------- Fallback: Alpha Vantage ----------
+async function fetchAlphaVantage(symbol, interval) {
+    const apiKey = process.env.ALPHA_VANTAGE_KEY;
+    if (!apiKey) {
+        if (!global.avWarningShown) {
+            logger.warn('Alpha Vantage fallback disabled: ALPHA_VANTAGE_KEY not set');
+            global.avWarningShown = true;
+        }
+        return null;
+    }
+    const avInterval = { '1m': '1min', '5m': '5min', '15m': '15min', '30m': '30min', '1h': '60min' }[interval];
+    if (!avInterval) return null;
+    const url = `https://www.alphavantage.co/query?function=TIME_SERIES_INTRADAY&symbol=${symbol.replace('=X', '')}&interval=${avInterval}&apikey=${apiKey}&outputsize=full`;
+    try {
+        const result = await new Promise((resolve) => {
+            const req = https.get(url, { headers: { 'User-Agent': getRandomUserAgent() } }, (res) => {
+                let data = '';
+                res.on('data', d => data += d);
+                res.on('end', () => {
+                    try {
+                        const json = JSON.parse(data);
+                        const timeSeries = json[`Time Series (${avInterval})`];
+                        if (!timeSeries) { resolve(null); return; }
+                        const candles = [];
+                        for (const [timestamp, values] of Object.entries(timeSeries)) {
+                            candles.push({
+                                time: new Date(timestamp).getTime(),
+                                open: parseFloat(values['1. open']),
+                                high: parseFloat(values['2. high']),
+                                low: parseFloat(values['3. low']),
+                                close: parseFloat(values['4. close']),
+                                volume: parseInt(values['5. volume']) || 1000
+                            });
+                        }
+                        candles.sort((a, b) => a.time - b.time);
+                        resolve(candles.length > 30 ? candles.slice(-100) : null);
+                    } catch (e) { resolve(null); }
+                });
+            });
+            req.on('error', () => resolve(null));
+            req.end();
+        });
+        return result;
+    } catch (e) { return null; }
+}
+
+// ---------- Fallback: Twelve Data ----------
+async function fetchTwelveData(symbol, interval) {
+    const apiKey = process.env.TWELVE_DATA_KEY;
+    if (!apiKey) {
+        if (!global.tdWarningShown) {
+            logger.warn('Twelve Data fallback disabled: TWELVE_DATA_KEY not set');
+            global.tdWarningShown = true;
+        }
+        return null;
+    }
+    const tdInterval = { '1m': '1min', '5m': '5min', '15m': '15min', '30m': '30min', '1h': '1h', '4h': '4h' }[interval];
+    if (!tdInterval) return null;
+    const url = `https://api.twelvedata.com/time_series?symbol=${symbol.replace('=X', '')}&interval=${tdInterval}&apikey=${apiKey}&outputsize=120`;
+    try {
+        const result = await new Promise((resolve) => {
+            const req = https.get(url, { headers: { 'User-Agent': getRandomUserAgent() } }, (res) => {
+                let data = '';
+                res.on('data', d => data += d);
+                res.on('end', () => {
+                    try {
+                        const json = JSON.parse(data);
+                        if (!json.values) { resolve(null); return; }
+                        const candles = [];
+                        for (const v of json.values) {
+                            candles.push({
+                                time: new Date(v.datetime).getTime(),
+                                open: parseFloat(v.open),
+                                high: parseFloat(v.high),
+                                low: parseFloat(v.low),
+                                close: parseFloat(v.close),
+                                volume: parseInt(v.volume) || 1000
+                            });
+                        }
+                        candles.sort((a, b) => a.time - b.time);
+                        resolve(candles.length > 30 ? candles : null);
+                    } catch (e) { resolve(null); }
+                });
+            });
+            req.on('error', () => resolve(null));
+            req.end();
+        });
+        return result;
+    } catch (e) { return null; }
+}
+
+// ---------- Main fetch with cache & fallback chain ----------
+async function fetchCandles(symbol, interval, timeoutMs = 10000) {
+    const cacheKey = `${symbol}_${interval}`;
+    const cached = cacheGet(cacheKey);
+    if (cached) {
+        logger.debug(`Cache hit for ${symbol}`);
+        return cached;
+    }
+
+    let candles = await fetchYahoo(symbol, interval, timeoutMs, 3);
+    if (candles && candles.length > 0) {
+        cacheSet(cacheKey, candles);
+        return candles;
+    }
+
+    logger.warn(`Yahoo failed for ${symbol}, trying Alpha Vantage...`);
+    candles = await fetchAlphaVantage(symbol, interval);
+    if (candles && candles.length > 0) {
+        cacheSet(cacheKey, candles);
+        return candles;
+    }
+
+    logger.warn(`Alpha Vantage failed for ${symbol}, trying Twelve Data...`);
+    candles = await fetchTwelveData(symbol, interval);
+    if (candles && candles.length > 0) {
+        cacheSet(cacheKey, candles);
+        return candles;
+    }
+
+    logger.error(`All data sources failed for ${symbol}`);
+    return null;
+}
+
+// ---------- Immutable State Manager ----------
 class StateManager {
     constructor() {
         this.state = {
@@ -105,38 +349,9 @@ class StateManager {
 
 const stateManager = new StateManager();
 stateManager.load();
-let userSettings = stateManager.state.settings; // alias for UI code
+let userSettings = stateManager.state.settings;
 
-// ---------- Token Bucket Rate Limiter (prevents 429) with timeout guard ----------
-class TokenBucket {
-    constructor(tokensPerSecond = 20, burst = 5) {
-        this.capacity = burst;
-        this.tokens = burst;
-        this.refillRate = tokensPerSecond / 1000;
-        this.lastRefill = Date.now();
-    }
-    async consume(tokens = 1, timeoutMs = 5000) {
-        const start = Date.now();
-        while (true) {
-            const now = Date.now();
-            const elapsed = now - this.lastRefill;
-            this.tokens = Math.min(this.capacity, this.tokens + elapsed * this.refillRate);
-            this.lastRefill = now;
-            if (this.tokens >= tokens) {
-                this.tokens -= tokens;
-                return true;
-            }
-            if (Date.now() - start > timeoutMs) {
-                // Allow request after timeout (avoid deadlock)
-                return true;
-            }
-            await new Promise(r => setTimeout(r, 10));
-        }
-    }
-}
-const telegramRateLimiter = new TokenBucket(20, 5);
-
-// ---------- Async safe Telegram API helpers ----------
+// ---------- Telegram API helpers ----------
 async function sendMessage(text, replyMarkup = null, priority = 5) {
     if (!TELEGRAM_TOKEN || !TELEGRAM_CHAT_ID) { logger.info(`📱 ${text.substring(0, 200)}...`); return; }
     await telegramRateLimiter.consume(1);
@@ -184,6 +399,19 @@ async function editMessageText(messageId, text, replyMarkup = null) {
     });
 }
 
+async function sendTypingAction() {
+    if (!TELEGRAM_TOKEN || !TELEGRAM_CHAT_ID) return;
+    await telegramRateLimiter.consume(1);
+    const url = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendChatAction`;
+    return new Promise((resolve) => {
+        const postData = JSON.stringify({ chat_id: TELEGRAM_CHAT_ID, action: 'typing' });
+        const req = https.request(url, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(postData) } }, () => { resolve(); });
+        req.on('error', () => resolve());
+        req.write(postData);
+        req.end();
+    });
+}
+
 // ---------- Graceful shutdown ----------
 let isShuttingDown = false;
 let autoScanInterval = null;
@@ -205,63 +433,9 @@ process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 process.on('uncaughtException', (e) => { logger.error('Uncaught', { error: e.stack }); gracefulShutdown('UNCAUGHT'); });
 process.on('unhandledRejection', (r) => { logger.error('Unhandled rejection', { reason: r }); });
 
-// ---------- Yahoo Finance fetch with timeout & retry ----------
-async function fetchCandles(symbol, interval, timeoutMs = 10000, retries = 2) {
-    for (let attempt = 1; attempt <= retries; attempt++) {
-        try {
-            const result = await new Promise((resolve) => {
-                let req = null, timer = null;
-                const cleanup = () => {
-                    if (timer) clearTimeout(timer);
-                    if (req && !req.destroyed) req.destroy();
-                };
-                timer = setTimeout(() => { cleanup(); resolve(null); }, timeoutMs);
-                let period1;
-                switch (interval) {
-                    case '1m': period1 = Math.floor(Date.now() / 1000) - 86400; break;
-                    case '5m': period1 = Math.floor(Date.now() / 1000) - 259200; break;
-                    case '15m': period1 = Math.floor(Date.now() / 1000) - 604800; break;
-                    case '30m': period1 = Math.floor(Date.now() / 1000) - 1209600; break;
-                    case '1h': period1 = Math.floor(Date.now() / 1000) - 2592000; break;
-                    case '4h': period1 = Math.floor(Date.now() / 1000) - 8640000; break;
-                    default: period1 = Math.floor(Date.now() / 1000) - 604800;
-                }
-                const period2 = Math.floor(Date.now() / 1000);
-                const url = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?period1=${period1}&period2=${period2}&interval=${interval}`;
-                req = https.get(url, { headers: { 'User-Agent': 'Mozilla/5.0' } }, (res) => {
-                    let data = '';
-                    res.on('data', chunk => data += chunk);
-                    res.on('end', () => {
-                        try {
-                            const json = JSON.parse(data);
-                            if (!json.chart?.result?.[0]) { cleanup(); resolve(null); return; }
-                            const quotes = json.chart.result[0].indicators.quote[0];
-                            if (!quotes || !quotes.open) { cleanup(); resolve(null); return; }
-                            const candles = [];
-                            const timestamps = json.chart.result[0].timestamp;
-                            for (let i = 0; i < timestamps.length; i++) {
-                                if (quotes.open[i] && quotes.high[i] && quotes.low[i] && quotes.close[i]) {
-                                    candles.push({ open: quotes.open[i], high: quotes.high[i], low: quotes.low[i], close: quotes.close[i], volume: quotes.volume[i] || 1000, time: timestamps[i] * 1000 });
-                                }
-                            }
-                            cleanup();
-                            resolve(candles.length > 30 ? candles : null);
-                        } catch (e) { cleanup(); resolve(null); }
-                    });
-                });
-                req.on('error', () => { cleanup(); resolve(null); });
-                req.end();
-            });
-            if (result) return result;
-        } catch (e) { logger.warn(`Fetch attempt ${attempt} failed for ${symbol}`, { error: e.message }); }
-        if (attempt < retries) await new Promise(r => setTimeout(r, 1000));
-    }
-    return null;
-}
-
 const analyzer = new LegendaryAnalyzer();
 
-// ---------- Scan with progress bar (fixed messageId handling) ----------
+// ---------- Scan with progress bar + typing action ----------
 async function performScan(timeframe, isAuto = false, userId = null) {
     return stateManager.withMutex('scan', async (snapshot) => {
         if (snapshot.scanning.active) {
@@ -277,6 +451,7 @@ async function performScan(timeframe, isAuto = false, userId = null) {
                 progressMsgId = startMsg.result.message_id;
                 stateManager.update({ scanning: { progressMsgId } });
             }
+            await sendTypingAction(); // immediate visual feedback
         }
         let signals = 0, legendary = 0, exceptional = 0, high = 0, good = 0, moderate = 0, low = 0;
         const pairsList = [...stateManager.state.settings.selectedPairs];
@@ -303,6 +478,7 @@ async function performScan(timeframe, isAuto = false, userId = null) {
                 const bar = '█'.repeat(Math.floor(percent / 5)) + '░'.repeat(20 - Math.floor(percent / 5));
                 const progressText = `🔍 *SCANNING* ${percent}%\n\`${bar}\`\n${idx}/${totalPairs} pairs`;
                 await editMessageText(progressMsgId, progressText);
+                await sendTypingAction(); // keep typing indicator alive
             }
             await new Promise(r => setTimeout(r, 200));
         }
@@ -331,7 +507,7 @@ function formatSignal(analysis, pair, timeframe, isAuto) {
     return `${isAuto ? '🤖 AUTO-SCAN\n' : ''}*${arrow} PROBABILITY SIGNAL ${arrow}*\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n📊 *${pair}* | [${timeframe}]\n🎯 *${dir}* | Probability: *${analysis.probability}%* ${analysis.probabilityEmoji}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n📊 *PROBABILITY METER:*\n\`${bar}\` ${analysis.probability}%\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n📈 *TECHNICALS:* RSI ${analysis.rsi} | ADX ${analysis.adx} | Vol ${analysis.volatility}%\n📊 Strategies: ${analysis.activeStrategies.length}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n💡 *${analysis.guidance}*\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n🛡️ *SL:* ${analysis.stopLoss} pips | *TP:* ${analysis.takeProfit} pips\n💰 *Entry:* ${analysis.currentPrice} | *Risk:* ${analysis.suggestedRisk}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n⚠️ *Probability ≠ Certainty* | YOU decide\n🕐 ${new Date().toLocaleTimeString()}`;
 }
 
-// ---------- Telegram UI (all functions accept messageId) ----------
+// ---------- Telegram UI (all functions, completely populated) ----------
 function getMainKeyboard() {
     return { inline_keyboard: [
         [{ text: "🔍 PROBABILITY SCAN", callback_data: "scan_manual" }],
@@ -345,7 +521,7 @@ function getMainKeyboard() {
 async function showMainMenu(messageId = null) {
     const uptime = Math.floor((Date.now() - global.botStartTime || 0) / 1000 / 60);
     const s = stateManager.state.settings;
-    const menu = `🏆 *OMNI v17.0* | ${uptime}m\n━━━━━━━━━━━━━━━━━━━━━━\n📊 ${s.selectedPairs.length}/${PAIRS.length} pairs\n⏰ ${s.selectedTimeframe} ⭐\n🤖 ${s.autoScanEnabled ? 'ON' : 'OFF'}\n━━━━━━━━━━━━━━━━━━━━━━\n📊 92%+ 👑 MAX (3%)\n📊 85-91% 🔥🔥🔥 STRONG (2.5%)\n📊 78-84% 🔥🔥 CONFIDENT (2%)\n📊 70-77% 🔥 NORMAL (1.5%)\n📊 62-69% ⚡ CAUTIOUS (1%)\n📊 55-61% ⚠️ SKIP (0.5%)\n━━━━━━━━━━━━━━━━━━━━━━\n*YOU decide. Not the bot.*`;
+    const menu = `🏆 *OMNI v19.0* | ${uptime}m\n━━━━━━━━━━━━━━━━━━━━━━\n📊 ${s.selectedPairs.length}/${PAIRS.length} pairs\n⏰ ${s.selectedTimeframe} ⭐\n🤖 ${s.autoScanEnabled ? 'ON' : 'OFF'}\n━━━━━━━━━━━━━━━━━━━━━━\n📊 92%+ 👑 MAX (3%)\n📊 85-91% 🔥🔥🔥 STRONG (2.5%)\n📊 78-84% 🔥🔥 CONFIDENT (2%)\n📊 70-77% 🔥 NORMAL (1.5%)\n📊 62-69% ⚡ CAUTIOUS (1%)\n📊 55-61% ⚠️ SKIP (0.5%)\n━━━━━━━━━━━━━━━━━━━━━━\n*YOU decide. Not the bot.*`;
     const kb = getMainKeyboard();
     if (messageId) {
         await editMessageText(messageId, menu, kb);
@@ -483,7 +659,7 @@ async function deleteWebhook(retries = 3) {
     return false;
 }
 
-// ---------- Callback & command handling (with validation) ----------
+// ---------- Callback & command handling (fully populated) ----------
 async function handleCallback(query) {
     const data = query.data;
     const msgId = query.message.message_id;
@@ -535,7 +711,6 @@ async function handleCallback(query) {
             await showTimeframeSelection(msgId);
         }
     }
-    // answer callback query to stop loading
     const ans = https.request(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/answerCallbackQuery`, { method: 'POST', headers: { 'Content-Type': 'application/json' } }, () => {});
     ans.write(JSON.stringify({ callback_query_id: query.id }));
     ans.end();
@@ -551,16 +726,18 @@ async function handleCommand(text, chatId) {
     else await sendMessage(`❌ Unknown. Send /start for menu.`);
 }
 
-// ---------- Long polling with deleteWebhook ----------
+// ---------- Long polling with AbortController ----------
 async function startPolling() {
     if (!TELEGRAM_TOKEN) { logger.error('❌ No TELEGRAM_TOKEN'); return; }
     await deleteWebhook(3);
     logger.info('📡 Starting long polling (timeout=55s)...');
     let lastUpdateId = 0;
     const poll = async () => {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 55000);
         try {
             const url = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/getUpdates?offset=${lastUpdateId + 1}&timeout=55`;
-            const req = https.get(url, { timeout: 60000 }, (res) => {
+            const req = https.get(url, { signal: controller.signal, timeout: 60000 }, (res) => {
                 let data = '';
                 res.on('data', chunk => data += chunk);
                 res.on('end', () => {
@@ -579,9 +756,12 @@ async function startPolling() {
                     } catch (e) { setTimeout(poll, 2000); }
                 });
             });
-            req.on('error', () => setTimeout(poll, 5000));
+            req.on('error', (err) => {
+                if (err.name === 'AbortError') logger.warn('Poll timeout, retrying');
+                setTimeout(poll, 2000);
+            });
             req.end();
-        } catch (e) { setTimeout(poll, 5000); }
+        } catch (e) { setTimeout(poll, 5000); } finally { clearTimeout(timeout); }
     };
     poll();
 }
@@ -603,13 +783,14 @@ function startHealthServer() {
 // ---------- Main ----------
 global.botStartTime = Date.now();
 console.log('\n' + '█'.repeat(60));
-console.log('🏆 OMNI_BOT v17.0 - LEGENDARY EDITION (FINAL)');
+console.log('🏆 OMNI_BOT v19.0 - LEGENDARY EDITION (FULLY RESILIENT)');
 console.log('█'.repeat(60));
 console.log(`Strategy: NO REJECTION | YOU decide`);
 console.log(`Indicators: HMA (zero‑lag) + RSI + ADX + MACD + BB`);
 console.log(`Risk: Kelly Criterion + regime‑adaptive`);
 console.log(`Telegram: ${TELEGRAM_TOKEN ? '✅' : '❌'}`);
 console.log(`HTTP Port: ${PORT}`);
+console.log(`Fallback: Alpha Vantage ${process.env.ALPHA_VANTAGE_KEY ? '✅' : '❌'} | Twelve Data ${process.env.TWELVE_DATA_KEY ? '✅' : '❌'}`);
 console.log('█'.repeat(60) + '\n');
 
 startHealthServer();
@@ -617,7 +798,7 @@ startPolling();
 
 setTimeout(async () => {
     if (TELEGRAM_TOKEN && TELEGRAM_CHAT_ID) {
-        await sendMessage(`🤖 *OMNI_BOT v17.0 ONLINE*\n━━━━━━━━━━━━━━━━━━━━━━\n✅ NO SIGNAL REJECTION\n✅ YOU decide based on %\n✅ Higher % = Larger position\n✅ Lower % = Skip\n━━━━━━━━━━━━━━━━━━━━━━\n📱 *Send /start to begin*\n━━━━━━━━━━━━━━━━━━━━━━\n⚠️ Probability ≠ Guarantee\nYOU are the decision maker.`);
+        await sendMessage(`🤖 *OMNI_BOT v19.0 ONLINE*\n━━━━━━━━━━━━━━━━━━━━━━\n✅ Multi-source data (Yahoo + fallbacks)\n✅ NO SIGNAL REJECTION\n✅ YOU decide based on %\n✅ Higher % = Larger position\n✅ Lower % = Skip\n━━━━━━━━━━━━━━━━━━━━━━\n📱 *Send /start to begin*`);
     }
     console.log('🚀 Bot ready! Send /start');
 }, 3000);
