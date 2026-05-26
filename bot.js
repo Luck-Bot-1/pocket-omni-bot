@@ -112,7 +112,7 @@ class CircuitBreaker {
         this.resetTimeoutMs = resetTimeoutMs;
         this.failureCount = 0;
         this.lastFailureTime = 0;
-        this.state = 'CLOSED'; // CLOSED, OPEN, HALF_OPEN
+        this.state = 'CLOSED';
     }
     recordFailure() {
         this.failureCount++;
@@ -141,7 +141,7 @@ class CircuitBreaker {
             }
             return false;
         }
-        return true; // HALF_OPEN allows one trial
+        return true;
     }
 }
 const yahooCircuitBreaker = new CircuitBreaker(5, 60000);
@@ -190,13 +190,13 @@ async function fetchYahooRaw(symbol, interval) {
     });
 }
 
-// ---------- Deterministic Mock Data Generator ----------
-function generateMockCandles(symbol, interval, count = 100) {
+// ---------- Deterministic Mock Data Generator (always returns 200 candles) ----------
+function generateMockCandles(symbol, interval, count = 200) {
     const hash = symbol.split('').reduce((a, b) => a + b.charCodeAt(0), 0);
     const basePrice = 1.1000 + (hash % 100) / 10000;
     const now = Date.now();
     const intervalMs = { '1m': 60000, '5m': 300000, '15m': 900000, '30m': 1800000, '1h': 3600000, '4h': 14400000 }[interval] || 900000;
-    const mockCandles = [];
+    const candles = [];
     for (let i = 0; i < count; i++) {
         const time = now - (count - i) * intervalMs;
         const volatility = 0.001;
@@ -206,16 +206,18 @@ function generateMockCandles(symbol, interval, count = 100) {
         const close = open + (Math.cos(phase) * volatility);
         const high = Math.max(open, close) + Math.abs(Math.sin(phase) * volatility);
         const low = Math.min(open, close) - Math.abs(Math.cos(phase) * volatility);
-        mockCandles.push({ open, high, low, close, volume: 1000, time });
+        candles.push({ open, high, low, close, volume: 1000, time });
     }
-    return mockCandles;
+    return candles;
 }
 
-// ---------- PRIMARY FETCH with circuit breaker ----------
+// ---------- PRIMARY FETCH with guaranteed mock fallback ----------
 async function fetchYahoo(symbol, interval, retries = 2) {
+    // If circuit breaker is open, directly return mock data (no point in trying)
     if (!yahooCircuitBreaker.allowRequest()) {
-        logger.warn(`Circuit breaker open – skipping Yahoo fetch for ${symbol}`);
-        return null;
+        logger.warn(`Circuit breaker open – using mock data for ${symbol}`);
+        const mockCandles = generateMockCandles(symbol, interval, 200);
+        return { candles: mockCandles, isMock: true };
     }
 
     // Try yahoo-finance2 first
@@ -277,7 +279,7 @@ async function fetchYahoo(symbol, interval, retries = 2) {
     // Final fallback: mock data
     yahooCircuitBreaker.recordFailure();
     logger.warn(`⚠️ Using MOCK data for ${symbol} – no real data available`);
-    const mockCandles = generateMockCandles(symbol, interval, 100);
+    const mockCandles = generateMockCandles(symbol, interval, 200);
     return { candles: mockCandles, isMock: true };
 }
 
@@ -285,12 +287,13 @@ async function fetchYahoo(symbol, interval, retries = 2) {
 async function fetchCandles(symbol, interval) {
     const cacheKey = `${symbol}_${interval}`;
     const cached = cacheGet(cacheKey);
-    if (cached) return cached;
+    if (cached) return { candles: cached.candles, isMock: cached.isMock };
     const result = await fetchYahoo(symbol, interval);
-    if (result && result.candles && result.candles.length > 0) {
-        cacheSet(cacheKey, result.candles);
-        return { candles: result.candles, isMock: result.isMock };
+    if (result && result.candles && result.candles.length >= 50) {
+        cacheSet(cacheKey, { candles: result.candles, isMock: result.isMock });
+        return result;
     }
+    logger.error(`❌ Failed to get candles for ${symbol}`);
     return null;
 }
 
@@ -539,7 +542,7 @@ function formatSignal(analysis, pair, timeframe, isAuto, isMock = false) {
     return msg;
 }
 
-// ---------- Telegram UI (full implementation – identical to previous stable version) ----------
+// ---------- Telegram UI (full implementation) ----------
 function getMainKeyboard() {
     return { inline_keyboard: [
         [{ text: "🔍 PROBABILITY SCAN", callback_data: "scan_manual" }],
@@ -553,7 +556,7 @@ function getMainKeyboard() {
 async function showMainMenu(messageId = null) {
     const uptime = Math.floor((Date.now() - global.botStartTime || 0) / 1000 / 60);
     const s = stateManager.state.settings;
-    const menu = `🏆 *OMNI v29* | ${uptime}m\n━━━━━━━━━━━━━━━━━━━━━━\n📊 ${s.selectedPairs.length}/${PAIRS.length} pairs\n⏰ ${s.selectedTimeframe} ⭐\n🤖 ${s.autoScanEnabled ? 'ON' : 'OFF'}\n━━━━━━━━━━━━━━━━━━━━━━\n📊 92%+ 👑 MAX (3%)\n📊 85-91% 🔥🔥🔥 STRONG (2.5%)\n📊 78-84% 🔥🔥 CONFIDENT (2%)\n📊 70-77% 🔥 NORMAL (1.5%)\n📊 62-69% ⚡ CAUTIOUS (1%)\n📊 55-61% ⚠️ SKIP (0.5%)\n━━━━━━━━━━━━━━━━━━━━━━\n*YOU decide. Not the bot.*`;
+    const menu = `🏆 *OMNI v30* | ${uptime}m\n━━━━━━━━━━━━━━━━━━━━━━\n📊 ${s.selectedPairs.length}/${PAIRS.length} pairs\n⏰ ${s.selectedTimeframe} ⭐\n🤖 ${s.autoScanEnabled ? 'ON' : 'OFF'}\n━━━━━━━━━━━━━━━━━━━━━━\n📊 92%+ 👑 MAX (3%)\n📊 85-91% 🔥🔥🔥 STRONG (2.5%)\n📊 78-84% 🔥🔥 CONFIDENT (2%)\n📊 70-77% 🔥 NORMAL (1.5%)\n📊 62-69% ⚡ CAUTIOUS (1%)\n📊 55-61% ⚠️ SKIP (0.5%)\n━━━━━━━━━━━━━━━━━━━━━━\n*YOU decide. Not the bot.*`;
     const kb = getMainKeyboard();
     if (messageId) {
         await editMessageText(messageId, menu, kb);
@@ -821,14 +824,14 @@ function startHealthServer() {
 // ---------- Main ----------
 global.botStartTime = Date.now();
 console.log('\n' + '█'.repeat(60));
-console.log('🏆 OMNI_BOT v29 - FINAL INSTITUTIONAL GRADE');
+console.log('🏆 OMNI_BOT v30 - MOCK ALWAYS AVAILABLE');
 console.log('█'.repeat(60));
 console.log(`Strategy: NO REJECTION | YOU decide`);
 console.log(`Indicators: HMA (zero‑lag) + RSI + ADX + MACD + BB`);
 console.log(`Risk: Kelly Criterion + regime‑adaptive`);
 console.log(`Telegram: ${TELEGRAM_TOKEN ? '✅' : '❌'}`);
 console.log(`HTTP Port: ${PORT}`);
-console.log(`Data sources: yahoo-finance2 → raw HTTP → mock (with circuit breaker)`);
+console.log(`Data sources: yahoo-finance2 → raw HTTP → mock (guaranteed candles)`);
 console.log('█'.repeat(60) + '\n');
 
 testYahooConnectivity().then(() => {});
@@ -837,7 +840,7 @@ startPolling();
 
 setTimeout(async () => {
     if (TELEGRAM_TOKEN && TELEGRAM_CHAT_ID) {
-        await sendMessage(`🤖 *OMNI_BOT v29 ONLINE*\n━━━━━━━━━━━━━━━━━━━━━━\n✅ Multi‑source resilient data fetch + circuit breaker\n✅ Mock data warning in signals\n✅ NO SIGNAL REJECTION\n✅ YOU decide based on %\n━━━━━━━━━━━━━━━━━━━━━━\n📱 *Send /start to begin*`);
+        await sendMessage(`🤖 *OMNI_BOT v30 ONLINE*\n━━━━━━━━━━━━━━━━━━━━━━\n✅ Always provides candles (real or mock)\n✅ Mock warning in signals\n✅ NO SIGNAL REJECTION\n✅ YOU decide based on %\n━━━━━━━━━━━━━━━━━━━━━━\n📱 *Send /start to begin*`);
     }
     console.log('🚀 Bot ready! Send /start');
 }, 3000);
