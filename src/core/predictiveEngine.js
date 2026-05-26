@@ -1,5 +1,4 @@
 class PredictiveSignalEngine {
-    // Hull Moving Average – zero lag
     calculateHMA(data, period) {
         if (data.length < period * 2) return data;
         const half = Math.floor(period / 2);
