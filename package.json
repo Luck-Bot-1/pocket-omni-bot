@@ -1,16 +1,20 @@
 {
   "name": "omni-pocket-bot",
-  "version": "19.0.0",
-  "description": "PRODUCTION GRADE – Zero‑Lag HMA, Dynamic RSI, Kelly Sizing, Immutable State",
+  "version": "26.0.0",
+  "description": "INSTITUTIONAL GRADE – Resilient data fetching, backtesting, adaptive signals",
   "main": "bot.js",
   "scripts": {
     "start": "node bot.js",
+    "backtest": "node bot.js --backtest",
     "pm2:start": "pm2 start bot.js --name omni-bot --max-memory-restart 500M",
-    "pm2:stop": "pm2 stop omni-bot"
+    "pm2:stop": "pm2 stop omni-bot",
+    "pm2:restart": "pm2 restart omni-bot"
   },
   "dependencies": {
     "technicalindicators": "^3.1.0",
     "winston": "^3.13.0"
   },
-  "engines": { "node": ">=18.0.0" }
+  "engines": {
+    "node": ">=18.0.0"
+  }
 }
