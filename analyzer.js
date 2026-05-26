@@ -66,7 +66,7 @@ class KellyPositionSizer {
     }
 }
 
-// ===== LEGENDARY ANALYZER – INSTITUTIONAL GRADE =====
+// ===== LEGENDARY ANALYZER – LOWERED THRESHOLD FOR SIGNALS =====
 class LegendaryAnalyzer {
     constructor() {
         this.config = pairsConfig;
@@ -169,14 +169,14 @@ class LegendaryAnalyzer {
         const utcHour = now.getUTCHours();
         const utcDay = now.getUTCDay();
 
-        if (utcDay === 6 || utcDay === 0) return { session: 'WEEKEND', liquidityBoost: 0.7, reason: 'Weekend – reduced liquidity' };
-        if (utcHour >= 0 && utcHour < 7) return { session: 'ASIAN', liquidityBoost: 0.7, reason: 'Asian session – lower liquidity' };
+        if (utcDay === 6 || utcDay === 0) return { session: 'WEEKEND', liquidityBoost: 0.9, reason: 'Weekend' };
+        if (utcHour >= 0 && utcHour < 7) return { session: 'ASIAN', liquidityBoost: 0.9, reason: 'Asian session' };
         if (utcHour >= 7 && utcHour < 8) return { session: 'LONDON_OPEN', liquidityBoost: 1.0, reason: 'London open' };
-        if (utcHour >= 8 && utcHour < 12) return { session: 'LONDON', liquidityBoost: 1.2, reason: 'London session' };
-        if (utcHour >= 12 && utcHour < 16) return { session: 'LONDON_NY_OVERLAP', liquidityBoost: 1.5, reason: 'London-NY overlap' };
-        if (utcHour >= 16 && utcHour < 20) return { session: 'NEW_YORK', liquidityBoost: 1.2, reason: 'New York session' };
-        if (utcHour >= 20 && utcHour < 24) return { session: 'NY_CLOSE', liquidityBoost: 0.8, reason: 'NY close' };
-        return { session: 'OTHER', liquidityBoost: 0.8, reason: 'Regular' };
+        if (utcHour >= 8 && utcHour < 12) return { session: 'LONDON', liquidityBoost: 1.1, reason: 'London session' };
+        if (utcHour >= 12 && utcHour < 16) return { session: 'LONDON_NY_OVERLAP', liquidityBoost: 1.2, reason: 'London-NY overlap' };
+        if (utcHour >= 16 && utcHour < 20) return { session: 'NEW_YORK', liquidityBoost: 1.1, reason: 'New York session' };
+        if (utcHour >= 20 && utcHour < 24) return { session: 'NY_CLOSE', liquidityBoost: 0.9, reason: 'NY close' };
+        return { session: 'OTHER', liquidityBoost: 0.9, reason: 'Regular' };
     }
 
     calculateProbability(candles, pair, timeframe) {
@@ -282,15 +282,9 @@ class LegendaryAnalyzer {
 
             let finalProb = prob * regime.positionMultiplier * session.liquidityBoost;
 
-            let deadMarket = false;
-            if (vol < 0.18) {
-                finalProb = Math.min(finalProb, 55);
-                deadMarket = true;
-            } else if (vol < 0.25) {
-                finalProb = Math.min(finalProb, 60);
-            } else if (vol >= 0.35 && vol <= 0.85) {
-                finalProb *= 1.1;
-            }
+            // REMOVED DEAD MARKET CAP – we want signals even in low volatility
+            // Only apply volatility boost if optimal
+            if (vol >= 0.35 && vol <= 0.85) finalProb *= 1.1;
 
             if (active.length >= 2) finalProb *= 1.05;
             if (active.length >= 3) finalProb *= 1.1;
@@ -299,13 +293,15 @@ class LegendaryAnalyzer {
 
             finalProb = Math.min(98, Math.max(0, Math.round(finalProb)));
 
-            if (finalProb < 45) {
-                return this.neutral(`Signal probability ${finalProb}% < 45% – very low confidence`);
+            // LOWER THRESHOLD to 25 – any directional signal will be shown
+            if (finalProb < 25) {
+                return this.neutral(`Signal probability ${finalProb}% < 25% – very low confidence`);
             }
 
             const level = this.getLevel(finalProb);
             let kellyRisk = this.kelly.getRisk(finalProb);
-            if (deadMarket) kellyRisk *= 0.5;
+            // Risk halved only for extremely dead market (vol < 0.18)
+            if (vol < 0.18) kellyRisk *= 0.5;
 
             const stop = Math.min(45, Math.max(10, Math.round((atr / price) * 10000 * 1.5)));
             const tp = Math.round(stop * 1.8);
@@ -326,13 +322,13 @@ class LegendaryAnalyzer {
                 activeStrategies: active,
                 divergence: divergence ? `${divergence.type} (${divergence.strength})` : 'None',
                 session: session.session,
-                guidance: this.buildGuidance(level, finalProb, active.length, regime.regime, deadMarket),
+                guidance: this.buildGuidance(level, finalProb, active.length, regime.regime),
                 stopLoss: stop,
                 takeProfit: tp,
                 riskRewardRatio: (tp / stop).toFixed(2),
                 timestamp: new Date().toISOString(),
                 pair, timeframe,
-                version: "26.0-INSTITUTIONAL"
+                version: "27.0-SIGNAL-GUARANTEED"
             };
         } catch (e) { return this.neutral(`Error: ${e.message}`); }
     }
@@ -348,9 +344,8 @@ class LegendaryAnalyzer {
         return l.veryLow;
     }
 
-    buildGuidance(level, prob, stratCount, regime, deadMarket) {
-        let msg = `${level.emoji} ${level.action} (${prob}%)\n━━━━━━━━━━━━━━━━━━━━━━\n📊 ${stratCount} strategies\n📈 Regime: ${regime.toUpperCase()}\n━━━━━━━━━━━━━━━━━━━━━━\n💡 YOUR DECISION:\n• ${prob}%+ → Consider position (${level.risk} risk)\n• 45-54% → Very cautious or skip`;
-        if (deadMarket) msg += `\n⚠️ Dead market – risk halved automatically.`;
+    buildGuidance(level, prob, stratCount, regime) {
+        let msg = `${level.emoji} ${level.action} (${prob}%)\n━━━━━━━━━━━━━━━━━━━━━━\n📊 ${stratCount} strategies\n📈 Regime: ${regime.toUpperCase()}\n━━━━━━━━━━━━━━━━━━━━━━\n💡 YOUR DECISION:\n• ${prob}%+ → Consider position (${level.risk} risk)\n• 25-54% → Very cautious or skip`;
         return msg;
     }
 
@@ -360,7 +355,7 @@ class LegendaryAnalyzer {
             recommendedAction: "NO_TRADE", suggestedRisk: "0%", rsi: "50", adx: "20", trend: "UNKNOWN",
             volatility: "0", currentPrice: "0", regime: "unknown", activeStrategies: [], divergence: "None",
             session: "UNKNOWN", guidance: reason, stopLoss: 15, takeProfit: 27, riskRewardRatio: "1.80",
-            timestamp: new Date().toISOString(), pair: "UNKNOWN", timeframe: "UNKNOWN", version: "26.0-INSTITUTIONAL"
+            timestamp: new Date().toISOString(), pair: "UNKNOWN", timeframe: "UNKNOWN", version: "27.0-SIGNAL-GUARANTEED"
         };
     }
 }
