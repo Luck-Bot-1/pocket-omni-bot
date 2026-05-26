@@ -2,9 +2,36 @@
   "pairs": [
     "EUR/USD", "GBP/USD", "AUD/USD", "NZD/USD", "USD/CAD", "USD/CHF", "USD/JPY",
     "AUD/CAD", "AUD/JPY", "CAD/JPY", "CHF/JPY", "EUR/AUD", "EUR/CAD", "EUR/CHF",
-    "EUR/GBP", "EUR/JPY", "EUR/NZD", "GBP/AUD", "GBP/CAD", "GBP/CHF", "GBP/JPY",
-    "GBP/NZD", "NZD/CAD", "NZD/JPY", "AUD/NZD", "CAD/CHF", "AUD/CHF"
+    "EUR/GBP", "EUR/JPY", "GBP/AUD", "GBP/CAD", "GBP/CHF", "GBP/JPY",
+    "CAD/CHF", "AUD/CHF"
   ],
   "timeframes": ["1m", "5m", "15m", "30m", "1h", "4h"],
-  "primaryTimeframe": "15m"
+  "primaryTimeframe": "15m",
+  "probabilityLevels": {
+    "legendary": { "min": 92, "max": 100, "action": "MAXIMUM ENTRY", "risk": "3.0%", "emoji": "👑", "level": "legendary" },
+    "exceptional": { "min": 85, "max": 91, "action": "STRONG ENTRY", "risk": "2.5%", "emoji": "🔥🔥🔥", "level": "exceptional" },
+    "high": { "min": 78, "max": 84, "action": "CONFIDENT ENTRY", "risk": "2.0%", "emoji": "🔥🔥", "level": "high" },
+    "good": { "min": 70, "max": 77, "action": "NORMAL ENTRY", "risk": "1.5%", "emoji": "🔥", "level": "good" },
+    "moderate": { "min": 62, "max": 69, "action": "CAUTIOUS", "risk": "1.0%", "emoji": "⚡", "level": "moderate" },
+    "low": { "min": 55, "max": 61, "action": "SKIP_OR_HEDGE", "risk": "0.5%", "emoji": "⚠️", "level": "low" },
+    "veryLow": { "min": 0, "max": 54, "action": "NO_TRADE", "risk": "0%", "emoji": "❌", "level": "veryLow" }
+  },
+  "technicalParameters": {
+    "rsiPeriod": 14,
+    "hmaPeriod": 20,
+    "macdFast": 12,
+    "macdSlow": 26,
+    "macdSignal": 9,
+    "bbPeriod": 20,
+    "bbStdDev": 2,
+    "adxPeriod": 14
+  },
+  "riskManagement": {
+    "maxRiskPerTrade": 3.0,
+    "minRiskPerTrade": 0.5,
+    "minRiskReward": 1.5,
+    "maxStopLossPips": 45,
+    "minStopLossPips": 8,
+    "kellyFraction": 0.25
+  }
 }
