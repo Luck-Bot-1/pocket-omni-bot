@@ -3,7 +3,7 @@ const pairsConfig = require('./pairs.json');
 const { MarketRegimeDetector } = require('./src/core/regimeDetector');
 const { PredictiveSignalEngine } = require('./src/core/predictiveEngine');
 
-// ===== TRUE DIVERGENCE DETECTION (unchanged) =====
+// ===== TRUE DIVERGENCE DETECTION =====
 function detectTrueDivergence(closes, rsiValues) {
     if (closes.length < 50 || rsiValues.length < 50) return null;
     const swingLows = [], swingHighs = [];
@@ -36,7 +36,7 @@ function detectTrueDivergence(closes, rsiValues) {
     return null;
 }
 
-// ===== KELLY POSITION SIZER (unchanged) =====
+// ===== KELLY POSITION SIZER =====
 class KellyPositionSizer {
     constructor() {
         this.trades = [];
@@ -66,7 +66,7 @@ class KellyPositionSizer {
     }
 }
 
-// ===== LEGENDARY ANALYZER – FULLY HARDENED v24 =====
+// ===== LEGENDARY ANALYZER – INSTITUTIONAL GRADE =====
 class LegendaryAnalyzer {
     constructor() {
         this.config = pairsConfig;
@@ -152,7 +152,6 @@ class LegendaryAnalyzer {
         } catch { return { cross: 'NEUTRAL' }; }
     }
 
-    // Helper EMA – used for micro‑trend
     calculateEMA(data, period) {
         if (data.length < period) return data;
         const k = 2 / (period + 1);
@@ -165,7 +164,6 @@ class LegendaryAnalyzer {
         return result;
     }
 
-    // Session detection – boost only, never blocks
     getCurrentSession() {
         const now = new Date();
         const utcHour = now.getUTCHours();
@@ -185,11 +183,8 @@ class LegendaryAnalyzer {
         try {
             const session = this.getCurrentSession();
 
-            // ------------------------------------------------------------------
-            // FIX #1: Validate & clean candles (malformed, age)
-            // ------------------------------------------------------------------
             if (!candles || !Array.isArray(candles) || candles.length < 50) {
-                return this.neutral("Insufficient data");
+                return this.neutral("Insufficient data (less than 50 candles)");
             }
             let limitedCandles = candles.filter(c => 
                 c && typeof c.open === 'number' && typeof c.high === 'number' &&
@@ -223,9 +218,6 @@ class LegendaryAnalyzer {
             const bb = this.calculateBollingerBands(closes, this.tech.bbPeriod, this.tech.bbStdDev);
             const macd = this.calculateMACD(closes, this.tech.macdFast, this.tech.macdSlow, this.tech.macdSignal);
 
-            // ------------------------------------------------------------------
-            // FIX #2: Fully adaptive RSI thresholds (wider dynamic range)
-            // ------------------------------------------------------------------
             const volFactor = Math.min(1, Math.max(0, (vol - 0.2) / 1.3));
             const rsiLowDynamic = Math.max(20, Math.min(35, 30 - volFactor * 10));
             const rsiHighDynamic = Math.min(80, Math.max(65, 70 + volFactor * 10));
@@ -234,7 +226,6 @@ class LegendaryAnalyzer {
             let prob = 50;
             let active = [];
 
-            // Primary triggers
             if (predictive && predictive.signal !== 'NEUTRAL') {
                 direction = predictive.signal;
                 prob = predictive.probability;
@@ -259,9 +250,7 @@ class LegendaryAnalyzer {
                 active.push({ name: "MOMENTUM", signal: "PUT", probability: 70 });
             }
 
-            // ------------------------------------------------------------------
-            // FIX #3: Micro‑trend with EMA5 computed once
-            // ------------------------------------------------------------------
+            // Micro‑trend and support/resistance – guaranteed directional signal in dead markets
             if (direction === "NEUTRAL") {
                 const ema5 = this.calculateEMA(closes, 5);
                 const ema5Prev = ema5[ema5.length - 2];
@@ -291,10 +280,8 @@ class LegendaryAnalyzer {
                 }
             }
 
-            // Apply multipliers
             let finalProb = prob * regime.positionMultiplier * session.liquidityBoost;
 
-            // Volatility adjustments (cap only)
             let deadMarket = false;
             if (vol < 0.18) {
                 finalProb = Math.min(finalProb, 55);
@@ -318,7 +305,7 @@ class LegendaryAnalyzer {
 
             const level = this.getLevel(finalProb);
             let kellyRisk = this.kelly.getRisk(finalProb);
-            if (deadMarket) kellyRisk *= 0.5; // halve risk in dead market
+            if (deadMarket) kellyRisk *= 0.5;
 
             const stop = Math.min(45, Math.max(10, Math.round((atr / price) * 10000 * 1.5)));
             const tp = Math.round(stop * 1.8);
@@ -345,7 +332,7 @@ class LegendaryAnalyzer {
                 riskRewardRatio: (tp / stop).toFixed(2),
                 timestamp: new Date().toISOString(),
                 pair, timeframe,
-                version: "24.0-INSTITUTIONAL"
+                version: "26.0-INSTITUTIONAL"
             };
         } catch (e) { return this.neutral(`Error: ${e.message}`); }
     }
@@ -373,7 +360,7 @@ class LegendaryAnalyzer {
             recommendedAction: "NO_TRADE", suggestedRisk: "0%", rsi: "50", adx: "20", trend: "UNKNOWN",
             volatility: "0", currentPrice: "0", regime: "unknown", activeStrategies: [], divergence: "None",
             session: "UNKNOWN", guidance: reason, stopLoss: 15, takeProfit: 27, riskRewardRatio: "1.80",
-            timestamp: new Date().toISOString(), pair: "UNKNOWN", timeframe: "UNKNOWN", version: "24.0-INSTITUTIONAL"
+            timestamp: new Date().toISOString(), pair: "UNKNOWN", timeframe: "UNKNOWN", version: "26.0-INSTITUTIONAL"
         };
     }
 }
