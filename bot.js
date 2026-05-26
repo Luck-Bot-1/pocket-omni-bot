@@ -366,10 +366,31 @@ async function showAutoScanMenu(messageId = null) {
     } else await sendMessage(menu, kb);
 }
 
+// ---------- DELETE WEBHOOK ON STARTUP (CRITICAL FIX) ----------
+async function deleteWebhook() {
+    console.log('🔧 Deleting existing webhook...');
+    try {
+        const result = await new Promise((resolve) => {
+            const req = https.request(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/deleteWebhook`, { method: 'POST' }, (res) => {
+                let data = '';
+                res.on('data', chunk => data += chunk);
+                res.on('end', () => {
+                    try { resolve(JSON.parse(data)); } catch(e) { resolve({ ok: false }); }
+                });
+            });
+            req.on('error', () => resolve({ ok: false }));
+            req.end();
+        });
+        if (result.ok) console.log('✅ Webhook deleted successfully');
+        else console.log(`⚠️ Webhook delete: ${result.error || 'unknown'}`);
+    } catch(e) { console.log(`⚠️ Webhook delete error: ${e.message}`); }
+}
+
 // ---------- Callback & Command Handling ----------
 async function handleCallback(query) {
     const data = query.data;
     const msgId = query.message.message_id;
+    console.log(`🔘 Callback received: ${data}`);
     if (data === "menu_main") await showMainMenu(msgId);
     else if (data === "scan_manual") { await performScan(userSettings.selectedTimeframe, false); await showMainMenu(msgId); }
     else if (data === "menu_pairs") await showPairSelection(0, msgId);
@@ -416,6 +437,7 @@ async function handleCallback(query) {
 
 async function handleCommand(text, chatId) {
     if (chatId.toString() !== TELEGRAM_CHAT_ID) return;
+    console.log(`📩 Command: ${text}`);
     if (text === '/start') await showMainMenu();
     else if (text === '/status') await showStatus();
     else if (text === '/scan') await performScan(userSettings.selectedTimeframe, false);
@@ -426,6 +448,10 @@ async function handleCommand(text, chatId) {
 // ---------- Polling ----------
 async function startPolling() {
     if (!TELEGRAM_TOKEN) { console.log('❌ No TELEGRAM_TOKEN'); return; }
+    
+    // CRITICAL: Delete webhook before polling
+    await deleteWebhook();
+    
     console.log('📡 Starting polling...');
     const poll = async () => {
         try {
@@ -460,7 +486,7 @@ async function startPolling() {
 
 // ---------- Main ----------
 console.log('\n' + '█'.repeat(60));
-console.log('🏆 OMNI_BOT v16.0 - LEGENDARY EDITION');
+console.log('🏆 OMNI_BOT v16.0 - LEGENDARY EDITION (WEBHOOK FIXED)');
 console.log('█'.repeat(60));
 console.log(`Strategy: NO REJECTION | YOU decide`);
 console.log(`Indicators: HMA (zero‑lag) + RSI + ADX + MACD + BB`);
