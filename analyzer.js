@@ -3,7 +3,7 @@ const pairsConfig = require('./pairs.json');
 const { MarketRegimeDetector } = require('./src/core/regimeDetector');
 const { PredictiveSignalEngine } = require('./src/core/predictiveEngine');
 
-// ===== TRUE DIVERGENCE DETECTION (unchanged, already robust) =====
+// ===== TRUE DIVERGENCE DETECTION (unchanged) =====
 function detectTrueDivergence(closes, rsiValues) {
     if (closes.length < 50 || rsiValues.length < 50) return null;
     const swingLows = [], swingHighs = [];
@@ -36,7 +36,7 @@ function detectTrueDivergence(closes, rsiValues) {
     return null;
 }
 
-// ===== KELLY POSITION SIZER =====
+// ===== KELLY POSITION SIZER (unchanged) =====
 class KellyPositionSizer {
     constructor() {
         this.trades = [];
@@ -66,7 +66,7 @@ class KellyPositionSizer {
     }
 }
 
-// ===== LEGENDARY ANALYZER =====
+// ===== LEGENDARY ANALYZER – FULLY HARDENED v24 =====
 class LegendaryAnalyzer {
     constructor() {
         this.config = pairsConfig;
@@ -152,19 +152,52 @@ class LegendaryAnalyzer {
         } catch { return { cross: 'NEUTRAL' }; }
     }
 
+    // Helper EMA – used for micro‑trend
+    calculateEMA(data, period) {
+        if (data.length < period) return data;
+        const k = 2 / (period + 1);
+        let ema = data[0];
+        const result = [ema];
+        for (let i = 1; i < data.length; i++) {
+            ema = data[i] * k + ema * (1 - k);
+            result.push(ema);
+        }
+        return result;
+    }
+
+    // Session detection – boost only, never blocks
     getCurrentSession() {
-        const hour = new Date().getUTCHours();
-        if (hour >= 12 && hour < 16) return { session: 'LONDON_NY_OVERLAP', liquidityBoost: 1.5 };
-        return { session: 'REGULAR', liquidityBoost: 1.0 };
+        const now = new Date();
+        const utcHour = now.getUTCHours();
+        const utcDay = now.getUTCDay();
+
+        if (utcDay === 6 || utcDay === 0) return { session: 'WEEKEND', liquidityBoost: 0.7, reason: 'Weekend – reduced liquidity' };
+        if (utcHour >= 0 && utcHour < 7) return { session: 'ASIAN', liquidityBoost: 0.7, reason: 'Asian session – lower liquidity' };
+        if (utcHour >= 7 && utcHour < 8) return { session: 'LONDON_OPEN', liquidityBoost: 1.0, reason: 'London open' };
+        if (utcHour >= 8 && utcHour < 12) return { session: 'LONDON', liquidityBoost: 1.2, reason: 'London session' };
+        if (utcHour >= 12 && utcHour < 16) return { session: 'LONDON_NY_OVERLAP', liquidityBoost: 1.5, reason: 'London-NY overlap' };
+        if (utcHour >= 16 && utcHour < 20) return { session: 'NEW_YORK', liquidityBoost: 1.2, reason: 'New York session' };
+        if (utcHour >= 20 && utcHour < 24) return { session: 'NY_CLOSE', liquidityBoost: 0.8, reason: 'NY close' };
+        return { session: 'OTHER', liquidityBoost: 0.8, reason: 'Regular' };
     }
 
     calculateProbability(candles, pair, timeframe) {
         try {
-            // ---------------------------
-            // FIX #1: Limit candles & filter old data
-            // ---------------------------
-            if (!candles || candles.length < 50) return this.neutral("Insufficient data");
-            let limitedCandles = candles.slice();
+            const session = this.getCurrentSession();
+
+            // ------------------------------------------------------------------
+            // FIX #1: Validate & clean candles (malformed, age)
+            // ------------------------------------------------------------------
+            if (!candles || !Array.isArray(candles) || candles.length < 50) {
+                return this.neutral("Insufficient data");
+            }
+            let limitedCandles = candles.filter(c => 
+                c && typeof c.open === 'number' && typeof c.high === 'number' &&
+                typeof c.low === 'number' && typeof c.close === 'number' &&
+                typeof c.time === 'number'
+            );
+            if (limitedCandles.length < 50) return this.neutral("Insufficient valid candles");
+
             const maxCandles = 300;
             if (limitedCandles.length > maxCandles) limitedCandles = limitedCandles.slice(-maxCandles);
             const sevenDaysAgo = Date.now() - 7 * 24 * 3600 * 1000;
@@ -181,28 +214,27 @@ class LegendaryAnalyzer {
             const adx = this.calculateADX(highs, lows, closes, this.tech.adxPeriod);
             const rsi = this.calculateRSI(closes, this.tech.rsiPeriod);
 
-            // Build RSI array for divergence
             const rsiArr = [];
             for (let i = 30; i <= closes.length; i++) rsiArr.push(this.calculateRSI(closes.slice(0, i), 14));
             const divergence = detectTrueDivergence(closes, rsiArr);
 
             const regime = this.regimeDetector.detectRegime(adx.adx, vol, rsi);
             const predictive = this.predictive.detectPredictiveEntry(limitedCandles);
-            const session = this.getCurrentSession();
             const bb = this.calculateBollingerBands(closes, this.tech.bbPeriod, this.tech.bbStdDev);
             const macd = this.calculateMACD(closes, this.tech.macdFast, this.tech.macdSlow, this.tech.macdSignal);
 
-            // ---------------------------
-            // FIX #2: Dynamic RSI thresholds
-            // ---------------------------
+            // ------------------------------------------------------------------
+            // FIX #2: Fully adaptive RSI thresholds (wider dynamic range)
+            // ------------------------------------------------------------------
             const volFactor = Math.min(1, Math.max(0, (vol - 0.2) / 1.3));
-            const rsiLowDynamic = 25 + volFactor * 5;   // 25 to 30
-            const rsiHighDynamic = 75 - volFactor * 5;  // 75 to 70
+            const rsiLowDynamic = Math.max(20, Math.min(35, 30 - volFactor * 10));
+            const rsiHighDynamic = Math.min(80, Math.max(65, 70 + volFactor * 10));
 
             let direction = "NEUTRAL";
             let prob = 50;
             let active = [];
 
+            // Primary triggers
             if (predictive && predictive.signal !== 'NEUTRAL') {
                 direction = predictive.signal;
                 prob = predictive.probability;
@@ -227,27 +259,72 @@ class LegendaryAnalyzer {
                 active.push({ name: "MOMENTUM", signal: "PUT", probability: 70 });
             }
 
-            // ---------------------------
-            // FIX #3: Clamp regime position multiplier
-            // ---------------------------
-            const safeMultiplier = Math.min(2.0, Math.max(0.3, regime.positionMultiplier));
-            let finalProb = prob * safeMultiplier * session.liquidityBoost;
-            if (vol < 0.18) finalProb = Math.min(finalProb, 40);
-            else if (vol < 0.25) finalProb = Math.min(finalProb, 55);
-            else if (vol >= 0.35 && vol <= 0.85) finalProb *= 1.1;
+            // ------------------------------------------------------------------
+            // FIX #3: Micro‑trend with EMA5 computed once
+            // ------------------------------------------------------------------
+            if (direction === "NEUTRAL") {
+                const ema5 = this.calculateEMA(closes, 5);
+                const ema5Prev = ema5[ema5.length - 2];
+                const ema5Curr = ema5[ema5.length - 1];
+                const microTrend = ema5Curr > ema5Prev ? 'BULLISH' : (ema5Curr < ema5Prev ? 'BEARISH' : 'NEUTRAL');
+                const momentum3 = (closes[closes.length - 1] - closes[closes.length - 4]) / closes[closes.length - 4] * 100;
+
+                if (microTrend === 'BULLISH' && momentum3 > 0) {
+                    direction = "CALL";
+                    prob = 55;
+                    active.push({ name: "MICRO_TREND", signal: "CALL", probability: 55 });
+                } else if (microTrend === 'BEARISH' && momentum3 < 0) {
+                    direction = "PUT";
+                    prob = 55;
+                    active.push({ name: "MICRO_TREND", signal: "PUT", probability: 55 });
+                } else {
+                    const priceChange = (closes[closes.length - 1] - closes[closes.length - 4]) / closes[closes.length - 4] * 100;
+                    if (priceChange > 0.05) {
+                        direction = "CALL";
+                        prob = 50;
+                        active.push({ name: "PRICE_MOMENTUM", signal: "CALL", probability: 50 });
+                    } else if (priceChange < -0.05) {
+                        direction = "PUT";
+                        prob = 50;
+                        active.push({ name: "PRICE_MOMENTUM", signal: "PUT", probability: 50 });
+                    }
+                }
+            }
+
+            // Apply multipliers
+            let finalProb = prob * regime.positionMultiplier * session.liquidityBoost;
+
+            // Volatility adjustments (cap only)
+            let deadMarket = false;
+            if (vol < 0.18) {
+                finalProb = Math.min(finalProb, 55);
+                deadMarket = true;
+            } else if (vol < 0.25) {
+                finalProb = Math.min(finalProb, 60);
+            } else if (vol >= 0.35 && vol <= 0.85) {
+                finalProb *= 1.1;
+            }
+
             if (active.length >= 2) finalProb *= 1.05;
             if (active.length >= 3) finalProb *= 1.1;
             if (divergence && ((direction === "CALL" && divergence.type === "BULLISH") || (direction === "PUT" && divergence.type === "BEARISH")))
                 finalProb += 12;
 
             finalProb = Math.min(98, Math.max(0, Math.round(finalProb)));
+
+            if (finalProb < 45) {
+                return this.neutral(`Signal probability ${finalProb}% < 45% – very low confidence`);
+            }
+
             const level = this.getLevel(finalProb);
-            const kellyRisk = this.kelly.getRisk(finalProb);
+            let kellyRisk = this.kelly.getRisk(finalProb);
+            if (deadMarket) kellyRisk *= 0.5; // halve risk in dead market
+
             const stop = Math.min(45, Math.max(10, Math.round((atr / price) * 10000 * 1.5)));
             const tp = Math.round(stop * 1.8);
 
             return {
-                signal: finalProb >= 55 ? direction : "NEUTRAL",
+                signal: direction,
                 probability: finalProb,
                 probabilityLevel: level.level,
                 probabilityEmoji: level.emoji,
@@ -262,13 +339,13 @@ class LegendaryAnalyzer {
                 activeStrategies: active,
                 divergence: divergence ? `${divergence.type} (${divergence.strength})` : 'None',
                 session: session.session,
-                guidance: this.buildGuidance(level, finalProb, active.length, regime.regime),
+                guidance: this.buildGuidance(level, finalProb, active.length, regime.regime, deadMarket),
                 stopLoss: stop,
                 takeProfit: tp,
                 riskRewardRatio: (tp / stop).toFixed(2),
                 timestamp: new Date().toISOString(),
                 pair, timeframe,
-                version: "19.0-LEGENDARY"
+                version: "24.0-INSTITUTIONAL"
             };
         } catch (e) { return this.neutral(`Error: ${e.message}`); }
     }
@@ -284,17 +361,19 @@ class LegendaryAnalyzer {
         return l.veryLow;
     }
 
-    buildGuidance(level, prob, stratCount, regime) {
-        return `${level.emoji} ${level.action} (${prob}%)\n━━━━━━━━━━━━━━━━━━━━━━\n📊 ${stratCount} strategies\n📈 Regime: ${regime.toUpperCase()}\n━━━━━━━━━━━━━━━━━━━━━━\n💡 YOUR DECISION:\n• ${prob}%+ → Full position\n• 70-84% → Normal\n• 55-69% → Cautious\n• <55% → Skip`;
+    buildGuidance(level, prob, stratCount, regime, deadMarket) {
+        let msg = `${level.emoji} ${level.action} (${prob}%)\n━━━━━━━━━━━━━━━━━━━━━━\n📊 ${stratCount} strategies\n📈 Regime: ${regime.toUpperCase()}\n━━━━━━━━━━━━━━━━━━━━━━\n💡 YOUR DECISION:\n• ${prob}%+ → Consider position (${level.risk} risk)\n• 45-54% → Very cautious or skip`;
+        if (deadMarket) msg += `\n⚠️ Dead market – risk halved automatically.`;
+        return msg;
     }
 
     neutral(reason) {
         return {
-            signal: "NEUTRAL", probability: 30, probabilityLevel: "VERY_LOW", probabilityEmoji: "❌",
+            signal: "NEUTRAL", probability: 0, probabilityLevel: "VERY_LOW", probabilityEmoji: "❌",
             recommendedAction: "NO_TRADE", suggestedRisk: "0%", rsi: "50", adx: "20", trend: "UNKNOWN",
             volatility: "0", currentPrice: "0", regime: "unknown", activeStrategies: [], divergence: "None",
             session: "UNKNOWN", guidance: reason, stopLoss: 15, takeProfit: 27, riskRewardRatio: "1.80",
-            timestamp: new Date().toISOString(), pair: "UNKNOWN", timeframe: "UNKNOWN", version: "19.0-LEGENDARY"
+            timestamp: new Date().toISOString(), pair: "UNKNOWN", timeframe: "UNKNOWN", version: "24.0-INSTITUTIONAL"
         };
     }
 }
