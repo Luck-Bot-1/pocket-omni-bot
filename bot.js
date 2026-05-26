@@ -95,10 +95,12 @@ const telegramRateLimiter = new TokenBucket(20, 5);
 
 // ---------- Yahoo Finance fetch using official package ----------
 async function fetchYahoo(symbol, interval, retries = 3) {
+    // Map our interval to Yahoo Finance chart interval strings
     const intervalMap = {
         '1m': '1m', '5m': '5m', '15m': '15m', '30m': '30m', '1h': '1h', '4h': '1h'
     };
     const yahooInterval = intervalMap[interval] || '15m';
+
     const endDate = new Date();
     let startDate = new Date();
     switch (interval) {
@@ -114,23 +116,31 @@ async function fetchYahoo(symbol, interval, retries = 3) {
     for (let attempt = 1; attempt <= retries; attempt++) {
         try {
             logger.info(`📡 Fetching ${symbol} (${interval}) attempt ${attempt}...`);
-            const result = await yahooFinance.historical(symbol, {
+            
+            // Use chart() instead of historical()
+            const result = await yahooFinance.chart(symbol, {
                 period1: startDate,
                 period2: endDate,
-                interval: yahooInterval
+                interval: yahooInterval,
+                includePrePost: false,
+                events: 'div,splits'
             });
-            if (!result || result.length === 0) {
+
+            if (!result || !result.quotes || result.quotes.length === 0) {
                 logger.warn(`Attempt ${attempt} for ${symbol} returned no data`);
                 continue;
             }
-            const candles = result.map(item => ({
-                open: item.open,
-                high: item.high,
-                low: item.low,
-                close: item.close,
-                volume: item.volume || 1000,
-                time: item.date.getTime()
-            }));
+
+            // Convert quotes to our candle format
+            const candles = result.quotes.map(q => ({
+                open: q.open,
+                high: q.high,
+                low: q.low,
+                close: q.close,
+                volume: q.volume || 1000,
+                time: new Date(q.date).getTime()
+            })).filter(c => c.open !== null && c.close !== null);
+
             logger.info(`✅ Successfully fetched ${candles.length} candles for ${symbol}`);
             return candles;
         } catch (error) {
@@ -139,6 +149,11 @@ async function fetchYahoo(symbol, interval, retries = 3) {
                 logger.error(`❌ All Yahoo attempts failed for ${symbol}`);
                 return null;
             }
+            await new Promise(r => setTimeout(r, 1000 * Math.pow(2, attempt)));
+        }
+    }
+    return null;
+}
             await new Promise(r => setTimeout(r, 1000 * Math.pow(2, attempt)));
         }
     }
