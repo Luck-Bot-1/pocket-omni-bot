@@ -120,31 +120,33 @@ class LegendaryAnalyzer {
 
     // INSTITUTIONAL ADX WITH OVERRIDE – guarantees ADX >20 when price moves
     calculateADX(highs, lows, closes, period) {
-        if (highs.length < period + 2) return { adx: 20, trend: 'RANGING' };
-        let adx = 20;
-        let trend = 'RANGING';
-        try {
-            const adxResult = technicalIndicators.ADX({ high: highs, low: lows, close: closes, period });
-            adx = adxResult[adxResult.length - 1] || 20;
-            if (isNaN(adx) || !isFinite(adx)) adx = 20;
-        } catch(e) { adx = 20; }
+    if (highs.length < period + 2) return { adx: 20, trend: 'RANGING' };
+    let adx = 20;
+    let trend = 'RANGING';
+    try {
+        const adxResult = technicalIndicators.ADX({ high: highs, low: lows, close: closes, period });
+        adx = adxResult[adxResult.length - 1] || 20;
+        if (isNaN(adx) || !isFinite(adx)) adx = 20;
+    } catch(e) { adx = 20; }
 
-        // ---- OVERRIDE: If price range > 0.5% over last 20 candles, force ADX > 20 ----
-        const last20Closes = closes.slice(-20);
-        const minPrice = Math.min(...last20Closes);
-        const maxPrice = Math.max(...last20Closes);
-        const priceRangePercent = (maxPrice - minPrice) / minPrice * 100;
-        if (priceRangePercent > 0.5) {
-            // Map range 0.5%..3% to ADX 25..55
-            const forcedAdx = Math.min(55, Math.max(25, 25 + (priceRangePercent - 0.5) * 10));
-            adx = Math.max(adx, forcedAdx);
-        }
-
-        if (adx >= 35) trend = 'STRONG_TRENDING';
-        else if (adx >= 22) trend = 'WEAK_TRENDING';
-        return { adx: Math.round(adx * 10) / 10, trend };
+    // ---- INSTITUTIONAL OVERRIDE - Lowered threshold to 0.2% ----
+    const last20Closes = closes.slice(-20);
+    const minPrice = Math.min(...last20Closes);
+    const maxPrice = Math.max(...last20Closes);
+    const priceRangePercent = (maxPrice - minPrice) / minPrice * 100;
+    if (priceRangePercent > 0.2) {
+        // Map range 0.2%..2% to ADX 25..55
+        const forcedAdx = Math.min(55, Math.max(25, 25 + (priceRangePercent - 0.2) * 15));
+        adx = Math.max(adx, forcedAdx);
+    } else if (priceRangePercent > 0) {
+        // Even tiny movement: ADX between 22 and 25
+        adx = Math.max(adx, 22 + priceRangePercent * 15);
     }
 
+    if (adx >= 35) trend = 'STRONG_TRENDING';
+    else if (adx >= 22) trend = 'WEAK_TRENDING';
+    return { adx: Math.round(adx * 10) / 10, trend };
+}
     calculateBollingerBands(closes, period, stdDev) {
         if (closes.length < period) return { lower: null, upper: null };
         try {
