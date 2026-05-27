@@ -28,10 +28,10 @@
   },
   "riskManagement": {
     "maxRiskPerTrade": 3.0,
-    "minRiskPerTrade": 0.5,
+    "minRiskPerTrade": 0.3,
     "minRiskReward": 1.5,
-    "maxStopLossPips": 45,
-    "minStopLossPips": 8,
+    "maxStopLossPips": 50,
+    "minStopLossPips": 10,
     "kellyFraction": 0.25
   }
 }
