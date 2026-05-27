@@ -247,7 +247,6 @@ class LegendaryAnalyzer {
                 active.push({ name: "MOMENTUM", signal: "PUT", probability: 70 });
             }
 
-            // Micro‑trend and support/resistance – guaranteed directional signal in dead markets
             if (direction === "NEUTRAL") {
                 const ema5 = this.calculateEMA(closes, 5);
                 const ema5Prev = ema5[ema5.length - 2];
@@ -287,12 +286,11 @@ class LegendaryAnalyzer {
 
             finalProb = Math.min(98, Math.max(0, Math.round(finalProb)));
 
-            // ----- FORCE DIRECTIONAL SIGNAL IF MOCK DATA AND STILL NEUTRAL -----
+            // Force directional signal if mock data and still neutral/low confidence
             if (forceMockDirection && (direction === "NEUTRAL" || finalProb < 30)) {
-                // Use last price change to decide direction
                 const lastChange = closes[closes.length - 1] - closes[closes.length - 2];
                 direction = lastChange > 0 ? "CALL" : (lastChange < 0 ? "PUT" : "CALL");
-                finalProb = Math.max(finalProb, 35); // Minimum 35% probability
+                finalProb = Math.max(finalProb, 35);
                 active.push({ name: "FORCED_DIRECTION", signal: direction, probability: finalProb });
             }
 
