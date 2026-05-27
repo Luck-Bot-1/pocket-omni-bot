@@ -1,5 +1,5 @@
 // ============================================================
-// ULTIMATE BOT v7.0 – COMPLETE (NO MISSING FUNCTIONS)
+// INSTITUTIONAL BOT v9.0 – FULLY HARDENED
 // ============================================================
 
 // Polyfill for Node <18
@@ -10,12 +10,11 @@ if (!globalThis.fetch) {
     globalThis.AbortController = AbortController;
 }
 
-// Validate required modules
 let RobustAnalyzer;
 try {
     RobustAnalyzer = require('./analyzer.js').RobustAnalyzer;
 } catch (e) {
-    console.error('❌ FATAL: analyzer.js not found or invalid. Ensure the file exists and exports RobustAnalyzer.');
+    console.error('❌ FATAL: analyzer.js not found. Ensure the file exists and exports RobustAnalyzer.');
     process.exit(1);
 }
 
@@ -24,9 +23,8 @@ const fs = require('fs');
 const winston = require('winston');
 const pairsConfig = require('./pairs.json');
 
-// ------------------------- Validate Environment & Config -------------------------
 if (!pairsConfig.pairs || !pairsConfig.timeframes || !pairsConfig.primaryTimeframe) {
-    console.error('❌ FATAL: pairs.json missing required fields (pairs, timeframes, primaryTimeframe)');
+    console.error('❌ FATAL: pairs.json missing required fields');
     process.exit(1);
 }
 
@@ -39,7 +37,6 @@ if (!TELEGRAM_TOKEN || !TELEGRAM_CHAT_ID) {
     process.exit(1);
 }
 
-// Build Yahoo symbol mapping from pair names (e.g., "EUR/USD" -> "EURUSD=X")
 const YAHOO_SYMBOLS = {};
 for (const pair of pairsConfig.pairs) {
     YAHOO_SYMBOLS[pair] = pair.replace('/', '') + '=X';
@@ -49,7 +46,7 @@ const PAIRS = pairsConfig.pairs;
 const TIMEFRAMES = pairsConfig.timeframes;
 const PRIMARY_TF = pairsConfig.primaryTimeframe;
 
-// ------------------------- Logger -------------------------
+// -------- Logger ----------
 const logger = winston.createLogger({
     level: process.env.LOG_LEVEL || 'info',
     format: winston.format.combine(
@@ -66,7 +63,7 @@ const logger = winston.createLogger({
     ]
 });
 
-// ------------------------- Message Queue (with max size & drain) -------------------------
+// -------- Message Queue ----------
 class MessageQueue {
     constructor(maxSize = 5000) {
         this.queue = [];
@@ -97,14 +94,12 @@ class MessageQueue {
         this.processing = false;
     }
     async drain() {
-        while (this.queue.length) {
-            await new Promise(r => setTimeout(r, 100));
-        }
+        while (this.queue.length) await new Promise(r => setTimeout(r, 100));
     }
 }
 const messageQueue = new MessageQueue();
 
-// ------------------------- Cache with TTL -------------------------
+// -------- Cache with TTL ----------
 const CACHE_MAX_SIZE = 200;
 const CACHE_TTL = 60000;
 const candleCache = new Map();
@@ -133,7 +128,7 @@ setInterval(() => {
     logger.debug(`Cache sweep completed. Size: ${candleCache.size}`);
 }, 3600000);
 
-// ------------------------- Rate Limiters -------------------------
+// -------- Rate Limiters ----------
 class UserRateLimiter {
     constructor(maxPerMinute = 20) {
         this.users = new Map();
@@ -181,7 +176,7 @@ class TokenBucket {
 }
 const telegramRateLimiter = new TokenBucket(20, 5);
 
-// ------------------------- State Manager (atomic persist inside mutex) -------------------------
+// -------- State Manager (atomic) ----------
 class Mutex {
     constructor() { this._queue = []; this._locked = false; }
     async acquire() { return new Promise((resolve) => { this._queue.push(resolve); this._dispatch(); }); }
@@ -235,7 +230,7 @@ class StateManager {
 const stateManager = new StateManager();
 let lastDataTimestamp = Date.now();
 
-// ------------------------- Circuit Breaker for Yahoo API -------------------------
+// -------- Circuit Breaker for Yahoo API ----------
 class CircuitBreaker {
     constructor(failureThreshold = 10, timeoutMs = 300000) {
         this.failures = 0;
@@ -257,15 +252,12 @@ class CircuitBreaker {
             }, this.timeoutMs);
         }
     }
-    recordSuccess() {
-        this.failures = 0;
-        this.isOpen = false;
-    }
+    recordSuccess() { this.failures = 0; this.isOpen = false; }
     canProceed() { return !this.isOpen; }
 }
 const yahooCircuitBreaker = new CircuitBreaker(10, 300000);
 
-// ------------------------- Data Fetching with Retry & Circuit Breaker -------------------------
+// -------- Data Fetching (Yahoo Raw) ----------
 function fetchWithTimeout(url, options = {}, timeoutMs = 10000) {
     return new Promise((resolve, reject) => {
         const controller = new AbortController();
@@ -345,7 +337,47 @@ async function fetchCandles(symbol, interval) {
     return null;
 }
 
-// ------------------------- Telegram Helpers -------------------------
+// -------- Liquidity Filters ----------
+function isLiquid(candles, pair) {
+    const recentVolumes = candles.slice(-20).map(c => c.volume);
+    const avgVolume = recentVolumes.reduce((a,b)=>a+b,0)/recentVolumes.length;
+    const currentVolume = candles[candles.length-1].volume;
+    if (currentVolume < avgVolume * 0.5) return false;
+    // Spread proxy: (high-low)/close. For forex, spread should be low.
+    const spreadPips = ((candles[candles.length-1].high - candles[candles.length-1].low) / candles[candles.length-1].close) * 10000;
+    const avgSpread = recentVolumes.reduce((a,_,i) => {
+        if (i===0) return 0;
+        const s = (candles[i].high - candles[i].low)/candles[i].close*10000;
+        return a+s;
+    },0)/recentVolumes.length;
+    if (spreadPips > avgSpread * 1.5) return false;
+    return true;
+}
+
+// -------- News Cooldown ----------
+function isNewsTime() {
+    const now = new Date();
+    const hour = now.getUTCHours();
+    const minute = now.getUTCMinutes();
+    // Major news: 12:30 UTC (CPI, NFP), 14:00 UTC (FOMC), 18:00 UTC (Fed speeches)
+    if ((hour === 12 && minute >= 15 && minute <= 45) ||
+        (hour === 14 && minute <= 15) ||
+        (hour === 18 && minute <= 15)) {
+        return true;
+    }
+    return false;
+}
+
+// -------- Session End Liquidation ----------
+function isEndOfSession() {
+    const now = new Date();
+    const hour = now.getUTCHours();
+    // Close 5 minutes before major session close (4:55 PM EST = 20:55 UTC)
+    if (hour === 20 && now.getUTCMinutes() >= 55) return true;
+    return false;
+}
+
+// -------- Telegram Helpers ----------
 function escapeMarkdown(text) {
     return text.replace(/([_*[\]()~`>#+\-=|{}.!])/g, '\\$1');
 }
@@ -402,8 +434,8 @@ async function sendTypingAction() {
     }).catch(() => {});
 }
 
-// ------------------------- Strategy Core -------------------------
-const analyzer = new RobustAnalyzer();
+// -------- Strategy Core ----------
+const analyzer = new RobustAnalyzer(10000);
 
 async function performScan(timeframe, isAuto = false) {
     return stateManager.withMutex(async (snapshot) => {
@@ -438,6 +470,19 @@ async function performScan(timeframe, isAuto = false) {
                     logger.warn(`No data for ${pair}`);
                     continue;
                 }
+                if (!isLiquid(fetchResult.candles, pair)) {
+                    logger.debug(`${pair} skipped – low liquidity`);
+                    continue;
+                }
+                if (isNewsTime()) {
+                    logger.debug(`Skipping ${pair} – news cooldown`);
+                    continue;
+                }
+                if (isEndOfSession()) {
+                    logger.info(`End of session – no new entries`);
+                    continue;
+                }
+
                 let htCandles = null;
                 if (timeframe !== '1h') {
                     const htResult = await fetchCandles(symbol, '1h');
@@ -482,7 +527,7 @@ function formatSignal(analysis, pair, timeframe, isAuto, isMock) {
     const bar = '█'.repeat(Math.floor(analysis.probability / 5)) + '░'.repeat(20 - Math.floor(analysis.probability / 5));
     const safePair = escapeMarkdown(pair);
     const safeAction = escapeMarkdown(analysis.recommendedAction);
-    let msg = `${isAuto ? '🤖 AUTO-SCAN\n' : ''}*${arrow} PROBABILITY SIGNAL ${arrow}*\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n📊 *${safePair}* | [${timeframe}]\n🎯 *${analysis.signal === 'CALL' ? 'CALL (BUY)' : 'PUT (SELL)'}* | Probability: *${analysis.probability}%*\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n📊 *PROBABILITY METER:*\n\`${bar}\` ${analysis.probability}%\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n📈 *TECHNICALS:* RSI ${analysis.rsi} | ADX ${analysis.adx} | Trend ${analysis.trendRegime}\n🌀 Divergence: ${analysis.divergence}\n📊 Factors: ${analysis.activeFactors.join(', ') || 'none'}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n💡 *ACTION:* ${safeAction} (Risk ${analysis.suggestedRisk})\n🛡️ SL: ${analysis.stopLoss} pips | TP: ${analysis.takeProfit} pips\n💰 Entry: ${analysis.currentPrice} | R:R ${analysis.riskRewardRatio}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n⚠️ *Probability ≠ Guarantee* – Manage risk.\n🕐 ${new Date().toLocaleTimeString()}`;
+    let msg = `${isAuto ? '🤖 AUTO-SCAN\n' : ''}*${arrow} PROBABILITY SIGNAL ${arrow}*\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n📊 *${safePair}* | [${timeframe}]\n🎯 *${analysis.signal === 'CALL' ? 'CALL (BUY)' : 'PUT (SELL)'}* | Probability: *${analysis.probability}%*\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n📊 *PROBABILITY METER:*\n\`${bar}\` ${analysis.probability}%\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n📈 *TECHNICALS:* RSI ${analysis.rsi} | ADX ${analysis.adx} | Mode ${analysis.mode}\n🌀 Divergence: ${analysis.divergence}\n📊 Factors: ${analysis.activeFactors.join(', ') || 'none'}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n💡 *ACTION:* ${safeAction} (Risk ${analysis.suggestedRisk})\n🛡️ SL: ${analysis.stopLoss} pips | TP: ${analysis.takeProfit} pips | Max bars: ${analysis.maxHoldBars}\n💰 Entry: ${analysis.currentPrice} | R:R ${analysis.riskRewardRatio}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n⚠️ *Probability ≠ Guarantee* – Manage risk.\n🕐 ${new Date().toLocaleTimeString()}`;
     if (isMock) msg += `\n⚠️ *Using fallback data (real sources unavailable)*`;
     return msg;
 }
@@ -494,20 +539,21 @@ async function autoScan() {
     await performScan(stateManager.state.settings.selectedTimeframe, true);
 }
 
-// ------------------------- UI Components -------------------------
+// ---------- UI Components ----------
 function getMainKeyboard() {
     return { inline_keyboard: [
         [{ text: "🔍 PROBABILITY SCAN", callback_data: "scan_manual" }],
         [{ text: "🎯 SELECT PAIRS", callback_data: "menu_pairs" }, { text: "⏰ TIMEFRAME", callback_data: "menu_timeframe" }],
         [{ text: "🤖 AUTO-SCAN", callback_data: "menu_autoscan" }, { text: "📊 HISTORY", callback_data: "menu_history" }],
         [{ text: "📈 STATUS", callback_data: "menu_status" }, { text: "📋 GUIDE", callback_data: "menu_guide" }],
-        [{ text: "📊 STATS", callback_data: "menu_stats" }, { text: "❓ HELP", callback_data: "menu_help" }]
+        [{ text: "📊 STATS", callback_data: "menu_stats" }, { text: "🧪 TEST", callback_data: "test_signal" }],
+        [{ text: "❓ HELP", callback_data: "menu_help" }]
     ] };
 }
 
 async function showMainMenu(messageId = null) {
     const s = stateManager.state.settings;
-    const menu = `🏆 *ULTIMATE BOT v7.0* | 4.9/5\n━━━━━━━━━━━━━━━━━━━━━━\n📊 ${s.selectedPairs.length}/${PAIRS.length} pairs\n⏰ ${s.selectedTimeframe} ⭐\n🤖 ${s.autoScanEnabled ? 'ON' : 'OFF'}\n━━━━━━━━━━━━━━━━━━━━━━\n📊 85%+ → STRONG (2.5% risk)\n📊 75-84% → CONFIDENT (2.0%)\n📊 65-74% → NORMAL (1.5%)\n📊 55-64% → CAUTIOUS (0.8%)\n━━━━━━━━━━━━━━━━━━━━━━\n*YOU decide. Not the bot.*`;
+    const menu = `🏆 *INSTITUTIONAL BOT v9.0*\n━━━━━━━━━━━━━━━━━━━━━━\n📊 ${s.selectedPairs.length}/${PAIRS.length} pairs\n⏰ ${s.selectedTimeframe} ⭐\n🤖 ${s.autoScanEnabled ? 'ON' : 'OFF'}\n━━━━━━━━━━━━━━━━━━━━━━\n📊 85%+ → STRONG (2.5% risk)\n📊 75-84% → CONFIDENT (2.0%)\n📊 65-74% → NORMAL (1.5%)\n📊 55-64% → CAUTIOUS (0.8%)\n━━━━━━━━━━━━━━━━━━━━━━\n*YOU decide. Not the bot.*`;
     const kb = getMainKeyboard();
     if (messageId) await editMessageText(messageId, menu, kb);
     else await sendMessage(menu, kb);
@@ -617,7 +663,22 @@ async function showStats(messageId = null) {
     else await sendMessage(msg, keyboard);
 }
 
-// ------------------------- Command & Callback Handlers -------------------------
+async function testSignal(messageId = null) {
+    await sendTypingAction();
+    const msg = await sendMessage("🧪 *Running test signal on EUR/USD (1m)*\nPlease wait...");
+    const symbol = 'EURUSD=X';
+    const timeframe = '1m';
+    const fetchResult = await fetchCandles(symbol, timeframe);
+    if (!fetchResult?.candles) {
+        await sendMessage("❌ Test failed: Could not fetch data for EUR/USD 1m.");
+        return;
+    }
+    const analysis = analyzer.calculateProbability(fetchResult.candles, "EUR/USD", timeframe, null);
+    const resultMsg = `🧪 *TEST RESULT*\n━━━━━━━━━━━━━━━━━━━━━━\n📊 Signal: ${analysis.signal}\n🎯 Probability: ${analysis.probability}%\n📈 RSI: ${analysis.rsi} | ADX: ${analysis.adx}\n🌀 Divergence: ${analysis.divergence}\n📊 Factors: ${analysis.activeFactors.join(', ')}\n━━━━━━━━━━━━━━━━━━━━━━\nIf probability <55%, market conditions are not favourable.`;
+    await sendMessage(resultMsg);
+}
+
+// ---------- Command & Callback Handlers ----------
 async function handleCommand(text, chatId) {
     if (chatId.toString() !== TELEGRAM_CHAT_ID) return;
     await userLimiter.allow(chatId);
@@ -626,6 +687,7 @@ async function handleCommand(text, chatId) {
     else if (text === '/status') await showStatus();
     else if (text === '/stats') await showStats();
     else if (text === '/scan') { await sendTypingAction(); await performScan(stateManager.state.settings.selectedTimeframe, false); }
+    else if (text === '/test') await testSignal();
     else if (text === '/help') await showHelp();
     else await sendMessage(`❌ Unknown command. Send /start for menu.`);
 }
@@ -639,14 +701,14 @@ async function handleCallback(query) {
 
     if (data.startsWith("record_win")) {
         const rawScore = parseInt(data.split('_')[2]);
-        analyzer.recordTradeOutcome(true, rawScore);
+        analyzer.recordTradeOutcome(true, rawScore, 2);
         await sendMessage("👍 Trade recorded as WIN. Calibration updated.");
         await editMessageText(msgId, query.message.text);
         return;
     }
     if (data.startsWith("record_loss")) {
         const rawScore = parseInt(data.split('_')[2]);
-        analyzer.recordTradeOutcome(false, rawScore);
+        analyzer.recordTradeOutcome(false, rawScore, -2);
         await sendMessage("👎 Trade recorded as LOSS. Calibration updated.");
         await editMessageText(msgId, query.message.text);
         return;
@@ -669,7 +731,11 @@ async function handleCallback(query) {
         await showHistory(msgId);
         return;
     }
-    // Main menu handlers
+    if (data === "test_signal") {
+        await testSignal(msgId);
+        return;
+    }
+    // Menu handlers
     if (data === "menu_main") await showMainMenu(msgId);
     else if (data === "menu_stats") await showStats(msgId);
     else if (data === "scan_manual") { await sendTypingAction(); await performScan(stateManager.state.settings.selectedTimeframe, false); await showMainMenu(msgId); }
@@ -719,7 +785,7 @@ async function handleCallback(query) {
     }
 }
 
-// ------------------------- Resilient Polling (forever loop) -------------------------
+// ---------- Resilient Polling ----------
 async function deleteWebhook(retries = 3) {
     for (let i = 0; i < retries; i++) {
         try {
@@ -791,7 +857,6 @@ function startHealthServer() {
     server.listen(PORT, () => logger.info(`🩺 Health server on port ${PORT}`));
 }
 
-// ------------------------- Graceful Shutdown (drain queue) -------------------------
 let isShuttingDown = false;
 async function gracefulShutdown(signal) {
     if (isShuttingDown) return;
@@ -810,13 +875,12 @@ process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 process.on('uncaughtException', (e) => { logger.error('Uncaught', { error: e.stack }); gracefulShutdown('UNCAUGHT'); });
 process.on('unhandledRejection', (r) => { logger.error('Unhandled rejection', { reason: r }); });
 
-// ------------------------- Startup -------------------------
 global.botStartTime = Date.now();
 console.log('\n' + '█'.repeat(60));
-console.log('🏆 ULTIMATE BOT v7.0 – 4.9/5 ENTERPRISE GRADE (COMPLETE)');
+console.log('🏆 INSTITUTIONAL BOT v9.0 – FULLY HARDENED');
 console.log('█'.repeat(60));
-console.log(`Data: Yahoo Finance raw HTTP (live) with retry & circuit breaker`);
-console.log(`Pairs: ${PAIRS.length} pairs loaded from pairs.json`);
+console.log(`Data: Yahoo Finance raw HTTP (live) | Regime‑specific entries | Kelly sizing | Session liquidation`);
+console.log(`Pairs: ${PAIRS.length} pairs loaded`);
 console.log(`Telegram: ✅ token and chat ID set`);
 console.log(`HTTP Port: ${PORT}`);
 console.log('█'.repeat(60) + '\n');
@@ -825,7 +889,7 @@ startHealthServer();
 startPolling();
 
 setTimeout(async () => {
-    await sendMessage(`🤖 *ULTIMATE BOT v7.0 ONLINE*\n━━━━━━━━━━━━━━━━━━━━━━\n✅ Live Yahoo data with retries\n✅ Trade recording active\n✅ Circuit breaker & queue protection\n📱 *Send /start to begin*`);
+    await sendMessage(`🤖 *INSTITUTIONAL BOT v9.0 ONLINE*\n━━━━━━━━━━━━━━━━━━━━━━\n✅ Regime‑adaptive entries (Trend/Range)\n✅ Kelly sizing + drawdown protection\n✅ Session liquidation & liquidity filters\n📱 *Send /start to begin*`);
     console.log('🚀 Bot ready! Use /start');
 }, 3000);
 
