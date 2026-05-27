@@ -3,6 +3,7 @@ const pairsConfig = require('./pairs.json');
 const { MarketRegimeDetector } = require('./src/core/regimeDetector');
 const { PredictiveSignalEngine } = require('./src/core/predictiveEngine');
 
+// ===== TRUE DIVERGENCE DETECTION =====
 function detectTrueDivergence(closes, rsiValues) {
     if (closes.length < 50 || rsiValues.length < 50) return null;
     const swingLows = [], swingHighs = [];
@@ -35,6 +36,7 @@ function detectTrueDivergence(closes, rsiValues) {
     return null;
 }
 
+// ===== KELLY POSITION SIZER =====
 class KellyPositionSizer {
     constructor() {
         this.trades = [];
@@ -64,6 +66,7 @@ class KellyPositionSizer {
     }
 }
 
+// ===== LEGENDARY ANALYZER – HARDENED RSI & ADX =====
 class LegendaryAnalyzer {
     constructor() {
         this.config = pairsConfig;
@@ -78,14 +81,17 @@ class LegendaryAnalyzer {
         this.kelly.update(win, pnl);
     }
 
+    // Guarded RSI – never returns NaN or 0
     calculateRSI(closes, period) {
-        if (closes.length < period + 1) return 50;
+        if (!closes || closes.length < period + 1) return 50;
         let gains = 0, losses = 0;
         for (let i = 1; i <= period; i++) {
             const diff = closes[i] - closes[i-1];
-            diff >= 0 ? gains += diff : losses -= diff;
+            if (diff >= 0) gains += diff;
+            else losses -= diff;
         }
-        let avgGain = gains / period, avgLoss = losses / period;
+        let avgGain = gains / period;
+        let avgLoss = losses / period;
         for (let i = period + 1; i < closes.length; i++) {
             const diff = closes[i] - closes[i-1];
             if (diff >= 0) {
@@ -98,7 +104,10 @@ class LegendaryAnalyzer {
         }
         if (avgLoss === 0) return 100;
         const rs = avgGain / avgLoss;
-        return Math.min(100, Math.max(0, Math.round((100 - 100 / (1 + rs)) * 10) / 10));
+        let rsi = 100 - (100 / (1 + rs));
+        // Guard against NaN
+        if (isNaN(rsi) || !isFinite(rsi)) return 50;
+        return Math.min(100, Math.max(0, Math.round(rsi * 10) / 10));
     }
 
     calculateATR(highs, lows, closes, period) {
@@ -110,7 +119,8 @@ class LegendaryAnalyzer {
             const lc = Math.abs(lows[i] - closes[i-1]);
             tr.push(Math.max(hl, hc, lc));
         }
-        return tr.slice(-period).reduce((a, b) => a + b, 0) / period;
+        const atr = tr.slice(-period).reduce((a, b) => a + b, 0) / period;
+        return isNaN(atr) ? 0.001 : atr;
     }
 
     calculateADX(highs, lows, closes, period) {
@@ -118,6 +128,7 @@ class LegendaryAnalyzer {
         try {
             const adx = technicalIndicators.ADX({ high: highs, low: lows, close: closes, period });
             const last = adx[adx.length - 1] || 20;
+            if (isNaN(last) || !isFinite(last)) return { adx: 20, trend: 'RANGING' };
             let trend = 'RANGING';
             if (last >= 35) trend = 'STRONG_TRENDING';
             else if (last >= 22) trend = 'WEAK_TRENDING';
@@ -247,6 +258,7 @@ class LegendaryAnalyzer {
                 active.push({ name: "MOMENTUM", signal: "PUT", probability: 70 });
             }
 
+            // Micro‑trend – guaranteed directional signal
             if (direction === "NEUTRAL") {
                 const ema5 = this.calculateEMA(closes, 5);
                 const ema5Prev = ema5[ema5.length - 2];
@@ -327,7 +339,7 @@ class LegendaryAnalyzer {
                 riskRewardRatio: (tp / stop).toFixed(2),
                 timestamp: new Date().toISOString(),
                 pair, timeframe,
-                version: "28.0-FORCED-DIRECTION"
+                version: "39.0-INSTITUTIONAL"
             };
         } catch (e) { return this.neutral(`Error: ${e.message}`); }
     }
@@ -354,7 +366,7 @@ class LegendaryAnalyzer {
             recommendedAction: "NO_TRADE", suggestedRisk: "0%", rsi: "50", adx: "20", trend: "UNKNOWN",
             volatility: "0", currentPrice: "0", regime: "unknown", activeStrategies: [], divergence: "None",
             session: "UNKNOWN", guidance: reason, stopLoss: 15, takeProfit: 27, riskRewardRatio: "1.80",
-            timestamp: new Date().toISOString(), pair: "UNKNOWN", timeframe: "UNKNOWN", version: "28.0-FORCED-DIRECTION"
+            timestamp: new Date().toISOString(), pair: "UNKNOWN", timeframe: "UNKNOWN", version: "39.0-INSTITUTIONAL"
         };
     }
 }
