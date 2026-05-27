@@ -1,7 +1,12 @@
+/**
+ * Predictive Signal Engine – Zero‑lag HMA and slope detection
+ */
 class PredictiveSignalEngine {
-    // Hull Moving Average – zero lag
+    /**
+     * Hull Moving Average (zero lag)
+     */
     calculateHMA(data, period) {
-        if (data.length < period * 2) return data;
+        if (data.length < period * 2) return data.slice();
         const half = Math.floor(period / 2);
         const sqrt = Math.floor(Math.sqrt(period));
         const wma = (values, len) => {
@@ -25,6 +30,10 @@ class PredictiveSignalEngine {
         return hma;
     }
 
+    /**
+     * Detect predictive entry based on HMA slope and acceleration.
+     * Returns { signal, probability } or null.
+     */
     detectPredictiveEntry(candles) {
         const closes = candles.map(c => c.close);
         if (closes.length < 40) return null;
@@ -39,5 +48,18 @@ class PredictiveSignalEngine {
         if (slope < -0.0001 && acc < 0) return { signal: 'PUT', probability: 75 };
         return null;
     }
+
+    /**
+     * Get current HMA slope (momentum)
+     * @returns {number} slope (positive = bullish, negative = bearish)
+     */
+    getHMASlope(candles, period = 20) {
+        const closes = candles.map(c => c.close);
+        if (closes.length < period + 5) return 0;
+        const hma = this.calculateHMA(closes, period);
+        if (hma.length < 3) return 0;
+        return hma[hma.length - 1] - hma[hma.length - 2];
+    }
 }
+
 module.exports = { PredictiveSignalEngine };
