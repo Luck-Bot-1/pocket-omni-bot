@@ -3,7 +3,6 @@ const pairsConfig = require('./pairs.json');
 const { MarketRegimeDetector } = require('./src/core/regimeDetector');
 const { PredictiveSignalEngine } = require('./src/core/predictiveEngine');
 
-// ===== TRUE DIVERGENCE DETECTION =====
 function detectTrueDivergence(closes, rsiValues) {
     if (closes.length < 50 || rsiValues.length < 50) return null;
     const swingLows = [], swingHighs = [];
@@ -36,7 +35,6 @@ function detectTrueDivergence(closes, rsiValues) {
     return null;
 }
 
-// ===== KELLY POSITION SIZER =====
 class KellyPositionSizer {
     constructor() {
         this.trades = [];
@@ -66,7 +64,6 @@ class KellyPositionSizer {
     }
 }
 
-// ===== LEGENDARY ANALYZER – LOWERED THRESHOLD FOR SIGNALS =====
 class LegendaryAnalyzer {
     constructor() {
         this.config = pairsConfig;
@@ -179,7 +176,7 @@ class LegendaryAnalyzer {
         return { session: 'OTHER', liquidityBoost: 0.9, reason: 'Regular' };
     }
 
-    calculateProbability(candles, pair, timeframe) {
+    calculateProbability(candles, pair, timeframe, forceMockDirection = false) {
         try {
             const session = this.getCurrentSession();
 
@@ -281,9 +278,6 @@ class LegendaryAnalyzer {
             }
 
             let finalProb = prob * regime.positionMultiplier * session.liquidityBoost;
-
-            // REMOVED DEAD MARKET CAP – we want signals even in low volatility
-            // Only apply volatility boost if optimal
             if (vol >= 0.35 && vol <= 0.85) finalProb *= 1.1;
 
             if (active.length >= 2) finalProb *= 1.05;
@@ -293,14 +287,21 @@ class LegendaryAnalyzer {
 
             finalProb = Math.min(98, Math.max(0, Math.round(finalProb)));
 
-            // LOWER THRESHOLD to 25 – any directional signal will be shown
+            // ----- FORCE DIRECTIONAL SIGNAL IF MOCK DATA AND STILL NEUTRAL -----
+            if (forceMockDirection && (direction === "NEUTRAL" || finalProb < 30)) {
+                // Use last price change to decide direction
+                const lastChange = closes[closes.length - 1] - closes[closes.length - 2];
+                direction = lastChange > 0 ? "CALL" : (lastChange < 0 ? "PUT" : "CALL");
+                finalProb = Math.max(finalProb, 35); // Minimum 35% probability
+                active.push({ name: "FORCED_DIRECTION", signal: direction, probability: finalProb });
+            }
+
             if (finalProb < 25) {
                 return this.neutral(`Signal probability ${finalProb}% < 25% – very low confidence`);
             }
 
             const level = this.getLevel(finalProb);
             let kellyRisk = this.kelly.getRisk(finalProb);
-            // Risk halved only for extremely dead market (vol < 0.18)
             if (vol < 0.18) kellyRisk *= 0.5;
 
             const stop = Math.min(45, Math.max(10, Math.round((atr / price) * 10000 * 1.5)));
@@ -328,7 +329,7 @@ class LegendaryAnalyzer {
                 riskRewardRatio: (tp / stop).toFixed(2),
                 timestamp: new Date().toISOString(),
                 pair, timeframe,
-                version: "27.0-SIGNAL-GUARANTEED"
+                version: "28.0-FORCED-DIRECTION"
             };
         } catch (e) { return this.neutral(`Error: ${e.message}`); }
     }
@@ -355,7 +356,7 @@ class LegendaryAnalyzer {
             recommendedAction: "NO_TRADE", suggestedRisk: "0%", rsi: "50", adx: "20", trend: "UNKNOWN",
             volatility: "0", currentPrice: "0", regime: "unknown", activeStrategies: [], divergence: "None",
             session: "UNKNOWN", guidance: reason, stopLoss: 15, takeProfit: 27, riskRewardRatio: "1.80",
-            timestamp: new Date().toISOString(), pair: "UNKNOWN", timeframe: "UNKNOWN", version: "27.0-SIGNAL-GUARANTEED"
+            timestamp: new Date().toISOString(), pair: "UNKNOWN", timeframe: "UNKNOWN", version: "28.0-FORCED-DIRECTION"
         };
     }
 }
