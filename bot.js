@@ -5,7 +5,6 @@ const fs = require('fs');
 const winston = require('winston');
 const pairsConfig = require('./pairs.json');
 
-// ---------- Structured Logger ----------
 const logger = winston.createLogger({
     level: process.env.LOG_LEVEL || 'info',
     format: winston.format.combine(
@@ -22,7 +21,6 @@ const logger = winston.createLogger({
     ]
 });
 
-// ---------- Configuration ----------
 if (!pairsConfig.probabilityLevels || !pairsConfig.technicalParameters) {
     logger.error('Invalid pairs.json');
     process.exit(1);
@@ -46,7 +44,6 @@ const YAHOO_SYMBOLS = {
     'AUD/CHF': 'AUDCHF=X'
 };
 
-// ---------- Bounded Cache ----------
 const CACHE_MAX_SIZE = 200;
 const CACHE_TTL = 60000;
 const candleCache = new Map();
@@ -66,7 +63,6 @@ function cacheGet(key) {
     return null;
 }
 
-// ---------- Token Bucket Rate Limiter ----------
 class TokenBucket {
     constructor(tokensPerSecond = 20, burst = 5) {
         this.capacity = burst;
@@ -92,7 +88,6 @@ class TokenBucket {
 }
 const telegramRateLimiter = new TokenBucket(20, 5);
 
-// ---------- Rotating User-Agent (for Yahoo raw) ----------
 const userAgents = [
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
     'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -104,7 +99,6 @@ function getRandomUserAgent() {
     return userAgents[userAgentIndex];
 }
 
-// ---------- Yahoo Raw Fetch (fallback) ----------
 async function fetchYahooRaw(symbol, interval, timeoutMs = 10000) {
     return new Promise((resolve) => {
         let period1;
@@ -148,7 +142,6 @@ async function fetchYahooRaw(symbol, interval, timeoutMs = 10000) {
     });
 }
 
-// ---------- Alpha Vantage Fetch (real API) ----------
 async function fetchAlphaVantage(symbol, interval, apiKey) {
     if (!apiKey) return null;
     const avInterval = { '1m': '1min', '5m': '5min', '15m': '15min', '30m': '30min', '1h': '60min', '4h': '60min' }[interval];
@@ -192,7 +185,6 @@ async function fetchAlphaVantage(symbol, interval, apiKey) {
     } catch (e) { return null; }
 }
 
-// ---------- Twelve Data Fetch (real API) ----------
 async function fetchTwelveData(symbol, interval, apiKey) {
     if (!apiKey) return null;
     const tdInterval = { '1m': '1min', '5m': '5min', '15m': '15min', '30m': '30min', '1h': '1h', '4h': '4h' }[interval];
@@ -235,7 +227,6 @@ async function fetchTwelveData(symbol, interval, apiKey) {
     } catch (e) { return null; }
 }
 
-// ---------- Mock Data (last resort, but now forces directional later) ----------
 function generateMockCandles(symbol, interval, count = 300) {
     const seed = symbol.split('').reduce((a, b) => a + b.charCodeAt(0), 0);
     const basePrice = 1.1000 + (seed % 100) / 10000;
@@ -244,32 +235,42 @@ function generateMockCandles(symbol, interval, count = 300) {
     const candles = [];
     let price = basePrice;
     let trend = 0;
+    let trendPhase = 0;
+    let phaseLength = 0;
+    
     for (let i = 0; i < count; i++) {
-        if (i % 40 === 0) trend = (Math.random() - 0.5) * 0.002;
-        const noise = (Math.random() - 0.5) * 0.0008;
+        if (phaseLength <= 0) {
+            trendPhase = Math.random() < 0.5 ? 0 : 1;
+            phaseLength = 30 + Math.floor(Math.random() * 50);
+            trend = (trendPhase === 0 ? 0.0008 : -0.0008) + (Math.random() - 0.5) * 0.0003;
+        }
+        phaseLength--;
+        
+        const noise = (Math.random() - 0.5) * 0.0005;
         price += trend + noise;
-        if (price > basePrice * 1.03) price = basePrice * 1.03;
-        if (price < basePrice * 0.97) price = basePrice * 0.97;
+        if (price > basePrice * 1.04) price = basePrice * 1.04;
+        if (price < basePrice * 0.96) price = basePrice * 0.96;
+        
         const open = price;
         const close = price + (Math.random() - 0.5) * 0.001;
         const high = Math.max(open, close) + Math.random() * 0.0008;
         const low = Math.min(open, close) - Math.random() * 0.0008;
         const time = now - (count - i) * intervalMs;
-        candles.push({ open, high, low, close, volume: 1000, time });
+        candles.push({ open, high, low, close, volume: 1000 + Math.random() * 500, time });
         price = close;
     }
     return candles;
 }
 
-// ---------- Main fetch with full fallback chain ----------
 async function fetchCandles(symbol, interval) {
     const cacheKey = `${symbol}_${interval}`;
     const cached = cacheGet(cacheKey);
     if (cached) return { candles: cached.data, isMock: cached.isMock };
 
-    // 1. Yahoo Finance (official library) – usually blocked, but try anyway
     let candles = null;
+
     try {
+        const yahooFinance = require('yahoo-finance2').default;
         const intervalMap = { '1m': '1m', '5m': '5m', '15m': '15m', '30m': '30m', '1h': '1h', '4h': '1h' };
         const yahooInterval = intervalMap[interval] || '15m';
         const endDate = new Date();
@@ -283,7 +284,7 @@ async function fetchCandles(symbol, interval) {
             case '4h': startDate.setDate(startDate.getDate() - 30); break;
             default: startDate.setDate(startDate.getDate() - 7);
         }
-        const result = await require('yahoo-finance2').default.chart(symbol, {
+        const result = await yahooFinance.chart(symbol, {
             period1: startDate,
             period2: endDate,
             interval: yahooInterval,
@@ -299,34 +300,35 @@ async function fetchCandles(symbol, interval) {
                 time: new Date(q.date).getTime()
             })).filter(c => c.open !== null && c.close !== null);
             if (candles.length > 30) {
-                logger.info(`✅ Yahoo fetched ${candles.length} candles for ${symbol}`);
+                logger.info(`✅ Yahoo Finance library fetched ${candles.length} candles for ${symbol}`);
                 cacheSet(cacheKey, candles, false);
                 return { candles, isMock: false };
             }
         }
-    } catch (e) { logger.warn(`Yahoo failed for ${symbol}: ${e.message}`); }
+    } catch(e) { /* ignore */ }
 
-    // 2. Alpha Vantage
     const avKey = process.env.ALPHA_VANTAGE_KEY;
     if (avKey) {
         candles = await fetchAlphaVantage(symbol, interval, avKey);
         if (candles && candles.length > 0) {
             cacheSet(cacheKey, candles, false);
             return { candles, isMock: false };
+        } else if (avKey) {
+            logger.warn(`Alpha Vantage failed for ${symbol}`);
         }
     }
 
-    // 3. Twelve Data
     const tdKey = process.env.TWELVE_DATA_KEY;
     if (tdKey) {
         candles = await fetchTwelveData(symbol, interval, tdKey);
         if (candles && candles.length > 0) {
             cacheSet(cacheKey, candles, false);
             return { candles, isMock: false };
+        } else if (tdKey) {
+            logger.warn(`Twelve Data failed for ${symbol}`);
         }
     }
 
-    // 4. Yahoo raw HTTP fallback
     candles = await fetchYahooRaw(symbol, interval);
     if (candles && candles.length > 0) {
         logger.info(`✅ Yahoo Raw fetched ${candles.length} candles for ${symbol}`);
@@ -334,34 +336,31 @@ async function fetchCandles(symbol, interval) {
         return { candles, isMock: true };
     }
 
-    // 5. Final mock (with force directional flag)
     logger.warn(`⚠️ Using forced mock data for ${symbol} (all APIs failed)`);
     const mockCandles = generateMockCandles(symbol, interval, 300);
     cacheSet(cacheKey, mockCandles, true);
-    return { candles: mockCandles, isMock: true, forceMockDirection: true };
+    return { candles: mockCandles, isMock: true, forceDirection: true };
 }
 
-// ---------- Startup message ----------
 let globalDataStatus = 'unknown';
 let lastAlertTime = 0;
 async function testConnectivity() {
     const avKey = process.env.ALPHA_VANTAGE_KEY;
     const tdKey = process.env.TWELVE_DATA_KEY;
-    if (avKey || tdKey) {
-        globalDataStatus = 'real_possible';
-        logger.info(`✅ API keys present: Alpha Vantage ${avKey ? '✅' : '❌'}, Twelve Data ${tdKey ? '✅' : '❌'}`);
-        await sendMessage(`📡 *Real data sources available*\nAlpha Vantage: ${avKey ? '✅' : '❌'}\nTwelve Data: ${tdKey ? '✅' : '❌'}\n\nBot will try real APIs first, then fall back to mock (with guaranteed directional signals).`);
-    } else {
-        globalDataStatus = 'mock_only';
-        logger.warn('⚠️ No API keys – using forced mock data. Signals will be directional but simulated.');
+    if (!avKey && !tdKey) {
+        logger.warn('⚠️ No Alpha Vantage or Twelve Data API keys set. Using mock data only (directional signals guaranteed).');
         if (Date.now() - lastAlertTime > 3600000) {
             lastAlertTime = Date.now();
-            await sendMessage(`⚠️ *No Alpha Vantage or Twelve Data API keys set.*\nUsing simulated market data. Signals are directional but NOT real.\n\nTo get live data, set ALPHA_VANTAGE_KEY or TWELVE_DATA_KEY in environment.`);
+            await sendMessage(`⚠️ *No API keys set* – using simulated data. Signals are directional but NOT real.\n\nAdd ALPHA_VANTAGE_KEY and/or TWELVE_DATA_KEY to environment for live data.`);
         }
+        globalDataStatus = 'mock_only';
+    } else {
+        globalDataStatus = 'real_possible';
+        logger.info(`✅ API keys present: Alpha Vantage ${avKey ? '✅' : '❌'}, Twelve Data ${tdKey ? '✅' : '❌'}`);
+        await sendMessage(`📡 *Real data sources available*\nAlpha Vantage: ${avKey ? '✅' : '❌'}\nTwelve Data: ${tdKey ? '✅' : '❌'}\nBot will try real APIs first, then fall back to mock.`);
     }
 }
 
-// ---------- Immutable State Manager ----------
 class StateManager {
     constructor() {
         this.state = {
@@ -416,7 +415,6 @@ class StateManager {
 const stateManager = new StateManager();
 stateManager.load();
 
-// ---------- Telegram API helpers with 429 retry ----------
 async function sendMessage(text, replyMarkup = null, priority = 5, retries = 3) {
     if (!TELEGRAM_TOKEN || !TELEGRAM_CHAT_ID) { logger.info(`📱 ${text.substring(0, 200)}...`); return; }
     await telegramRateLimiter.consume(1);
@@ -494,7 +492,6 @@ async function sendTypingAction() {
     });
 }
 
-// ---------- Graceful shutdown ----------
 let isShuttingDown = false;
 let autoScanInterval = null;
 async function gracefulShutdown(signal) {
@@ -517,7 +514,6 @@ process.on('unhandledRejection', (r) => { logger.error('Unhandled rejection', { 
 
 const analyzer = new LegendaryAnalyzer();
 
-// ---------- Scan with progress bar, passes `forceMockDirection` flag ----------
 async function performScan(timeframe, isAuto = false, userId = null) {
     return stateManager.withMutex('scan', async (snapshot) => {
         if (snapshot.scanning.active) {
@@ -550,8 +546,7 @@ async function performScan(timeframe, isAuto = false, userId = null) {
                 continue;
             }
             if (fetchResult.isMock) mockUsed = true;
-            // Pass forceMockDirection flag to analyzer
-            const analysis = analyzer.calculateProbability(fetchResult.candles, pair, timeframe, fetchResult.forceMockDirection || false);
+            const analysis = analyzer.calculateProbability(fetchResult.candles, pair, timeframe, fetchResult.forceDirection || false);
             if (analysis.probability >= 55) signals++;
             if (analysis.probability >= 92) legendary++;
             else if (analysis.probability >= 85) exceptional++;
@@ -603,7 +598,6 @@ function formatSignal(analysis, pair, timeframe, isAuto, isMock) {
     return msg;
 }
 
-// ---------- Telegram UI (all functions identical to previous stable version) ----------
 function getMainKeyboard() {
     return { inline_keyboard: [
         [{ text: "🔍 PROBABILITY SCAN", callback_data: "scan_manual" }],
@@ -617,7 +611,7 @@ function getMainKeyboard() {
 async function showMainMenu(messageId = null) {
     const uptime = Math.floor((Date.now() - global.botStartTime || 0) / 1000 / 60);
     const s = stateManager.state.settings;
-    const menu = `🏆 *OMNI v36* | ${uptime}m\n━━━━━━━━━━━━━━━━━━━━━━\n📊 ${s.selectedPairs.length}/${PAIRS.length} pairs\n⏰ ${s.selectedTimeframe} ⭐\n🤖 ${s.autoScanEnabled ? 'ON' : 'OFF'}\n━━━━━━━━━━━━━━━━━━━━━━\n📊 92%+ 👑 MAX (3%)\n📊 85-91% 🔥🔥🔥 STRONG (2.5%)\n📊 78-84% 🔥🔥 CONFIDENT (2%)\n📊 70-77% 🔥 NORMAL (1.5%)\n📊 62-69% ⚡ CAUTIOUS (1%)\n📊 55-61% ⚠️ SKIP (0.5%)\n━━━━━━━━━━━━━━━━━━━━━━\n*YOU decide. Not the bot.*`;
+    const menu = `🏆 *OMNI v37* | ${uptime}m\n━━━━━━━━━━━━━━━━━━━━━━\n📊 ${s.selectedPairs.length}/${PAIRS.length} pairs\n⏰ ${s.selectedTimeframe} ⭐\n🤖 ${s.autoScanEnabled ? 'ON' : 'OFF'}\n━━━━━━━━━━━━━━━━━━━━━━\n📊 92%+ 👑 MAX (3%)\n📊 85-91% 🔥🔥🔥 STRONG (2.5%)\n📊 78-84% 🔥🔥 CONFIDENT (2%)\n📊 70-77% 🔥 NORMAL (1.5%)\n📊 62-69% ⚡ CAUTIOUS (1%)\n📊 55-61% ⚠️ SKIP (0.5%)\n━━━━━━━━━━━━━━━━━━━━━━\n*YOU decide. Not the bot.*`;
     const kb = getMainKeyboard();
     if (messageId) {
         await editMessageText(messageId, menu, kb);
@@ -732,7 +726,6 @@ async function showHelp(messageId = null) {
     }
 }
 
-// ---------- Webhook deletion ----------
 async function deleteWebhook(retries = 3) {
     for (let i = 0; i < retries; i++) {
         try {
@@ -755,7 +748,6 @@ async function deleteWebhook(retries = 3) {
     return false;
 }
 
-// ---------- Callback & command handling ----------
 async function handleCallback(query) {
     const data = query.data;
     const msgId = query.message.message_id;
@@ -822,7 +814,6 @@ async function handleCommand(text, chatId) {
     else await sendMessage(`❌ Unknown. Send /start for menu.`);
 }
 
-// ---------- Long polling ----------
 async function startPolling() {
     if (!TELEGRAM_TOKEN) { logger.error('❌ No TELEGRAM_TOKEN'); return; }
     await deleteWebhook(3);
@@ -862,7 +853,6 @@ async function startPolling() {
     poll();
 }
 
-// ---------- Health server ----------
 function startHealthServer() {
     const server = http.createServer((req, res) => {
         if (req.url === '/health' || req.url === '/') {
@@ -881,17 +871,16 @@ function startHealthServer() {
     server.listen(PORT, () => logger.info(`🩺 Health server listening on port ${PORT}`));
 }
 
-// ---------- Main ----------
 global.botStartTime = Date.now();
 console.log('\n' + '█'.repeat(60));
-console.log('🏆 OMNI_BOT v36 - REAL API FALLBACK + FORCED DIRECTIONAL');
+console.log('🏆 OMNI_BOT v37 - MULTI‑SOURCE RESILIENT + FORCED DIRECTIONAL');
 console.log('█'.repeat(60));
 console.log(`Strategy: NO REJECTION | YOU decide`);
 console.log(`Indicators: HMA + RSI + ADX + MACD + BB`);
 console.log(`Risk: Kelly Criterion + regime‑adaptive`);
 console.log(`Telegram: ${TELEGRAM_TOKEN ? '✅' : '❌'}`);
 console.log(`HTTP Port: ${PORT}`);
-console.log(`Data: Yahoo → Alpha Vantage → Twelve Data → forced mock (guaranteed directional)`);
+console.log(`Data: Yahoo → Alpha Vantage → Twelve Data → Yahoo Raw → forced mock (guaranteed directional)`);
 console.log('█'.repeat(60) + '\n');
 
 testConnectivity().catch(console.error);
@@ -900,7 +889,7 @@ startPolling();
 
 setTimeout(async () => {
     if (TELEGRAM_TOKEN && TELEGRAM_CHAT_ID) {
-        await sendMessage(`🤖 *OMNI_BOT v36 ONLINE*\n━━━━━━━━━━━━━━━━━━━━━━\n✅ Multi‑source real data (Yahoo, Alpha Vantage, Twelve Data)\n✅ If all fail → forced directional mock (NO 0% neutrals)\n✅ Guaranteed CALL/PUT signals with probabilities 30‑98%\n📱 *Send /start to begin*`);
+        await sendMessage(`🤖 *OMNI_BOT v37 ONLINE*\n━━━━━━━━━━━━━━━━━━━━━━\n✅ Multi‑source real data (Yahoo, Alpha Vantage, Twelve Data)\n✅ If all fail → forced directional mock (NO 0% neutrals)\n✅ Guaranteed CALL/PUT signals with probabilities 30‑98%\n📱 *Send /start to begin*`);
     }
     console.log('🚀 Bot ready! Send /start');
 }, 3000);
