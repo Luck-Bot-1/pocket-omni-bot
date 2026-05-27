@@ -1,5 +1,5 @@
 // ============================================================
-// PROFESSIONAL TRADING BOT v5.0 – COMPLETE INTERFACE
+// LEGENDARY BOT v5.2 – FULLY HARDENED (NEWS & SESSION LIQUIDATION)
 // ============================================================
 
 if (!globalThis.fetch) {
@@ -143,9 +143,31 @@ async function fetchCandles(symbol, interval) {
     return { candles, isMock: true };
 }
 
-// ---------- NEWS & SESSION (disabled for now) ----------
-function isNewsTime() { return false; }
-function isEndOfSession() { return false; }
+// ---------- NEWS COOLDOWN (ENABLED) ----------
+function isNewsTime() {
+    const now = new Date();
+    const hour = now.getUTCHours();
+    const minute = now.getUTCMinutes();
+    // Major news releases (UTC):
+    // 12:30 – US CPI, NFP, Retail Sales
+    // 14:00 – FOMC, ISM, JOLTS
+    // 18:00 – Fed speeches, Beige Book
+    if ((hour === 12 && minute >= 15 && minute <= 45) ||
+        (hour === 14 && minute <= 15) ||
+        (hour === 18 && minute <= 15)) {
+        return true;
+    }
+    return false;
+}
+
+// ---------- SESSION LIQUIDATION (optional, uncomment to enable) ----------
+function isEndOfSession() {
+    const now = new Date();
+    const hour = now.getUTCHours();
+    // Close 5 minutes before major session end (4:55 PM EST = 20:55 UTC)
+    if (hour === 20 && now.getUTCMinutes() >= 55) return true;
+    return false;
+}
 
 // ---------- TELEGRAM HELPERS ----------
 async function sendMessage(text, replyMarkup = null) {
@@ -203,8 +225,16 @@ async function performScan(timeframe, isAuto = false, selectedPairs = null) {
             const symbol = YAHOO_SYMBOLS[pair];
             if (!symbol) continue;
             try {
-                if (isNewsTime()) continue;
-                if (isEndOfSession()) continue;
+                // News cooldown
+                if (isNewsTime()) {
+                    log(`⏸️ News cooldown – skipping ${pair}`);
+                    continue;
+                }
+                // End of session (optional)
+                if (isEndOfSession()) {
+                    log(`🔚 End of session – skipping new entries`);
+                    continue;
+                }
                 const fetchResult = await fetchCandles(symbol, timeframe);
                 if (!fetchResult?.candles) continue;
                 let htCandles = null;
@@ -265,7 +295,7 @@ function getMainKeyboard() {
 }
 
 async function showMainMenu(messageId = null) {
-    const menu = `🏆 *PROFESSIONAL TRADING BOT v5.0*\n━━━━━━━━━━━━━━━━━━━━━━\n📊 Active timeframes: ${TIMEFRAMES.join(', ')}\n⏰ Primary: ${PRIMARY_TF} (expiry 15m)\n🤖 Auto‑scan: ${autoScanInterval ? 'ON' : 'OFF'}\n━━━━━━━━━━━━━━━━━━━━━━\n*Use buttons below*`;
+    const menu = `🏆 *LEGENDARY TRADING BOT v5.2*\n━━━━━━━━━━━━━━━━━━━━━━\n📊 Active timeframes: ${TIMEFRAMES.join(', ')}\n⏰ Primary: ${PRIMARY_TF} (expiry 15m)\n🤖 Auto‑scan: ${autoScanInterval ? 'ON' : 'OFF'}\n━━━━━━━━━━━━━━━━━━━━━━\n*Send /ping to test*`;
     const kb = getMainKeyboard();
     if (messageId) await editMessageText(messageId, menu, kb);
     else await sendMessage(menu, kb);
@@ -356,7 +386,7 @@ async function showGuide(messageId = null) {
 }
 
 async function showHelp(messageId = null) {
-    const msg = `*📋 HELP*\n━━━━━━━━━━━━━━━━━━━━━━\n*COMMANDS:*\n/start – Menu\n/scan – Manual full scan\n/scanpair EUR/USD – Scan one pair\n/status – Bot status\n/stats – Performance stats\n/help – This message\n━━━━━━━━━━━━━━━━━━━━━━\n*BUTTONS:*\n- FULL SCAN: scan all pairs (15m)\n- SELECT PAIRS: scan individual pair\n- TIMEFRAME: change scan TF\n- AUTO-SCAN: on/off\n- HISTORY: past signals`;
+    const msg = `*📋 HELP*\n━━━━━━━━━━━━━━━━━━━━━━\n*COMMANDS:*\n/start – Menu\n/scan – Manual full scan\n/scanpair EUR/USD – Scan one pair\n/ping – Test bot response\n/status – Bot status\n/stats – Performance stats\n/help – This message\n━━━━━━━━━━━━━━━━━━━━━━\n*BUTTONS:*\n- FULL SCAN: scan all pairs (15m)\n- SELECT PAIRS: scan individual pair\n- TIMEFRAME: change scan TF\n- AUTO-SCAN: on/off\n- HISTORY: past signals`;
     const keyboard = { inline_keyboard: [[{ text: "🔙 BACK TO MENU", callback_data: "menu_main" }]] };
     if (messageId) await editMessageText(messageId, msg, keyboard);
     else await sendMessage(msg, keyboard);
@@ -378,6 +408,11 @@ async function showStats(messageId = null) {
     else await sendMessage(msg, keyboard);
 }
 
+// ---------- PING COMMAND ----------
+async function pingTest() {
+    await sendMessage("🏓 Pong! Bot is alive and responding.");
+}
+
 // ---------- COMMAND HANDLERS ----------
 async function handleCommand(text, chatId) {
     if (chatId.toString() !== TELEGRAM_CHAT_ID) return;
@@ -385,6 +420,8 @@ async function handleCommand(text, chatId) {
     log(`📩 Command: ${text}`);
     if (text === '/start') {
         await showMainMenu();
+    } else if (text === '/ping') {
+        await pingTest();
     } else if (text === '/scan') {
         await sendTyping();
         await performScan(PRIMARY_TF, false);
@@ -501,14 +538,22 @@ async function handleCallback(query) {
     }
 }
 
-// ---------- POLLING, HEALTH, SHUTDOWN ----------
+// ---------- POLLING (FIXED FOR HTTP 409) ----------
 async function deleteWebhook() {
-    try {
-        const res = await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/deleteWebhook`, { method: 'POST' });
-        const json = await res.json();
-        log(json.ok ? "✅ Webhook deleted" : "⚠️ Webhook delete failed");
-        return json.ok;
-    } catch (e) { log("Webhook delete error", e.message); return false; }
+    for (let i = 0; i < 3; i++) {
+        try {
+            const res = await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/deleteWebhook`, { method: 'POST' });
+            const json = await res.json();
+            if (json.ok) {
+                log("✅ Webhook deleted");
+                return true;
+            }
+        } catch (e) {
+            log(`Webhook delete attempt ${i+1} failed: ${e.message}`);
+        }
+        await new Promise(r => setTimeout(r, 2000));
+    }
+    return false;
 }
 
 async function startPolling() {
@@ -521,7 +566,7 @@ async function startPolling() {
             const url = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/getUpdates?offset=${offset}&timeout=30`;
             const response = await fetch(url);
             if (response.status === 409) {
-                log("HTTP 409 – conflict, deleting webhook...");
+                log("HTTP 409 – conflict, deleting webhook and retrying...");
                 await deleteWebhook();
                 continue;
             }
@@ -531,8 +576,12 @@ async function startPolling() {
                 consecutiveErrors = 0;
                 for (const update of data.result) {
                     offset = update.update_id + 1;
-                    if (update.message?.text) await handleCommand(update.message.text, update.message.chat.id);
-                    if (update.callback_query) await handleCallback(update.callback_query);
+                    if (update.message?.text) {
+                        setImmediate(() => handleCommand(update.message.text, update.message.chat.id).catch(e => log(e)));
+                    }
+                    if (update.callback_query) {
+                        setImmediate(() => handleCallback(update.callback_query).catch(e => log(e)));
+                    }
                 }
             }
         } catch (err) {
@@ -557,7 +606,7 @@ process.on('SIGINT', () => { log("SIGINT"); stopAutoScan(); process.exit(0); });
 process.on('uncaughtException', (e) => { log("Uncaught", e); process.exit(1); });
 
 global.botStartTime = Date.now();
-log("🏆 PROFESSIONAL TRADING BOT v5.0 – FULL INTERFACE");
+log("🏆 LEGENDARY TRADING BOT v5.2 – FULLY HARDENED");
 log(`Pairs: ${PAIRS.length} loaded`);
 log(`Telegram: ${TELEGRAM_TOKEN ? "✅" : "❌"}`);
 log(`HTTP Port: ${PORT}`);
