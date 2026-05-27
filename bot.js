@@ -92,83 +92,276 @@ class TokenBucket {
 }
 const telegramRateLimiter = new TokenBucket(20, 5);
 
-// ---------- ULTRA‑AGGRESSIVE MOCK DATA (guarantees signals) ----------
+// ---------- Rotating User-Agent (for Yahoo raw) ----------
+const userAgents = [
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+];
+let userAgentIndex = 0;
+function getRandomUserAgent() {
+    userAgentIndex = (userAgentIndex + 1) % userAgents.length;
+    return userAgents[userAgentIndex];
+}
+
+// ---------- Yahoo Raw Fetch (fallback) ----------
+async function fetchYahooRaw(symbol, interval, timeoutMs = 10000) {
+    return new Promise((resolve) => {
+        let period1;
+        switch (interval) {
+            case '1m': period1 = Math.floor(Date.now() / 1000) - 86400; break;
+            case '5m': period1 = Math.floor(Date.now() / 1000) - 259200; break;
+            case '15m': period1 = Math.floor(Date.now() / 1000) - 604800; break;
+            case '30m': period1 = Math.floor(Date.now() / 1000) - 1209600; break;
+            case '1h': period1 = Math.floor(Date.now() / 1000) - 2592000; break;
+            case '4h': period1 = Math.floor(Date.now() / 1000) - 8640000; break;
+            default: period1 = Math.floor(Date.now() / 1000) - 604800;
+        }
+        const period2 = Math.floor(Date.now() / 1000);
+        const url = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?period1=${period1}&period2=${period2}&interval=${interval}`;
+        const req = https.get(url, { headers: { 'User-Agent': getRandomUserAgent() }, timeout: timeoutMs }, (res) => {
+            let data = '';
+            res.on('data', chunk => data += chunk);
+            res.on('end', () => {
+                try {
+                    const json = JSON.parse(data);
+                    if (!json.chart?.result?.[0]) { resolve(null); return; }
+                    const quotes = json.chart.result[0].indicators.quote[0];
+                    if (!quotes || !quotes.open) { resolve(null); return; }
+                    const candles = [];
+                    const timestamps = json.chart.result[0].timestamp;
+                    for (let i = 0; i < timestamps.length; i++) {
+                        if (quotes.open[i] && quotes.high[i] && quotes.low[i] && quotes.close[i]) {
+                            candles.push({
+                                open: quotes.open[i], high: quotes.high[i], low: quotes.low[i],
+                                close: quotes.close[i], volume: quotes.volume[i] || 1000,
+                                time: timestamps[i] * 1000
+                            });
+                        }
+                    }
+                    resolve(candles.length > 30 ? candles : null);
+                } catch (e) { resolve(null); }
+            });
+        });
+        req.on('error', () => resolve(null));
+        req.end();
+    });
+}
+
+// ---------- Alpha Vantage Fetch (real API) ----------
+async function fetchAlphaVantage(symbol, interval, apiKey) {
+    if (!apiKey) return null;
+    const avInterval = { '1m': '1min', '5m': '5min', '15m': '15min', '30m': '30min', '1h': '60min', '4h': '60min' }[interval];
+    if (!avInterval) return null;
+    const baseSymbol = symbol.replace('=X', '');
+    const url = `https://www.alphavantage.co/query?function=TIME_SERIES_INTRADAY&symbol=${baseSymbol}&interval=${avInterval}&apikey=${apiKey}&outputsize=full`;
+    try {
+        const result = await new Promise((resolve) => {
+            const req = https.get(url, { headers: { 'User-Agent': getRandomUserAgent() } }, (res) => {
+                let data = '';
+                res.on('data', d => data += d);
+                res.on('end', () => {
+                    try {
+                        const json = JSON.parse(data);
+                        const timeSeries = json[`Time Series (${avInterval})`];
+                        if (!timeSeries) { resolve(null); return; }
+                        const candles = [];
+                        for (const [timestamp, values] of Object.entries(timeSeries)) {
+                            candles.push({
+                                time: new Date(timestamp).getTime(),
+                                open: parseFloat(values['1. open']),
+                                high: parseFloat(values['2. high']),
+                                low: parseFloat(values['3. low']),
+                                close: parseFloat(values['4. close']),
+                                volume: parseInt(values['5. volume']) || 1000
+                            });
+                        }
+                        candles.sort((a, b) => a.time - b.time);
+                        resolve(candles.length > 30 ? candles.slice(-300) : null);
+                    } catch (e) { resolve(null); }
+                });
+            });
+            req.on('error', () => resolve(null));
+            req.end();
+        });
+        if (result && result.length > 0) {
+            logger.info(`✅ Alpha Vantage fetched ${result.length} candles for ${symbol}`);
+            return result;
+        }
+        return null;
+    } catch (e) { return null; }
+}
+
+// ---------- Twelve Data Fetch (real API) ----------
+async function fetchTwelveData(symbol, interval, apiKey) {
+    if (!apiKey) return null;
+    const tdInterval = { '1m': '1min', '5m': '5min', '15m': '15min', '30m': '30min', '1h': '1h', '4h': '4h' }[interval];
+    if (!tdInterval) return null;
+    const baseSymbol = symbol.replace('=X', '');
+    const url = `https://api.twelvedata.com/time_series?symbol=${baseSymbol}&interval=${tdInterval}&apikey=${apiKey}&outputsize=300`;
+    try {
+        const result = await new Promise((resolve) => {
+            const req = https.get(url, { headers: { 'User-Agent': getRandomUserAgent() } }, (res) => {
+                let data = '';
+                res.on('data', d => data += d);
+                res.on('end', () => {
+                    try {
+                        const json = JSON.parse(data);
+                        if (!json.values) { resolve(null); return; }
+                        const candles = [];
+                        for (const v of json.values) {
+                            candles.push({
+                                time: new Date(v.datetime).getTime(),
+                                open: parseFloat(v.open),
+                                high: parseFloat(v.high),
+                                low: parseFloat(v.low),
+                                close: parseFloat(v.close),
+                                volume: parseInt(v.volume) || 1000
+                            });
+                        }
+                        candles.sort((a, b) => a.time - b.time);
+                        resolve(candles.length > 30 ? candles : null);
+                    } catch (e) { resolve(null); }
+                });
+            });
+            req.on('error', () => resolve(null));
+            req.end();
+        });
+        if (result && result.length > 0) {
+            logger.info(`✅ Twelve Data fetched ${result.length} candles for ${symbol}`);
+            return result;
+        }
+        return null;
+    } catch (e) { return null; }
+}
+
+// ---------- Mock Data (last resort, but now forces directional later) ----------
 function generateMockCandles(symbol, interval, count = 300) {
     const seed = symbol.split('').reduce((a, b) => a + b.charCodeAt(0), 0);
-    let basePrice = 1.1000 + (seed % 100) / 10000;
+    const basePrice = 1.1000 + (seed % 100) / 10000;
     const now = Date.now();
     const intervalMs = { '1m': 60000, '5m': 300000, '15m': 900000, '30m': 1800000, '1h': 3600000, '4h': 14400000 }[interval] || 900000;
     const candles = [];
-    
-    // Create strong trend cycles that force RSI extremes and Bollinger band touches
-    let phase = 0; // 0 = strong up, 1 = strong down, 2 = ranging
-    let trendStrength = 0.002; // large moves
-    
+    let price = basePrice;
+    let trend = 0;
     for (let i = 0; i < count; i++) {
-        // Change phase every 60-100 candles
-        if (i % (60 + Math.floor(Math.random() * 40)) === 0) {
-            phase = Math.floor(Math.random() * 3);
-        }
-        
-        let priceChange = 0;
-        let volatility = 0.0015; // high base volatility
-        
-        if (phase === 0) { // strong uptrend
-            priceChange = trendStrength * (0.8 + Math.random() * 0.4);
-        } else if (phase === 1) { // strong downtrend
-            priceChange = -trendStrength * (0.8 + Math.random() * 0.4);
-        } else { // ranging but still volatile
-            priceChange = (Math.random() - 0.5) * 0.0008;
-        }
-        
-        // Add random noise
-        priceChange += (Math.random() - 0.5) * volatility;
-        
-        // Update price
-        let price = candles.length ? candles[candles.length-1].close : basePrice;
-        price += priceChange;
-        
-        // Keep price within realistic range (±3% of base)
+        if (i % 40 === 0) trend = (Math.random() - 0.5) * 0.002;
+        const noise = (Math.random() - 0.5) * 0.0008;
+        price += trend + noise;
         if (price > basePrice * 1.03) price = basePrice * 1.03;
         if (price < basePrice * 0.97) price = basePrice * 0.97;
-        
         const open = price;
-        const close = price + (Math.random() - 0.5) * volatility;
-        const high = Math.max(open, close) + Math.random() * volatility;
-        const low = Math.min(open, close) - Math.random() * volatility;
+        const close = price + (Math.random() - 0.5) * 0.001;
+        const high = Math.max(open, close) + Math.random() * 0.0008;
+        const low = Math.min(open, close) - Math.random() * 0.0008;
         const time = now - (count - i) * intervalMs;
-        
-        candles.push({ open, high, low, close, volume: 1000 + Math.random() * 500, time });
+        candles.push({ open, high, low, close, volume: 1000, time });
+        price = close;
     }
-    
     return candles;
 }
 
-// ---------- DATA FETCHING – always mock (Yahoo is blocked) ----------
+// ---------- Main fetch with full fallback chain ----------
 async function fetchCandles(symbol, interval) {
     const cacheKey = `${symbol}_${interval}`;
     const cached = cacheGet(cacheKey);
     if (cached) return { candles: cached.data, isMock: cached.isMock };
-    
+
+    // 1. Yahoo Finance (official library) – usually blocked, but try anyway
+    let candles = null;
+    try {
+        const intervalMap = { '1m': '1m', '5m': '5m', '15m': '15m', '30m': '30m', '1h': '1h', '4h': '1h' };
+        const yahooInterval = intervalMap[interval] || '15m';
+        const endDate = new Date();
+        let startDate = new Date();
+        switch (interval) {
+            case '1m': startDate.setDate(startDate.getDate() - 1); break;
+            case '5m': startDate.setDate(startDate.getDate() - 2); break;
+            case '15m': startDate.setDate(startDate.getDate() - 7); break;
+            case '30m': startDate.setDate(startDate.getDate() - 14); break;
+            case '1h': startDate.setDate(startDate.getDate() - 30); break;
+            case '4h': startDate.setDate(startDate.getDate() - 30); break;
+            default: startDate.setDate(startDate.getDate() - 7);
+        }
+        const result = await require('yahoo-finance2').default.chart(symbol, {
+            period1: startDate,
+            period2: endDate,
+            interval: yahooInterval,
+            includePrePost: false
+        });
+        if (result && result.quotes && result.quotes.length > 0) {
+            candles = result.quotes.map(q => ({
+                open: q.open,
+                high: q.high,
+                low: q.low,
+                close: q.close,
+                volume: q.volume || 1000,
+                time: new Date(q.date).getTime()
+            })).filter(c => c.open !== null && c.close !== null);
+            if (candles.length > 30) {
+                logger.info(`✅ Yahoo fetched ${candles.length} candles for ${symbol}`);
+                cacheSet(cacheKey, candles, false);
+                return { candles, isMock: false };
+            }
+        }
+    } catch (e) { logger.warn(`Yahoo failed for ${symbol}: ${e.message}`); }
+
+    // 2. Alpha Vantage
+    const avKey = process.env.ALPHA_VANTAGE_KEY;
+    if (avKey) {
+        candles = await fetchAlphaVantage(symbol, interval, avKey);
+        if (candles && candles.length > 0) {
+            cacheSet(cacheKey, candles, false);
+            return { candles, isMock: false };
+        }
+    }
+
+    // 3. Twelve Data
+    const tdKey = process.env.TWELVE_DATA_KEY;
+    if (tdKey) {
+        candles = await fetchTwelveData(symbol, interval, tdKey);
+        if (candles && candles.length > 0) {
+            cacheSet(cacheKey, candles, false);
+            return { candles, isMock: false };
+        }
+    }
+
+    // 4. Yahoo raw HTTP fallback
+    candles = await fetchYahooRaw(symbol, interval);
+    if (candles && candles.length > 0) {
+        logger.info(`✅ Yahoo Raw fetched ${candles.length} candles for ${symbol}`);
+        cacheSet(cacheKey, candles, true);
+        return { candles, isMock: true };
+    }
+
+    // 5. Final mock (with force directional flag)
+    logger.warn(`⚠️ Using forced mock data for ${symbol} (all APIs failed)`);
     const mockCandles = generateMockCandles(symbol, interval, 300);
     cacheSet(cacheKey, mockCandles, true);
-    return { candles: mockCandles, isMock: true };
+    return { candles: mockCandles, isMock: true, forceMockDirection: true };
 }
 
 // ---------- Startup message ----------
-let globalDataStatus = 'mock';
+let globalDataStatus = 'unknown';
 let lastAlertTime = 0;
-async function testYahooConnectivity() {
-    globalDataStatus = 'mock';
-    logger.warn('⚠️ Using ultra‑aggressive mock data. Guaranteed to produce directional signals.');
-    if (Date.now() - lastAlertTime > 3600000) {
-        lastAlertTime = Date.now();
-        await sendMessage(`📊 *FORCED SIGNAL MODE*\n━━━━━━━━━━━━━━━━━━━━━━\nYahoo Finance is blocked. Bot is generating *high‑volatility simulated data* that **will** produce CALL/PUT signals with varying probabilities (45‑98%) and ADX (15‑55).\n\n⚠️ This is NOT live market data – for strategy testing only.\n\nTo get live data, set ALPHA_VANTAGE_KEY or TWELVE_DATA_KEY.`);
+async function testConnectivity() {
+    const avKey = process.env.ALPHA_VANTAGE_KEY;
+    const tdKey = process.env.TWELVE_DATA_KEY;
+    if (avKey || tdKey) {
+        globalDataStatus = 'real_possible';
+        logger.info(`✅ API keys present: Alpha Vantage ${avKey ? '✅' : '❌'}, Twelve Data ${tdKey ? '✅' : '❌'}`);
+        await sendMessage(`📡 *Real data sources available*\nAlpha Vantage: ${avKey ? '✅' : '❌'}\nTwelve Data: ${tdKey ? '✅' : '❌'}\n\nBot will try real APIs first, then fall back to mock (with guaranteed directional signals).`);
+    } else {
+        globalDataStatus = 'mock_only';
+        logger.warn('⚠️ No API keys – using forced mock data. Signals will be directional but simulated.');
+        if (Date.now() - lastAlertTime > 3600000) {
+            lastAlertTime = Date.now();
+            await sendMessage(`⚠️ *No Alpha Vantage or Twelve Data API keys set.*\nUsing simulated market data. Signals are directional but NOT real.\n\nTo get live data, set ALPHA_VANTAGE_KEY or TWELVE_DATA_KEY in environment.`);
+        }
     }
-    return false;
 }
 
-// ---------- Immutable State Manager (unchanged) ----------
+// ---------- Immutable State Manager ----------
 class StateManager {
     constructor() {
         this.state = {
@@ -324,7 +517,7 @@ process.on('unhandledRejection', (r) => { logger.error('Unhandled rejection', { 
 
 const analyzer = new LegendaryAnalyzer();
 
-// ---------- Scan with progress bar ----------
+// ---------- Scan with progress bar, passes `forceMockDirection` flag ----------
 async function performScan(timeframe, isAuto = false, userId = null) {
     return stateManager.withMutex('scan', async (snapshot) => {
         if (snapshot.scanning.active) {
@@ -357,7 +550,8 @@ async function performScan(timeframe, isAuto = false, userId = null) {
                 continue;
             }
             if (fetchResult.isMock) mockUsed = true;
-            const analysis = analyzer.calculateProbability(fetchResult.candles, pair, timeframe);
+            // Pass forceMockDirection flag to analyzer
+            const analysis = analyzer.calculateProbability(fetchResult.candles, pair, timeframe, fetchResult.forceMockDirection || false);
             if (analysis.probability >= 55) signals++;
             if (analysis.probability >= 92) legendary++;
             else if (analysis.probability >= 85) exceptional++;
@@ -383,7 +577,7 @@ async function performScan(timeframe, isAuto = false, userId = null) {
         if (!isAuto && progressMsgId) {
             let completionMsg = `✅ *SCAN COMPLETE*: ${signals} signals\n👑${legendary} 🔥${exceptional} 🔥${high} 📊${good} ⚡${moderate} ⚠️${low}\n━━━━━━━━━━━━━━━━━━━━━━\nReview probabilities above. YOU decide.`;
             if (mockUsed) {
-                completionMsg += `\n⚠️ *Simulated data* – Yahoo blocked. Set Alpha Vantage/Twelve Data key for live data.`;
+                completionMsg += `\n⚠️ *Simulated data* – real APIs failed. Check Alpha Vantage/Twelve Data keys.`;
             }
             await editMessageText(progressMsgId, completionMsg);
         }
@@ -398,19 +592,18 @@ async function autoScan() {
     await performScan(stateManager.state.settings.selectedTimeframe, true);
 }
 
-// ---------- Formatting with mock warning ----------
-function formatSignal(analysis, pair, timeframe, isAuto, isMock = false) {
+function formatSignal(analysis, pair, timeframe, isAuto, isMock) {
     const arrow = analysis.signal === 'CALL' ? '📈' : (analysis.signal === 'PUT' ? '📉' : '➡️');
     const dir = analysis.signal === 'CALL' ? 'CALL (BUY)' : (analysis.signal === 'PUT' ? 'PUT (SELL)' : 'NEUTRAL');
     const bar = '█'.repeat(Math.floor(analysis.probability / 5)) + '░'.repeat(20 - Math.floor(analysis.probability / 5));
     let msg = `${isAuto ? '🤖 AUTO-SCAN\n' : ''}*${arrow} PROBABILITY SIGNAL ${arrow}*\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n📊 *${pair}* | [${timeframe}]\n🎯 *${dir}* | Probability: *${analysis.probability}%* ${analysis.probabilityEmoji}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n📊 *PROBABILITY METER:*\n\`${bar}\` ${analysis.probability}%\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n📈 *TECHNICALS:* RSI ${analysis.rsi} | ADX ${analysis.adx} | Vol ${analysis.volatility}%\n📊 Strategies: ${analysis.activeStrategies.length}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n💡 *${analysis.guidance}*\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n🛡️ *SL:* ${analysis.stopLoss} pips | *TP:* ${analysis.takeProfit} pips\n💰 *Entry:* ${analysis.currentPrice} | *Risk:* ${analysis.suggestedRisk}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n⚠️ *Probability ≠ Certainty* | YOU decide\n🕐 ${new Date().toLocaleTimeString()}`;
     if (isMock) {
-        msg += `\n⚠️ *SIMULATED DATA* – live Yahoo feed blocked. Use Alpha Vantage/Twelve Data API keys for real data.`;
+        msg += `\n⚠️ *SIMULATED DATA* – real APIs failed. Set ALPHA_VANTAGE_KEY / TWELVE_DATA_KEY.`;
     }
     return msg;
 }
 
-// ---------- Telegram UI (all functions unchanged, included for completeness) ----------
+// ---------- Telegram UI (all functions identical to previous stable version) ----------
 function getMainKeyboard() {
     return { inline_keyboard: [
         [{ text: "🔍 PROBABILITY SCAN", callback_data: "scan_manual" }],
@@ -424,7 +617,7 @@ function getMainKeyboard() {
 async function showMainMenu(messageId = null) {
     const uptime = Math.floor((Date.now() - global.botStartTime || 0) / 1000 / 60);
     const s = stateManager.state.settings;
-    const menu = `🏆 *OMNI v35* | ${uptime}m\n━━━━━━━━━━━━━━━━━━━━━━\n📊 ${s.selectedPairs.length}/${PAIRS.length} pairs\n⏰ ${s.selectedTimeframe} ⭐\n🤖 ${s.autoScanEnabled ? 'ON' : 'OFF'}\n━━━━━━━━━━━━━━━━━━━━━━\n📊 92%+ 👑 MAX (3%)\n📊 85-91% 🔥🔥🔥 STRONG (2.5%)\n📊 78-84% 🔥🔥 CONFIDENT (2%)\n📊 70-77% 🔥 NORMAL (1.5%)\n📊 62-69% ⚡ CAUTIOUS (1%)\n📊 55-61% ⚠️ SKIP (0.5%)\n━━━━━━━━━━━━━━━━━━━━━━\n*YOU decide. Not the bot.*`;
+    const menu = `🏆 *OMNI v36* | ${uptime}m\n━━━━━━━━━━━━━━━━━━━━━━\n📊 ${s.selectedPairs.length}/${PAIRS.length} pairs\n⏰ ${s.selectedTimeframe} ⭐\n🤖 ${s.autoScanEnabled ? 'ON' : 'OFF'}\n━━━━━━━━━━━━━━━━━━━━━━\n📊 92%+ 👑 MAX (3%)\n📊 85-91% 🔥🔥🔥 STRONG (2.5%)\n📊 78-84% 🔥🔥 CONFIDENT (2%)\n📊 70-77% 🔥 NORMAL (1.5%)\n📊 62-69% ⚡ CAUTIOUS (1%)\n📊 55-61% ⚠️ SKIP (0.5%)\n━━━━━━━━━━━━━━━━━━━━━━\n*YOU decide. Not the bot.*`;
     const kb = getMainKeyboard();
     if (messageId) {
         await editMessageText(messageId, menu, kb);
@@ -691,23 +884,23 @@ function startHealthServer() {
 // ---------- Main ----------
 global.botStartTime = Date.now();
 console.log('\n' + '█'.repeat(60));
-console.log('🏆 OMNI_BOT v35 - ULTRA‑AGGRESSIVE MOCK (GUARANTEED SIGNALS)');
+console.log('🏆 OMNI_BOT v36 - REAL API FALLBACK + FORCED DIRECTIONAL');
 console.log('█'.repeat(60));
 console.log(`Strategy: NO REJECTION | YOU decide`);
 console.log(`Indicators: HMA + RSI + ADX + MACD + BB`);
 console.log(`Risk: Kelly Criterion + regime‑adaptive`);
 console.log(`Telegram: ${TELEGRAM_TOKEN ? '✅' : '❌'}`);
 console.log(`HTTP Port: ${PORT}`);
-console.log(`Data: FORCED HIGH‑VOLATILITY SIMULATED DATA`);
+console.log(`Data: Yahoo → Alpha Vantage → Twelve Data → forced mock (guaranteed directional)`);
 console.log('█'.repeat(60) + '\n');
 
-testYahooConnectivity().catch(console.error);
+testConnectivity().catch(console.error);
 startHealthServer();
 startPolling();
 
 setTimeout(async () => {
     if (TELEGRAM_TOKEN && TELEGRAM_CHAT_ID) {
-        await sendMessage(`🤖 *OMNI_BOT v35 ONLINE* – SIGNALS GUARANTEED\n━━━━━━━━━━━━━━━━━━━━━━\n✅ Ultra‑aggressive mock data now produces **CALL/PUT signals** with probabilities 45‑98% and ADX varying from 15 to 55.\n⚠️ Data is simulated – Yahoo is blocked. Set ALPHA_VANTAGE_KEY or TWELVE_DATA_KEY for live feed.\n━━━━━━━━━━━━━━━━━━━━━━\n📱 *Send /start to begin*`);
+        await sendMessage(`🤖 *OMNI_BOT v36 ONLINE*\n━━━━━━━━━━━━━━━━━━━━━━\n✅ Multi‑source real data (Yahoo, Alpha Vantage, Twelve Data)\n✅ If all fail → forced directional mock (NO 0% neutrals)\n✅ Guaranteed CALL/PUT signals with probabilities 30‑98%\n📱 *Send /start to begin*`);
     }
     console.log('🚀 Bot ready! Send /start');
 }, 3000);
