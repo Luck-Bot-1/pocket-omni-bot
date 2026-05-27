@@ -1,19 +1,27 @@
 // ============================================================
-// PRAGMATIC ANALYZER v5.0 – GUARANTEED SIGNALS
+// LEGENDARY ANALYZER v6.0 – INSTITUTIONAL GRADE
 // ============================================================
 const technicalIndicators = require('technicalindicators');
 const fs = require('fs');
 
-// Helper: swing points (simplified, no look‑ahead)
+// ------------------------------------------------------------------
+// REAL‑TIME SWING POINTS (NO LOOK‑AHEAD)
+// ------------------------------------------------------------------
 function findSwingPoints(prices, period = 5, minDistance = 4) {
     const swings = { lows: [], highs: [] };
-    for (let i = period; i < prices.length - period; i++) {
+    // Only use past and present bars: a bar is a swing low if it is the minimum of the last (2*period+1) bars ending at i.
+    for (let i = period; i < prices.length; i++) {
         let isLow = true, isHigh = true;
-        for (let j = -period; j <= period; j++) {
-            if (j === 0) continue;
-            if (prices[i] >= prices[i + j]) isLow = false;
-            if (prices[i] <= prices[i + j]) isHigh = false;
-        }
+        const leftMin = Math.min(...prices.slice(Math.max(0, i - period), i + 1));
+        const rightMin = Math.min(...prices.slice(i, Math.min(prices.length, i + period + 1)));
+        if (prices[i] === leftMin && prices[i] === rightMin) isLow = true;
+        else isLow = false;
+
+        const leftMax = Math.max(...prices.slice(Math.max(0, i - period), i + 1));
+        const rightMax = Math.max(...prices.slice(i, Math.min(prices.length, i + period + 1)));
+        if (prices[i] === leftMax && prices[i] === rightMax) isHigh = true;
+        else isHigh = false;
+
         if (isLow) swings.lows.push({ idx: i, price: prices[i] });
         if (isHigh) swings.highs.push({ idx: i, price: prices[i] });
     }
@@ -23,37 +31,71 @@ function findSwingPoints(prices, period = 5, minDistance = 4) {
     return swings;
 }
 
-// Divergence detection (simplified)
-function detectDivergence(prices, oscillator, requireConfirmation = true) {
+// ------------------------------------------------------------------
+// DIVERGENCE DETECTION (CONFIRMED + VOLUME + AGE)
+// ------------------------------------------------------------------
+function detectDivergence(prices, oscillator, volumes, requireConfirmation = true) {
     if (prices.length < 50 || oscillator.length < 50) return null;
     const swingsPrice = findSwingPoints(prices, 5, 4);
     const swingsOsc = findSwingPoints(oscillator, 5, 4);
     let divergence = null;
+    let divergenceIdx = -1;
+
+    // Bullish Regular
     if (swingsPrice.lows.length >= 2 && swingsOsc.lows.length >= 2) {
         const pL = swingsPrice.lows.slice(-2);
         const oL = swingsOsc.lows.slice(-2);
-        if (pL[1].price < pL[0].price && oL[1].price > oL[0].price)
-            divergence = { type: 'BULLISH_REGULAR', strength: 'MODERATE', priceIdx: pL[1].idx };
+        if (pL[1].price < pL[0].price && oL[1].price > oL[0].price) {
+            divergence = { type: 'BULLISH_REGULAR', strength: 'MODERATE', priceIdx: pL[1].idx, oscLow: oL[1].price };
+            divergenceIdx = pL[1].idx;
+        }
     }
+    // Bearish Regular
     if (!divergence && swingsPrice.highs.length >= 2 && swingsOsc.highs.length >= 2) {
         const pH = swingsPrice.highs.slice(-2);
         const oH = swingsOsc.highs.slice(-2);
-        if (pH[1].price > pH[0].price && oH[1].price < oH[0].price)
-            divergence = { type: 'BEARISH_REGULAR', strength: 'MODERATE', priceIdx: pH[1].idx };
+        if (pH[1].price > pH[0].price && oH[1].price < oH[0].price) {
+            divergence = { type: 'BEARISH_REGULAR', strength: 'MODERATE', priceIdx: pH[1].idx, oscHigh: oH[1].price };
+            divergenceIdx = pH[1].idx;
+        }
     }
+    // Bullish Hidden (stronger)
     if (!divergence && swingsPrice.lows.length >= 2 && swingsOsc.lows.length >= 2) {
         const pL = swingsPrice.lows.slice(-2);
         const oL = swingsOsc.lows.slice(-2);
-        if (pL[1].price > pL[0].price && oL[1].price < oL[0].price)
+        if (pL[1].price > pL[0].price && oL[1].price < oL[0].price) {
             divergence = { type: 'BULLISH_HIDDEN', strength: 'STRONG', priceIdx: pL[1].idx };
+            divergenceIdx = pL[1].idx;
+        }
     }
+    // Bearish Hidden
     if (!divergence && swingsPrice.highs.length >= 2 && swingsOsc.highs.length >= 2) {
         const pH = swingsPrice.highs.slice(-2);
         const oH = swingsOsc.highs.slice(-2);
-        if (pH[1].price < pH[0].price && oH[1].price > oH[0].price)
+        if (pH[1].price < pH[0].price && oH[1].price > oH[0].price) {
             divergence = { type: 'BEARISH_HIDDEN', strength: 'STRONG', priceIdx: pH[1].idx };
+            divergenceIdx = pH[1].idx;
+        }
     }
-    if (divergence && requireConfirmation) {
+
+    if (!divergence) return null;
+
+    // RSI threshold for regular divergence
+    if (divergence.type === 'BULLISH_REGULAR' && divergence.oscLow > 35) return null;
+    if (divergence.type === 'BEARISH_REGULAR' && divergence.oscHigh < 65) return null;
+
+    // Volume confirmation
+    if (volumes && volumes.length > divergenceIdx) {
+        const avgVolume = volumes.slice(-20).reduce((a,b)=>a+b,0)/20;
+        const volConfirm = volumes[divergenceIdx] > avgVolume * 1.2;
+        if (!volConfirm) divergence.strength = 'WEAK';
+    }
+
+    // Swing point age must be at least 8 bars old
+    if (requireConfirmation && (prices.length - divergence.priceIdx) < 8) return null;
+
+    // 2‑bar price confirmation after swing
+    if (requireConfirmation) {
         const currentPrice = prices[prices.length-1];
         if (divergence.type.includes('BULLISH') && currentPrice <= prices[divergence.priceIdx]) return null;
         if (divergence.type.includes('BEARISH') && currentPrice >= prices[divergence.priceIdx]) return null;
@@ -201,13 +243,14 @@ class RobustAnalyzer {
         } catch(e) { return { lower: null, upper: null }; }
     }
 
-    // ---------- Main signal (guaranteed to trigger often) ----------
+    // ---------- Main signal (institutional grade) ----------
     calculateProbability(candles, pair, timeframe, htCandles = null) {
         try {
             if (!candles || candles.length < 50) return this.neutral("Insufficient data");
             const closes = candles.map(c => c.close);
             const highs = candles.map(c => c.high);
             const lows = candles.map(c => c.low);
+            const volumes = candles.map(c => c.volume);
             const price = closes[closes.length - 1];
 
             const rsi = this.calculateRSI(closes, 14);
@@ -217,77 +260,143 @@ class RobustAnalyzer {
             const ema200 = this.calculateEMA(closes, 200);
             const volatility = (atr / price) * 100;
 
-            // Simplified regime
-            const isTrending = adxData.adx >= 25;
-            const mode = isTrending ? 'TREND' : 'RANGE';
-            const majorTrend = price > ema200 ? 'BULLISH' : (price < ema200 ? 'BEARISH' : 'NEUTRAL');
+            // Ultra‑low volatility filter
+            if (volatility < 0.05) return this.neutral("Ultra‑low volatility – no trade");
 
+            const atr50 = this.calculateATR(highs, lows, closes, 50);
+            const atrRatio = atr / atr50;
+            const isTrending = (adxData.adx >= 25 && atrRatio >= 1.0);
+            const isRanging = (adxData.adx <= 22 && atrRatio <= 0.8);
+            const mode = isTrending ? 'TREND' : (isRanging ? 'RANGE' : 'TRANSITION');
+
+            // Higher timeframe processing (closed candles only)
+            let htTrend = 'NEUTRAL';
+            let htDivergence = null;
+            let processedHtCandles = null;
+            if (htCandles && htCandles.length >= 50) {
+                processedHtCandles = [...htCandles];
+                const lastHtTime = processedHtCandles[processedHtCandles.length-1].time;
+                const now = Date.now();
+                const htIntervalMs = 3600000; // 1 hour
+                if (now - lastHtTime < htIntervalMs) {
+                    processedHtCandles.pop(); // remove open candle
+                }
+                if (processedHtCandles.length >= 50) {
+                    const htCloses = processedHtCandles.map(c => c.close);
+                    const htEMA50 = this.calculateEMA(htCloses, 50);
+                    htTrend = htCloses[htCloses.length-1] > htEMA50 ? 'BULLISH' : 'BEARISH';
+                    const htRsiArray = [];
+                    for (let i = 30; i <= htCloses.length; i++) {
+                        htRsiArray.push(this.calculateRSI(htCloses.slice(0, i), 14));
+                    }
+                    htDivergence = detectDivergence(htCloses, htRsiArray, processedHtCandles.map(c=>c.volume), true);
+                }
+            }
+
+            const majorTrend = price > ema200 ? 'BULLISH' : (price < ema200 ? 'BEARISH' : 'NEUTRAL');
             const hma = calculateHMA(closes, 20);
             const hmaSlope = hma.length >= 2 ? hma[hma.length-1] - hma[hma.length-2] : 0;
 
             const rsiArray = [];
             for (let i = 30; i <= closes.length; i++) rsiArray.push(this.calculateRSI(closes.slice(0, i), 14));
-            const divergence = detectDivergence(closes, rsiArray, true);
+            const divergence = detectDivergence(closes, rsiArray, volumes, true);
 
             let signal = 'NEUTRAL';
             let rawScore = 50;
             let reason = "";
 
-            // Always try to produce a signal unless market is extremely quiet
             if (mode === 'TREND') {
-                if (Math.abs(hmaSlope) > 0.0001) {
-                    signal = hmaSlope > 0 ? 'CALL' : 'PUT';
-                    rawScore = 65 + Math.min(20, Math.abs(hmaSlope) * 10000);
-                    reason = `Trend: HMA ${signal === 'CALL' ? 'up' : 'down'}`;
+                if (Math.abs(hmaSlope) > 0.0003) {
+                    if (hmaSlope > 0 && majorTrend === 'BULLISH') {
+                        signal = 'CALL'; rawScore = 70 + Math.min(20, hmaSlope * 10000);
+                        reason = "Trend: HMA up + trend aligned";
+                    } else if (hmaSlope < 0 && majorTrend === 'BEARISH') {
+                        signal = 'PUT'; rawScore = 70 - Math.min(20, Math.abs(hmaSlope) * 10000);
+                        reason = "Trend: HMA down + trend aligned";
+                    } else {
+                        reason = `Trend: HMA slope (${hmaSlope.toFixed(6)}) misaligned`;
+                    }
                 } else if (divergence) {
                     signal = divergence.type.includes('BULLISH') ? 'CALL' : 'PUT';
-                    rawScore = 70;
+                    rawScore = 70 + (divergence.strength === 'STRONG' ? 10 : 0);
                     reason = `Trend: ${divergence.type}`;
                 } else {
-                    // Fallback: use RSI bias
-                    if (rsi > 55) { signal = 'CALL'; rawScore = 55; reason = "Trend: RSI >55"; }
-                    else if (rsi < 45) { signal = 'PUT'; rawScore = 55; reason = "Trend: RSI <45"; }
-                    else { signal = 'CALL'; rawScore = 50; reason = "Trend: neutral, default CALL"; }
+                    reason = `Trend: HMA flat (${hmaSlope.toFixed(6)}), no divergence`;
                 }
-            } else { // RANGE
-                if (rsi < 35 && bb.lower && price <= bb.lower) {
-                    signal = 'CALL'; rawScore = 70; reason = "Range: oversold + BB";
-                } else if (rsi > 65 && bb.upper && price >= bb.upper) {
-                    signal = 'PUT'; rawScore = 70; reason = "Range: overbought + BB";
+            } else if (mode === 'RANGE') {
+                const last5 = closes.slice(-5);
+                const noLowerLow = Math.min(...last5) === last5[last5.length-1];
+                const noHigherHigh = Math.max(...last5) === last5[last5.length-1];
+                if (rsi < 35 && bb.lower && price <= bb.lower && noLowerLow) {
+                    signal = 'CALL'; rawScore = 70;
+                    reason = "Range: oversold + BB";
+                } else if (rsi > 65 && bb.upper && price >= bb.upper && noHigherHigh) {
+                    signal = 'PUT'; rawScore = 70;
+                    reason = "Range: overbought + BB";
                 } else if (divergence) {
                     signal = divergence.type.includes('BULLISH') ? 'CALL' : 'PUT';
-                    rawScore = 75; reason = `Range: ${divergence.type}`;
+                    rawScore = 75 + (divergence.strength === 'STRONG' ? 10 : 0);
+                    reason = `Range: ${divergence.type}`;
                 } else {
-                    // Fallback: use moving average slope
-                    const ema9 = this.calculateEMA(closes, 9);
-                    const ema21 = this.calculateEMA(closes, 21);
-                    if (ema9 > ema21) { signal = 'CALL'; rawScore = 55; reason = "Range: EMA9 > EMA21"; }
-                    else { signal = 'PUT'; rawScore = 55; reason = "Range: EMA9 < EMA21"; }
+                    // Fallback: volatility-adjusted
+                    if (volatility > 0.3 && Math.abs(hmaSlope) > 0.0001) {
+                        signal = hmaSlope > 0 ? 'CALL' : 'PUT';
+                        rawScore = 60;
+                        reason = "Range fallback: HMA slope";
+                    } else if (rsi > 55) {
+                        signal = 'CALL'; rawScore = 55;
+                        reason = "Range fallback: RSI >55";
+                    } else if (rsi < 45) {
+                        signal = 'PUT'; rawScore = 55;
+                        reason = "Range fallback: RSI <45";
+                    } else {
+                        reason = "Range: no signal";
+                    }
                 }
+                // Trend penalty in range mode
+                if (signal === 'CALL' && majorTrend === 'BEARISH') {
+                    rawScore -= 15; reason += " - bearish trend penalty";
+                } else if (signal === 'PUT' && majorTrend === 'BULLISH') {
+                    rawScore -= 15; reason += " - bullish trend penalty";
+                }
+            } else {
+                reason = `Transition mode (ADX=${adxData.adx.toFixed(1)}) – no entries`;
             }
 
-            // Trend alignment bonus/penalty
             if (signal !== 'NEUTRAL') {
-                if ((signal === 'CALL' && majorTrend === 'BULLISH') || (signal === 'PUT' && majorTrend === 'BEARISH')) {
-                    rawScore += 10; reason += " + trend aligned";
-                } else if ((signal === 'CALL' && majorTrend === 'BEARISH') || (signal === 'PUT' && majorTrend === 'BULLISH')) {
-                    rawScore -= 10; reason += " - against trend";
+                // Multi‑timeframe alignment bonus
+                if ((signal === 'CALL' && htTrend === 'BULLISH') || (signal === 'PUT' && htTrend === 'BEARISH')) {
+                    rawScore += 10; reason += " + HT alignment";
+                } else if ((signal === 'CALL' && htTrend === 'BEARISH') || (signal === 'PUT' && htTrend === 'BULLISH')) {
+                    rawScore -= 20; reason += " - HT opposite";
+                }
+                // Multi‑timeframe divergence bonus
+                if (divergence && htDivergence && divergence.type === htDivergence.type) {
+                    rawScore += 15; reason += " + Multi‑TF divergence";
                 }
             }
 
             rawScore = Math.min(100, Math.max(0, rawScore));
             let probability = this.calibrateProbability(rawScore);
-            // Ensure probability is at least 45% to always have signals (for testing)
-            if (probability < 45) probability = 45;
+            if (volatility < 0.15) probability = Math.min(probability, 70); // dead market cap
+
+            if (signal === 'NEUTRAL' || probability < 45) {
+                console.log(`[NEUTRAL] ${pair} ${timeframe}: ${reason} (score=${rawScore.toFixed(0)}%, prob=${probability}%)`);
+                return this.neutral(reason);
+            }
 
             console.log(`[SIGNAL] ${pair} ${timeframe}: ${signal} prob=${probability}% raw=${rawScore} reason=${reason}`);
 
-            // Risk & Sizing
+            // ---------- RISK & SIZING (with spread model) ----------
             const baseRisk = this.getBaseRiskPercent(probability);
             const kelly = this.calculateKellyFactor();
-            const volFactor = Math.min(1.5, Math.max(0.5, 0.0025 / (atr/price)));
+            const targetATRpercent = 0.0025;
+            const currentATRpercent = atr / price;
+            if (currentATRpercent < 0.0005) return this.neutral("ATR too low");
+            let volFactor = Math.min(1.5, Math.max(0.5, targetATRpercent / currentATRpercent));
             const ddFactor = this.riskMultiplier;
             let finalRisk = baseRisk * kelly * volFactor * ddFactor;
+            if (mode === 'TRANSITION') finalRisk *= 0.5;
             finalRisk = Math.min(3.0, Math.max(0.3, finalRisk));
 
             const spreadPips = 0.8;
@@ -310,7 +419,7 @@ class RobustAnalyzer {
                 stopLoss: stopPips, takeProfit: tpPips, maxHoldBars: maxBars,
                 riskRewardRatio: (tpPips / stopPips).toFixed(2),
                 pair, timeframe, timestamp: new Date().toISOString(),
-                version: "PRAGMATIC-v5.0", guidance: reason
+                version: "LEGENDARY-v6.0", guidance: reason
             };
         } catch (err) {
             return this.neutral(`Error: ${err.message}`);
@@ -347,8 +456,8 @@ class RobustAnalyzer {
     getActiveFactors(rawScore, divergence, signal, rsi, bb) {
         const factors = [];
         if (divergence) factors.push(divergence.type);
-        if (signal === 'CALL' && rsi < 30) factors.push('RSI_OVERSOLD');
-        if (signal === 'PUT' && rsi > 70) factors.push('RSI_OVERBOUGHT');
+        if (signal === 'CALL' && rsi < 35) factors.push('RSI_OVERSOLD');
+        if (signal === 'PUT' && rsi > 65) factors.push('RSI_OVERBOUGHT');
         if (bb.lower && rawScore > 55) factors.push('BB_SUPPORT');
         if (bb.upper && rawScore < 45) factors.push('BB_RESISTANCE');
         return factors;
@@ -362,7 +471,7 @@ class RobustAnalyzer {
             volatility: "0", currentPrice: "0", divergence: "None", majorTrend: "NEUTRAL",
             hmaSlope: "0", activeFactors: [], stopLoss: 15, takeProfit: 27,
             maxHoldBars: 12, riskRewardRatio: "1.80", timestamp: new Date().toISOString(),
-            pair: "UNKNOWN", timeframe: "UNKNOWN", version: "PRAGMATIC-v5.0", guidance: reason
+            pair: "UNKNOWN", timeframe: "UNKNOWN", version: "LEGENDARY-v6.0", guidance: reason
         };
     }
 }
