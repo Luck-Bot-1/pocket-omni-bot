@@ -1,5 +1,5 @@
 // ============================================================
-// ULTIMATE BOT v13.0 – REAL STRATEGY, NO DIAGNOSTIC MODE
+// ULTIMATE BOT v14.0 – REAL DATA, TEST COMMAND, 40% THRESHOLD
 // ============================================================
 
 if (!globalThis.fetch) {
@@ -9,27 +9,6 @@ if (!globalThis.fetch) {
     globalThis.AbortController = AbortController;
 }
 
-async function testDataFetch(messageId = null) {
-    await sendTypingAction();
-    await sendMessage("📡 *Testing Yahoo Finance data fetch for EUR/USD 15m...*");
-    
-    const symbol = 'EURUSD=X';
-    const timeframe = '15m';
-    const fetchResult = await fetchCandles(symbol, timeframe);
-    
-    if (!fetchResult || !fetchResult.candles) {
-        await sendMessage("❌ *No data received.*\nPossible reasons:\n- Network issue\n- Yahoo API changed\n- Symbol mapping error\n- Circuit breaker open");
-        return;
-    }
-    
-    const lastCandles = fetchResult.candles.slice(-3);
-    let candleInfo = lastCandles.map(c => 
-        `🕒 ${new Date(c.time).toLocaleTimeString()} | O:${c.open.toFixed(5)} H:${c.high.toFixed(5)} L:${c.low.toFixed(5)} C:${c.close.toFixed(5)}`
-    ).join('\n');
-    
-    const msg = `📊 *Yahoo Data Test*\n━━━━━━━━━━━━━━━━━━━━━━\n✅ *${fetchResult.candles.length} candles* fetched for ${symbol}\n📉 *Data source:* ${fetchResult.isMock ? '⚠️ MOCK (simulated)' : '✅ REAL Yahoo Finance'}\n━━━━━━━━━━━━━━━━━━━━━━\n*Last 3 candles:*\n${candleInfo}\n━━━━━━━━━━━━━━━━━━━━━━\n*If data is real, your bot is working.*\nIf no signals appear, market conditions don't meet entry criteria.`;
-    await sendMessage(msg);
-}
 const { RobustAnalyzer } = require('./analyzer.js');
 const http = require('http');
 const fs = require('fs');
@@ -235,11 +214,11 @@ class CircuitBreaker {
         this.failures++;
         if (this.failures >= this.failureThreshold) {
             this.isOpen = true;
-            logger.warn(`Circuit breaker OPEN for Yahoo API`);
+            console.log(`⚠️ Circuit breaker OPEN for Yahoo API`);
             setTimeout(() => {
                 this.isOpen = false;
                 this.failures = 0;
-                logger.info('Circuit breaker CLOSED');
+                console.log(`✅ Circuit breaker CLOSED`);
             }, this.timeoutMs);
         }
     }
@@ -324,9 +303,13 @@ function generateMockCandles(symbol, interval, count = 100) {
 }
 
 async function fetchCandles(symbol, interval) {
+    console.log(`[FETCH] Trying ${symbol} ${interval}...`);
     const cacheKey = `${symbol}_${interval}`;
     const cached = cacheGet(cacheKey);
-    if (cached) return { candles: cached, isMock: false };
+    if (cached) {
+        console.log(`[FETCH] Cache hit for ${symbol}`);
+        return { candles: cached, isMock: false };
+    }
 
     let candles = null;
     if (yahooCircuitBreaker.canProceed()) {
@@ -400,10 +383,10 @@ async function sendTypingAction() {
     }).catch(() => {});
 }
 
-// ------------------------- Core Strategy (Real Analyzer) -------------------------
+// ------------------------- Core Strategy -------------------------
 const analyzer = new RobustAnalyzer(10000);
 
-// ------------------------- Scan Function -------------------------
+// ------------------------- Scan Function (threshold lowered to 40%) -------------------------
 async function performScan(timeframe, isAuto = false) {
     return stateManager.withMutex(async (snapshot) => {
         if (snapshot.scanning.active) {
@@ -444,8 +427,8 @@ async function performScan(timeframe, isAuto = false) {
                     if (htResult) htCandles = htResult.candles;
                 }
                 const analysis = analyzer.calculateProbability(fetchResult.candles, pair, timeframe, htCandles);
-                console.log(`[ANALYSIS] ${pair} ${timeframe}: signal=${analysis.signal} prob=${analysis.probability}% rawScore=${analysis.rawScore} reason=${analysis.guidance || 'none'}`);
-                if (analysis.probability >= 55 && analysis.signal !== 'NEUTRAL') {
+                // TEMPORARY LOWERED THRESHOLD TO 40%
+                if (analysis.probability >= 40 && analysis.signal !== 'NEUTRAL') {
                     signals++;
                     const signalText = formatSignal(analysis, pair, timeframe, isAuto, fetchResult.isMock);
                     const actionKeyboard = {
@@ -493,21 +476,21 @@ async function autoScan() {
     await performScan(stateManager.state.settings.selectedTimeframe, true);
 }
 
-// ------------------------- UI Components (all necessary menus) -------------------------
+// ------------------------- UI Components -------------------------
 function getMainKeyboard() {
     return { inline_keyboard: [
         [{ text: "🔍 PROBABILITY SCAN", callback_data: "scan_manual" }],
         [{ text: "🎯 SELECT PAIRS", callback_data: "menu_pairs" }, { text: "⏰ TIMEFRAME", callback_data: "menu_timeframe" }],
         [{ text: "🤖 AUTO-SCAN", callback_data: "menu_autoscan" }, { text: "📊 HISTORY", callback_data: "menu_history" }],
         [{ text: "📈 STATUS", callback_data: "menu_status" }, { text: "📋 GUIDE", callback_data: "menu_guide" }],
-        [{ text: "📊 STATS", callback_data: "menu_stats" }, { text: "🧪 TEST", callback_data: "test_signal" }, { text: "💪 FORCE", callback_data: "force_signal" }],
+        [{ text: "📊 STATS", callback_data: "menu_stats" }, { text: "🧪 TEST", callback_data: "test_signal" }, { text: "📡 TEST DATA", callback_data: "test_data" }, { text: "💪 FORCE", callback_data: "force_signal" }],
         [{ text: "❓ HELP", callback_data: "menu_help" }]
     ] };
 }
 
 async function showMainMenu(messageId = null) {
     const s = stateManager.state.settings;
-    const menu = `🏆 *INSTITUTIONAL BOT v13* – REAL STRATEGY\n━━━━━━━━━━━━━━━━━━━━━━\n📊 ${s.selectedPairs.length}/${PAIRS.length} pairs\n⏰ ${s.selectedTimeframe} ⭐\n🤖 ${s.autoScanEnabled ? 'ON' : 'OFF'}\n━━━━━━━━━━━━━━━━━━━━━━\n📊 85%+ → STRONG (2.5% risk)\n📊 75-84% → CONFIDENT (2.0%)\n📊 65-74% → NORMAL (1.5%)\n📊 55-64% → CAUTIOUS (0.8%)\n━━━━━━━━━━━━━━━━━━━━━━\n*Real indicators active*`;
+    const menu = `🏆 *INSTITUTIONAL BOT v14* – REAL STRATEGY\n━━━━━━━━━━━━━━━━━━━━━━\n📊 ${s.selectedPairs.length}/${PAIRS.length} pairs\n⏰ ${s.selectedTimeframe} ⭐\n🤖 ${s.autoScanEnabled ? 'ON' : 'OFF'}\n━━━━━━━━━━━━━━━━━━━━━━\n📊 85%+ → STRONG (2.5% risk)\n📊 75-84% → CONFIDENT (2.0%)\n📊 65-74% → NORMAL (1.5%)\n📊 55-64% → CAUTIOUS (0.8%)\n━━━━━━━━━━━━━━━━━━━━━━\n*Threshold temporarily 40% for testing*`;
     const kb = getMainKeyboard();
     if (messageId) await editMessageText(messageId, menu, kb);
     else await sendMessage(menu, kb);
@@ -590,7 +573,7 @@ async function showGuide(messageId = null) {
 }
 
 async function showHelp(messageId = null) {
-    const msg = `*📋 HELP*\n━━━━━━━━━━━━━━━━━━━━━━\n*COMMANDS:*\n/start - Menu\n/scan - Manual scan\n/status - Status\n/stats - Strategy performance\n/forcesignal - Force test signal\n/help - Help\n━━━━━━━━━━━━━━━━━━━━━━\n*HOW TO USE:*\n1. Bot shows EVERY signal with %\n2. After a trade, click WIN/LOSS to calibrate\n3. Higher % = Larger position\n━━━━━━━━━━━━━━━━━━━━━━\n*YOU are the decision maker*`;
+    const msg = `*📋 HELP*\n━━━━━━━━━━━━━━━━━━━━━━\n*COMMANDS:*\n/start - Menu\n/scan - Manual scan\n/status - Status\n/stats - Strategy performance\n/testdata - Test Yahoo data fetch\n/forcesignal - Force test signal\n/help - Help\n━━━━━━━━━━━━━━━━━━━━━━\n*HOW TO USE:*\n1. Bot shows EVERY signal with %\n2. After a trade, click WIN/LOSS to calibrate\n3. Higher % = Larger position\n━━━━━━━━━━━━━━━━━━━━━━\n*YOU are the decision maker*`;
     const keyboard = { inline_keyboard: [[{ text: "🔙 BACK TO MENU", callback_data: "menu_main" }]] };
     if (messageId) await editMessageText(messageId, msg, keyboard);
     else await sendMessage(msg, keyboard);
@@ -617,7 +600,7 @@ async function showStats(messageId = null) {
     else await sendMessage(msg, keyboard);
 }
 
-// ------------------------- Test & Force Signal -------------------------
+// ------------------------- Test & Force Signals -------------------------
 async function testSignal(messageId = null) {
     await sendTypingAction();
     await sendMessage("🧪 *Testing real strategy on EUR/USD 15m*");
@@ -631,6 +614,28 @@ async function testSignal(messageId = null) {
     const analysis = analyzer.calculateProbability(fetchResult.candles, "EUR/USD", timeframe, null);
     const resultMsg = `🧪 *TEST RESULT*\n━━━━━━━━━━━━━━━━━━━━━━\n📊 Signal: ${analysis.signal}\n🎯 Probability: ${analysis.probability}%\n📈 RSI: ${analysis.rsi} | ADX: ${analysis.adx}\n🌀 Divergence: ${analysis.divergence}\n📊 Factors: ${analysis.activeFactors.join(', ')}\n━━━━━━━━━━━━━━━━━━━━━━\nGuidance: ${analysis.guidance}\n\nIf probability <55%, market conditions are not favourable.`;
     await sendMessage(resultMsg);
+}
+
+async function testDataFetch(messageId = null) {
+    await sendTypingAction();
+    await sendMessage("📡 *Testing Yahoo Finance data fetch for EUR/USD 15m...*");
+    
+    const symbol = 'EURUSD=X';
+    const timeframe = '15m';
+    const fetchResult = await fetchCandles(symbol, timeframe);
+    
+    if (!fetchResult || !fetchResult.candles) {
+        await sendMessage("❌ *No data received.*\nPossible reasons:\n- Network issue\n- Yahoo API changed\n- Symbol mapping error\n- Circuit breaker open");
+        return;
+    }
+    
+    const lastCandles = fetchResult.candles.slice(-3);
+    let candleInfo = lastCandles.map(c => 
+        `🕒 ${new Date(c.time).toLocaleTimeString()} | O:${c.open.toFixed(5)} H:${c.high.toFixed(5)} L:${c.low.toFixed(5)} C:${c.close.toFixed(5)}`
+    ).join('\n');
+    
+    const msg = `📊 *Yahoo Data Test*\n━━━━━━━━━━━━━━━━━━━━━━\n✅ *${fetchResult.candles.length} candles* fetched for ${symbol}\n📉 *Data source:* ${fetchResult.isMock ? '⚠️ MOCK (simulated)' : '✅ REAL Yahoo Finance'}\n━━━━━━━━━━━━━━━━━━━━━━\n*Last 3 candles:*\n${candleInfo}\n━━━━━━━━━━━━━━━━━━━━━━\n*If data is real, your bot is working.*\nIf no signals appear, market conditions don't meet entry criteria.`;
+    await sendMessage(msg);
 }
 
 async function forceSignal(messageId = null) {
@@ -659,6 +664,7 @@ async function handleCommand(text, chatId) {
     else if (text === '/status') await showStatus();
     else if (text === '/stats') await showStats();
     else if (text === '/scan') { await sendTypingAction(); await performScan(stateManager.state.settings.selectedTimeframe, false); }
+    else if (text === '/testdata') await testDataFetch();
     else if (text === '/forcesignal') await forceSignal();
     else if (text === '/test') await testSignal();
     else if (text === '/help') await showHelp();
@@ -691,6 +697,7 @@ async function handleCallback(query) {
         await sendMessage("⏹️ Cancelling scan...");
         return;
     }
+    if (data === "test_data") { await testDataFetch(msgId); return; }
     if (data === "force_signal") { await forceSignal(msgId); return; }
     if (data === "test_signal") { await testSignal(msgId); return; }
     if (data === "history_clear") {
@@ -847,9 +854,9 @@ process.on('unhandledRejection', (r) => { logger.error('Unhandled rejection', { 
 
 global.botStartTime = Date.now();
 console.log('\n' + '█'.repeat(60));
-console.log('🏆 INSTITUTIONAL BOT v13 – REAL STRATEGY (NO DIAGNOSTIC MODE)');
+console.log('🏆 INSTITUTIONAL BOT v14 – REAL STRATEGY + TEST DATA');
 console.log('█'.repeat(60));
-console.log(`Data: Yahoo Real + Fallback Mock | Full indicators active`);
+console.log(`Data: Yahoo Real + Fallback Mock | Full indicators active | Threshold 40%`);
 console.log(`Pairs: ${PAIRS.length} pairs loaded`);
 console.log(`Telegram: ✅ token and chat ID set`);
 console.log(`HTTP Port: ${PORT}`);
@@ -859,6 +866,6 @@ startHealthServer();
 startPolling();
 
 setTimeout(async () => {
-    await sendMessage(`🤖 *INSTITUTIONAL BOT v13 ONLINE*\n━━━━━━━━━━━━━━━━━━━━━━\n✅ Real strategy active (no diagnostic mode)\n✅ Full indicators: ADX, divergence, regime\n✅ Use /forcesignal to test\n📱 *Send /start to begin*`);
+    await sendMessage(`🤖 *INSTITUTIONAL BOT v14 ONLINE*\n━━━━━━━━━━━━━━━━━━━━━━\n✅ Real strategy active (no diagnostic mode)\n✅ Use /testdata to verify data fetch\n✅ Threshold temporarily 40% for testing\n📱 *Send /start to begin*`);
     console.log('🚀 Bot ready! Send /start');
 }, 3000);
