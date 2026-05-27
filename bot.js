@@ -2,9 +2,41 @@ const { RobustAnalyzer } = require('./analyzer.js');
 const https = require('https');
 const http = require('http');
 const fs = require('fs');
-const { Mutex } = require('async-mutex');
 const winston = require('winston');
 const pairsConfig = require('./pairs.json');
+
+// ------------------------- Simple Async Mutex (no external dependency) -------------------------
+class Mutex {
+    constructor() {
+        this._queue = [];
+        this._locked = false;
+    }
+    async acquire() {
+        return new Promise((resolve) => {
+            this._queue.push(resolve);
+            this._dispatch();
+        });
+    }
+    _dispatch() {
+        if (this._locked) return;
+        const next = this._queue.shift();
+        if (next) {
+            this._locked = true;
+            next(() => {
+                this._locked = false;
+                this._dispatch();
+            });
+        }
+    }
+    async runExclusive(fn) {
+        const release = await this.acquire();
+        try {
+            return await fn();
+        } finally {
+            release();
+        }
+    }
+}
 
 // ------------------------- Logger (structured) -------------------------
 const logger = winston.createLogger({
@@ -116,7 +148,7 @@ class TokenBucket {
 }
 const telegramRateLimiter = new TokenBucket(20, 5);
 
-// ------------------------- State Manager (async, mutex, no blocking) -------------------------
+// ------------------------- State Manager (async, custom mutex, no blocking) -------------------------
 class StateManager {
     constructor() {
         this.state = {
@@ -126,16 +158,13 @@ class StateManager {
             stats: { signalsGenerated: 0, lastScanTime: null }
         };
         this.mutex = new Mutex();
-        this.load();
+        this.load().catch(e => logger.error('Initial load error', { error: e.message }));
     }
 
     async withMutex(fn) {
-        const release = await this.mutex.acquire();
-        try {
+        return this.mutex.runExclusive(async () => {
             return await fn(this.getSnapshot());
-        } finally {
-            release();
-        }
+        });
     }
 
     getSnapshot() {
@@ -195,7 +224,7 @@ function fetchWithTimeout(url, options = {}, timeoutMs = 10000) {
     });
 }
 
-// ------------------------- Real Data Fetching (NO MOCK, NO FORCED TREND) -------------------------
+// ------------------------- Real Data Fetching (NO MOCK) -------------------------
 async function fetchYahooRaw(symbol, interval) {
     let period1;
     switch (interval) {
@@ -351,7 +380,6 @@ async function fetchCandles(symbol, interval) {
         return { candles, isMock: true };
     }
 
-    // No data – return null (NEUTRAL signal, no forced mock)
     logger.warn(`No data for ${symbol} ${interval}`);
     return null;
 }
@@ -493,7 +521,7 @@ async function autoScan() {
     await performScan(stateManager.state.settings.selectedTimeframe, true);
 }
 
-// ------------------------- Telegram UI (same as original but with fixes) -------------------------
+// ------------------------- Telegram UI (same as before) -------------------------
 function getMainKeyboard() {
     return { inline_keyboard: [
         [{ text: "🔍 PROBABILITY SCAN", callback_data: "scan_manual" }],
@@ -633,7 +661,6 @@ async function handleCallback(query) {
         global.autoScanInterval = null;
         await showAutoScanMenu(msgId);
     } else if (data === "history_clear") {
-        // Confirm? For simplicity, just clear
         stateManager.update({ signals: [] });
         await showHistory(msgId);
     } else if (data === "pairs_select_all") { stateManager.update({ settings: { selectedPairs: [...PAIRS] } }); await showPairSelection(0, msgId); }
@@ -658,7 +685,6 @@ async function handleCallback(query) {
         }
     }
     else {
-        // unknown callback – reply with a short alert
         await sendMessage("Unknown action. Please use /start menu.");
     }
 }
@@ -723,7 +749,7 @@ function startHealthServer() {
                 status: 'alive',
                 uptime: process.uptime(),
                 signals: stateManager.state.signals.length,
-                dataAvailable: true // could check last data fetch time
+                dataAvailable: true
             }));
         } else {
             res.writeHead(404);
@@ -756,7 +782,7 @@ process.on('unhandledRejection', (r) => { logger.error('Unhandled rejection', { 
 // ------------------------- Startup -------------------------
 global.botStartTime = Date.now();
 console.log('\n' + '█'.repeat(60));
-console.log('🏆 ROBUST ANALYZER v5 - PRODUCTION GRADE');
+console.log('🏆 ROBUST ANALYZER v5 - PRODUCTION GRADE (No async-mutex)');
 console.log('█'.repeat(60));
 console.log(`Strategy: No overrides, real ADX, calibrated probabilities`);
 console.log(`Indicators: RSI + ADX + MACD + BB + Divergence`);
