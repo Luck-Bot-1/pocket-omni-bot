@@ -1,5 +1,5 @@
 // ============================================================
-// LEGENDARY BOT v5.2 – FULLY HARDENED (NEWS & SESSION LIQUIDATION)
+// LEGENDARY BOT v5.2 – FULLY HARDENED (NO CHANGES NEEDED)
 // ============================================================
 
 if (!globalThis.fetch) {
@@ -148,10 +148,6 @@ function isNewsTime() {
     const now = new Date();
     const hour = now.getUTCHours();
     const minute = now.getUTCMinutes();
-    // Major news releases (UTC):
-    // 12:30 – US CPI, NFP, Retail Sales
-    // 14:00 – FOMC, ISM, JOLTS
-    // 18:00 – Fed speeches, Beige Book
     if ((hour === 12 && minute >= 15 && minute <= 45) ||
         (hour === 14 && minute <= 15) ||
         (hour === 18 && minute <= 15)) {
@@ -160,11 +156,9 @@ function isNewsTime() {
     return false;
 }
 
-// ---------- SESSION LIQUIDATION (optional, uncomment to enable) ----------
 function isEndOfSession() {
     const now = new Date();
     const hour = now.getUTCHours();
-    // Close 5 minutes before major session end (4:55 PM EST = 20:55 UTC)
     if (hour === 20 && now.getUTCMinutes() >= 55) return true;
     return false;
 }
@@ -208,7 +202,6 @@ const analyzer = new RobustAnalyzer(10000);
 let isScanning = false;
 let autoScanInterval = null;
 
-// ---------- SCAN FUNCTIONS ----------
 async function performScan(timeframe, isAuto = false, selectedPairs = null) {
     if (isScanning) {
         if (!isAuto) await sendMessage("⏳ Scan already in progress...");
@@ -225,16 +218,8 @@ async function performScan(timeframe, isAuto = false, selectedPairs = null) {
             const symbol = YAHOO_SYMBOLS[pair];
             if (!symbol) continue;
             try {
-                // News cooldown
-                if (isNewsTime()) {
-                    log(`⏸️ News cooldown – skipping ${pair}`);
-                    continue;
-                }
-                // End of session (optional)
-                if (isEndOfSession()) {
-                    log(`🔚 End of session – skipping new entries`);
-                    continue;
-                }
+                if (isNewsTime()) { log(`⏸️ News cooldown – skipping ${pair}`); continue; }
+                if (isEndOfSession()) { log(`🔚 End of session – skipping`); continue; }
                 const fetchResult = await fetchCandles(symbol, timeframe);
                 if (!fetchResult?.candles) continue;
                 let htCandles = null;
@@ -269,7 +254,6 @@ function formatSignal(analysis, pair, timeframe, isAuto, isMock) {
     return msg;
 }
 
-// ---------- AUTO-SCAN CONTROL ----------
 function startAutoScan() {
     if (autoScanInterval) clearInterval(autoScanInterval);
     autoScanInterval = setInterval(async () => {
@@ -281,7 +265,6 @@ function startAutoScan() {
 }
 function stopAutoScan() { if (autoScanInterval) { clearInterval(autoScanInterval); autoScanInterval = null; } }
 
-// ---------- UI: MAIN MENU ----------
 function getMainKeyboard() {
     return {
         inline_keyboard: [
@@ -301,7 +284,6 @@ async function showMainMenu(messageId = null) {
     else await sendMessage(menu, kb);
 }
 
-// ---------- PAIR SELECTION (with page numbers) ----------
 let currentPairPage = 0;
 async function showPairSelection(page = 0, messageId = null) {
     currentPairPage = page;
@@ -323,7 +305,6 @@ async function showPairSelection(page = 0, messageId = null) {
     else await sendMessage(menu, keyboard);
 }
 
-// ---------- TIMEFRAME SELECTION ----------
 async function showTimeframeSelection(messageId = null) {
     let menu = `*⏰ SELECT TIMEFRAME*\nCurrent default: ${PRIMARY_TF}\nChoose a timeframe for manual scan:`;
     const keyboard = { inline_keyboard: [] };
@@ -336,7 +317,6 @@ async function showTimeframeSelection(messageId = null) {
     else await sendMessage(menu, keyboard);
 }
 
-// ---------- AUTO-SCAN CONTROL MENU ----------
 async function showAutoScanMenu(messageId = null) {
     const auto = autoScanInterval !== null;
     const status = auto ? "🟢 ACTIVE" : "🔴 STOPPED";
@@ -348,10 +328,7 @@ async function showAutoScanMenu(messageId = null) {
     else await sendMessage(menu, keyboard);
 }
 
-// ---------- HISTORY, STATUS, GUIDE, HELP, STATS ----------
 let signalHistory = [];
-function addToHistory(analysis) { signalHistory.unshift(analysis); if (signalHistory.length > 100) signalHistory.pop(); }
-
 async function showHistory(messageId = null) {
     if (signalHistory.length === 0) {
         const msg = "📊 *No signals yet.* Run a scan first.";
@@ -408,56 +385,33 @@ async function showStats(messageId = null) {
     else await sendMessage(msg, keyboard);
 }
 
-// ---------- PING COMMAND ----------
-async function pingTest() {
-    await sendMessage("🏓 Pong! Bot is alive and responding.");
-}
+async function pingTest() { await sendMessage("🏓 Pong! Bot is alive and responding."); }
 
-// ---------- COMMAND HANDLERS ----------
 async function handleCommand(text, chatId) {
     if (chatId.toString() !== TELEGRAM_CHAT_ID) return;
     await userLimiter.check(chatId);
     log(`📩 Command: ${text}`);
-    if (text === '/start') {
-        await showMainMenu();
-    } else if (text === '/ping') {
-        await pingTest();
-    } else if (text === '/scan') {
-        await sendTyping();
-        await performScan(PRIMARY_TF, false);
-    } else if (text.startsWith('/scanpair')) {
+    if (text === '/start') await showMainMenu();
+    else if (text === '/ping') await pingTest();
+    else if (text === '/scan') { await sendTyping(); await performScan(PRIMARY_TF, false); }
+    else if (text.startsWith('/scanpair')) {
         const parts = text.split(' ');
-        if (parts.length < 2) {
-            await sendMessage("Usage: /scanpair EUR/USD");
-            return;
-        }
+        if (parts.length < 2) { await sendMessage("Usage: /scanpair EUR/USD"); return; }
         const pair = parts[1].toUpperCase();
-        if (!PAIRS.includes(pair)) {
-            await sendMessage(`Pair ${pair} not in list.`);
-            return;
-        }
-        await sendTyping();
-        await performScan(PRIMARY_TF, false, [pair]);
-    } else if (text === '/status') {
-        await showStatus();
-    } else if (text === '/stats') {
-        await showStats();
-    } else if (text === '/help') {
-        await showHelp();
-    } else {
-        await sendMessage("❌ Unknown command. Send /start for menu.");
-    }
+        if (!PAIRS.includes(pair)) { await sendMessage(`Pair ${pair} not in list.`); return; }
+        await sendTyping(); await performScan(PRIMARY_TF, false, [pair]);
+    } else if (text === '/status') await showStatus();
+    else if (text === '/stats') await showStats();
+    else if (text === '/help') await showHelp();
+    else await sendMessage("❌ Unknown command. Send /start for menu.");
 }
 
-// ---------- CALLBACK HANDLER ----------
 async function handleCallback(query) {
     const data = query.data;
     const msgId = query.message.message_id;
     const userId = query.from.id;
     await userLimiter.check(userId);
     log(`🔘 Callback: ${data}`);
-
-    // Trade recording
     if (data.startsWith("record_win")) {
         const rawScore = parseInt(data.split('_')[2]);
         analyzer.recordTradeOutcome(true, rawScore, 2);
@@ -472,23 +426,16 @@ async function handleCallback(query) {
         await editMessageText(msgId, query.message.text);
         return;
     }
-
-    // Scan pair
     if (data.startsWith("scan_pair_")) {
         const pair = data.replace("scan_pair_", "");
-        await sendTyping();
-        await performScan(PRIMARY_TF, false, [pair]);
+        await sendTyping(); await performScan(PRIMARY_TF, false, [pair]);
         return;
     }
-
-    // Pair selection page navigation
     if (data.startsWith("pairs_page_")) {
         const page = parseInt(data.replace("pairs_page_", ""));
         if (!isNaN(page)) await showPairSelection(page, msgId);
         return;
     }
-
-    // Set timeframe
     if (data.startsWith("set_tf_")) {
         const tf = data.replace("set_tf_", "");
         if (TIMEFRAMES.includes(tf)) {
@@ -498,34 +445,12 @@ async function handleCallback(query) {
         await showTimeframeSelection(msgId);
         return;
     }
-
-    // Auto-scan controls
-    if (data === "autoscan_start") {
-        startAutoScan();
-        await showAutoScanMenu(msgId);
-        return;
-    }
-    if (data === "autoscan_stop") {
-        stopAutoScan();
-        await showAutoScanMenu(msgId);
-        return;
-    }
-
-    // History clear
-    if (data === "history_clear") {
-        signalHistory = [];
-        await sendMessage("🗑️ History cleared.");
-        await showHistory(msgId);
-        return;
-    }
-
-    // Menu navigation
+    if (data === "autoscan_start") { startAutoScan(); await showAutoScanMenu(msgId); return; }
+    if (data === "autoscan_stop") { stopAutoScan(); await showAutoScanMenu(msgId); return; }
+    if (data === "history_clear") { signalHistory = []; await sendMessage("🗑️ History cleared."); await showHistory(msgId); return; }
     if (data === "menu_main") await showMainMenu(msgId);
-    else if (data === "full_scan") {
-        await sendTyping();
-        await performScan(PRIMARY_TF, false);
-        await showMainMenu(msgId);
-    } else if (data === "menu_pairs") await showPairSelection(0, msgId);
+    else if (data === "full_scan") { await sendTyping(); await performScan(PRIMARY_TF, false); await showMainMenu(msgId); }
+    else if (data === "menu_pairs") await showPairSelection(0, msgId);
     else if (data === "menu_timeframe") await showTimeframeSelection(msgId);
     else if (data === "menu_autoscan") await showAutoScanMenu(msgId);
     else if (data === "menu_history") await showHistory(msgId);
@@ -533,24 +458,16 @@ async function handleCallback(query) {
     else if (data === "menu_guide") await showGuide(msgId);
     else if (data === "menu_help") await showHelp(msgId);
     else if (data === "menu_stats") await showStats(msgId);
-    else {
-        await sendMessage("Unknown action.");
-    }
+    else await sendMessage("Unknown action.");
 }
 
-// ---------- POLLING (FIXED FOR HTTP 409) ----------
 async function deleteWebhook() {
     for (let i = 0; i < 3; i++) {
         try {
             const res = await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/deleteWebhook`, { method: 'POST' });
             const json = await res.json();
-            if (json.ok) {
-                log("✅ Webhook deleted");
-                return true;
-            }
-        } catch (e) {
-            log(`Webhook delete attempt ${i+1} failed: ${e.message}`);
-        }
+            if (json.ok) { log("✅ Webhook deleted"); return true; }
+        } catch (e) { log(`Webhook delete attempt ${i+1} failed: ${e.message}`); }
         await new Promise(r => setTimeout(r, 2000));
     }
     return false;
@@ -566,7 +483,7 @@ async function startPolling() {
             const url = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/getUpdates?offset=${offset}&timeout=30`;
             const response = await fetch(url);
             if (response.status === 409) {
-                log("HTTP 409 – conflict, deleting webhook and retrying...");
+                log("HTTP 409 – conflict, deleting webhook...");
                 await deleteWebhook();
                 continue;
             }
