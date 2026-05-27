@@ -9,6 +9,27 @@ if (!globalThis.fetch) {
     globalThis.AbortController = AbortController;
 }
 
+async function testDataFetch(messageId = null) {
+    await sendTypingAction();
+    await sendMessage("📡 *Testing Yahoo Finance data fetch for EUR/USD 15m...*");
+    
+    const symbol = 'EURUSD=X';
+    const timeframe = '15m';
+    const fetchResult = await fetchCandles(symbol, timeframe);
+    
+    if (!fetchResult || !fetchResult.candles) {
+        await sendMessage("❌ *No data received.*\nPossible reasons:\n- Network issue\n- Yahoo API changed\n- Symbol mapping error\n- Circuit breaker open");
+        return;
+    }
+    
+    const lastCandles = fetchResult.candles.slice(-3);
+    let candleInfo = lastCandles.map(c => 
+        `🕒 ${new Date(c.time).toLocaleTimeString()} | O:${c.open.toFixed(5)} H:${c.high.toFixed(5)} L:${c.low.toFixed(5)} C:${c.close.toFixed(5)}`
+    ).join('\n');
+    
+    const msg = `📊 *Yahoo Data Test*\n━━━━━━━━━━━━━━━━━━━━━━\n✅ *${fetchResult.candles.length} candles* fetched for ${symbol}\n📉 *Data source:* ${fetchResult.isMock ? '⚠️ MOCK (simulated)' : '✅ REAL Yahoo Finance'}\n━━━━━━━━━━━━━━━━━━━━━━\n*Last 3 candles:*\n${candleInfo}\n━━━━━━━━━━━━━━━━━━━━━━\n*If data is real, your bot is working.*\nIf no signals appear, market conditions don't meet entry criteria.`;
+    await sendMessage(msg);
+}
 const { RobustAnalyzer } = require('./analyzer.js');
 const http = require('http');
 const fs = require('fs');
