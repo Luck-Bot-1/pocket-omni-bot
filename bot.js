@@ -1,5 +1,5 @@
 // ============================================================
-// LEGENDARY BOT v2.0 – INSTITUTIONAL TRADING ENGINE
+// PROFESSIONAL TRADING BOT v5.0 – COMPLETE INTERFACE
 // ============================================================
 
 if (!globalThis.fetch) {
@@ -143,27 +143,9 @@ async function fetchCandles(symbol, interval) {
     return { candles, isMock: true };
 }
 
-// ---------- NEWS COOLDOWN (ENABLED) ----------
-function isNewsTime() {
-    const now = new Date();
-    const hour = now.getUTCHours();
-    const minute = now.getUTCMinutes();
-    if ((hour === 12 && minute >= 15 && minute <= 45) ||
-        (hour === 14 && minute <= 15) ||
-        (hour === 18 && minute <= 15)) {
-        return true;
-    }
-    return false;
-}
-
-// ---------- SESSION LIQUIDATION (ENABLED) ----------
-function isEndOfSession() {
-    const now = new Date();
-    const hour = now.getUTCHours();
-    // Close 5 minutes before major session close (4:55 PM EST = 20:55 UTC)
-    if (hour === 20 && now.getUTCMinutes() >= 55) return true;
-    return false;
-}
+// ---------- NEWS & SESSION (disabled for now) ----------
+function isNewsTime() { return false; }
+function isEndOfSession() { return false; }
 
 // ---------- TELEGRAM HELPERS ----------
 async function sendMessage(text, replyMarkup = null) {
@@ -202,32 +184,27 @@ function escapeMarkdown(text) { return text.replace(/([_*[\]()~`>#+\-=|{}.!])/g,
 
 const analyzer = new RobustAnalyzer(10000);
 let isScanning = false;
+let autoScanInterval = null;
 
-async function performScan(timeframe, isAuto = false) {
+// ---------- SCAN FUNCTIONS ----------
+async function performScan(timeframe, isAuto = false, selectedPairs = null) {
     if (isScanning) {
         if (!isAuto) await sendMessage("⏳ Scan already in progress...");
         return;
     }
     isScanning = true;
     try {
-        const totalPairs = PAIRS.length;
+        const pairsToScan = selectedPairs || PAIRS;
+        const totalPairs = pairsToScan.length;
         if (!isAuto) await sendTyping();
         let signals = 0;
-        for (let idx = 0; idx < PAIRS.length; idx++) {
-            const pair = PAIRS[idx];
+        for (let idx = 0; idx < pairsToScan.length; idx++) {
+            const pair = pairsToScan[idx];
             const symbol = YAHOO_SYMBOLS[pair];
             if (!symbol) continue;
             try {
-                // News cooldown filter
-                if (isNewsTime()) {
-                    log(`⏸️ News cooldown – skipping ${pair}`);
-                    continue;
-                }
-                // Session liquidation – no new entries
-                if (isEndOfSession()) {
-                    log(`🔚 End of session – skipping new entries`);
-                    continue;
-                }
+                if (isNewsTime()) continue;
+                if (isEndOfSession()) continue;
                 const fetchResult = await fetchCandles(symbol, timeframe);
                 if (!fetchResult?.candles) continue;
                 let htCandles = null;
@@ -236,7 +213,7 @@ async function performScan(timeframe, isAuto = false) {
                     if (htResult) htCandles = htResult.candles;
                 }
                 const analysis = analyzer.calculateProbability(fetchResult.candles, pair, timeframe, htCandles);
-                if (analysis.probability >= 55 && analysis.signal !== 'NEUTRAL') {
+                if (analysis.probability >= 45 && analysis.signal !== 'NEUTRAL') {
                     signals++;
                     const signalText = formatSignal(analysis, pair, timeframe, isAuto, fetchResult.isMock);
                     const actionKeyboard = {
@@ -250,7 +227,7 @@ async function performScan(timeframe, isAuto = false) {
             } catch (e) { log(`Error ${pair}: ${e.message}`); }
             await new Promise(r => setTimeout(r, 200));
         }
-        if (!isAuto) await sendMessage(`✅ *SCAN COMPLETE*: ${signals} signals (threshold 55%)`);
+        if (!isAuto) await sendMessage(`✅ *SCAN COMPLETE*: ${signals} signals (threshold 45%)`);
     } finally { isScanning = false; }
 }
 
@@ -262,59 +239,269 @@ function formatSignal(analysis, pair, timeframe, isAuto, isMock) {
     return msg;
 }
 
+// ---------- AUTO-SCAN CONTROL ----------
+function startAutoScan() {
+    if (autoScanInterval) clearInterval(autoScanInterval);
+    autoScanInterval = setInterval(async () => {
+        if (!isScanning) {
+            log("🔄 AUTO-SCAN triggered");
+            await performScan(PRIMARY_TF, true);
+        }
+    }, 15 * 60 * 1000);
+}
+function stopAutoScan() { if (autoScanInterval) { clearInterval(autoScanInterval); autoScanInterval = null; } }
+
+// ---------- UI: MAIN MENU ----------
+function getMainKeyboard() {
+    return {
+        inline_keyboard: [
+            [{ text: "🔍 FULL SCAN (15m)", callback_data: "full_scan" }],
+            [{ text: "🎯 SELECT PAIRS", callback_data: "menu_pairs" }, { text: "⏰ TIMEFRAME", callback_data: "menu_timeframe" }],
+            [{ text: "🤖 AUTO-SCAN", callback_data: "menu_autoscan" }, { text: "📊 HISTORY", callback_data: "menu_history" }],
+            [{ text: "📈 STATUS", callback_data: "menu_status" }, { text: "📋 GUIDE", callback_data: "menu_guide" }],
+            [{ text: "📊 STATS", callback_data: "menu_stats" }, { text: "❓ HELP", callback_data: "menu_help" }]
+        ]
+    };
+}
+
+async function showMainMenu(messageId = null) {
+    const menu = `🏆 *PROFESSIONAL TRADING BOT v5.0*\n━━━━━━━━━━━━━━━━━━━━━━\n📊 Active timeframes: ${TIMEFRAMES.join(', ')}\n⏰ Primary: ${PRIMARY_TF} (expiry 15m)\n🤖 Auto‑scan: ${autoScanInterval ? 'ON' : 'OFF'}\n━━━━━━━━━━━━━━━━━━━━━━\n*Use buttons below*`;
+    const kb = getMainKeyboard();
+    if (messageId) await editMessageText(messageId, menu, kb);
+    else await sendMessage(menu, kb);
+}
+
+// ---------- PAIR SELECTION (with page numbers) ----------
+let currentPairPage = 0;
+async function showPairSelection(page = 0, messageId = null) {
+    currentPairPage = page;
+    const perPage = 10;
+    const totalPages = Math.ceil(PAIRS.length / perPage);
+    const start = page * perPage;
+    const currentPairs = PAIRS.slice(start, start + perPage);
+    let menu = `*🎯 INDIVIDUAL PAIR SCAN*\nPage ${page + 1}/${totalPages}\n\nTap a pair to scan it immediately (15m timeframe).`;
+    const keyboard = { inline_keyboard: [] };
+    for (const p of currentPairs) {
+        keyboard.inline_keyboard.push([{ text: `📊 ${p}`, callback_data: `scan_pair_${p}` }]);
+    }
+    const nav = [];
+    if (page > 0) nav.push({ text: "◀️ PREV", callback_data: `pairs_page_${page - 1}` });
+    if (page < totalPages - 1) nav.push({ text: "NEXT ▶️", callback_data: `pairs_page_${page + 1}` });
+    if (nav.length) keyboard.inline_keyboard.push(nav);
+    keyboard.inline_keyboard.push([{ text: "🔙 BACK TO MENU", callback_data: "menu_main" }]);
+    if (messageId) await editMessageText(messageId, menu, keyboard);
+    else await sendMessage(menu, keyboard);
+}
+
+// ---------- TIMEFRAME SELECTION ----------
+async function showTimeframeSelection(messageId = null) {
+    let menu = `*⏰ SELECT TIMEFRAME*\nCurrent default: ${PRIMARY_TF}\nChoose a timeframe for manual scan:`;
+    const keyboard = { inline_keyboard: [] };
+    for (const tf of TIMEFRAMES) {
+        const emoji = tf === PRIMARY_TF ? '⭐' : '🔘';
+        keyboard.inline_keyboard.push([{ text: `${emoji} ${tf}`, callback_data: `set_tf_${tf}` }]);
+    }
+    keyboard.inline_keyboard.push([{ text: "🔙 BACK TO MENU", callback_data: "menu_main" }]);
+    if (messageId) await editMessageText(messageId, menu, keyboard);
+    else await sendMessage(menu, keyboard);
+}
+
+// ---------- AUTO-SCAN CONTROL MENU ----------
+async function showAutoScanMenu(messageId = null) {
+    const auto = autoScanInterval !== null;
+    const status = auto ? "🟢 ACTIVE" : "🔴 STOPPED";
+    const buttonText = auto ? "⏸️ STOP AUTO-SCAN" : "▶️ START AUTO-SCAN";
+    const buttonData = auto ? "autoscan_stop" : "autoscan_start";
+    let menu = `*🤖 AUTO-SCAN CONTROL*\nStatus: ${status}\nInterval: 15 minutes\nPrimary Timeframe: ${PRIMARY_TF}\n━━━━━━━━━━━━━━━━━━━━━━\nWhen enabled, bot scans all pairs every 15 min.`;
+    const keyboard = { inline_keyboard: [[{ text: buttonText, callback_data: buttonData }], [{ text: "🔙 BACK TO MENU", callback_data: "menu_main" }]] };
+    if (messageId) await editMessageText(messageId, menu, keyboard);
+    else await sendMessage(menu, keyboard);
+}
+
+// ---------- HISTORY, STATUS, GUIDE, HELP, STATS ----------
+let signalHistory = [];
+function addToHistory(analysis) { signalHistory.unshift(analysis); if (signalHistory.length > 100) signalHistory.pop(); }
+
+async function showHistory(messageId = null) {
+    if (signalHistory.length === 0) {
+        const msg = "📊 *No signals yet.* Run a scan first.";
+        if (messageId) await editMessageText(messageId, msg);
+        else await sendMessage(msg);
+        return;
+    }
+    let msg = `*📊 SIGNAL HISTORY* (last ${Math.min(15, signalHistory.length)})\n━━━━━━━━━━━━━━━━━━━━━━\n`;
+    for (let i = 0; i < Math.min(15, signalHistory.length); i++) {
+        const s = signalHistory[i];
+        msg += `${s.signal === 'CALL' ? '📈' : '📉'} *${s.pair}* ${s.timeframe} | ${s.probability}%\n`;
+    }
+    msg += `\nUse /scan for new signals.`;
+    const keyboard = { inline_keyboard: [[{ text: "🗑️ CLEAR HISTORY", callback_data: "history_clear" }], [{ text: "🔙 BACK TO MENU", callback_data: "menu_main" }]] };
+    if (messageId) await editMessageText(messageId, msg, keyboard);
+    else await sendMessage(msg, keyboard);
+}
+
+async function showStatus(messageId = null) {
+    const uptime = Math.floor((Date.now() - global.botStartTime) / 60000);
+    const msg = `*📈 STATUS*\n━━━━━━━━━━━━━━━━━━━━━━\nUptime: ${uptime}m\nPairs: ${PAIRS.length}\nAuto‑scan: ${autoScanInterval ? 'ON' : 'OFF'}\nPrimary TF: ${PRIMARY_TF}\nSignals in history: ${signalHistory.length}\n━━━━━━━━━━━━━━━━━━━━━━\n*Bot is operational*`;
+    const keyboard = { inline_keyboard: [[{ text: "🔙 BACK TO MENU", callback_data: "menu_main" }]] };
+    if (messageId) await editMessageText(messageId, msg, keyboard);
+    else await sendMessage(msg, keyboard);
+}
+
+async function showGuide(messageId = null) {
+    const msg = `*📋 PROBABILITY GUIDE*\n━━━━━━━━━━━━━━━━━━━━━━\n🔥🔥 85-100% → STRONG (2.5% risk)\n🔥 75-84% → CONFIDENT (2.0%)\n📊 65-74% → NORMAL (1.5%)\n⚠️ 55-64% → CAUTIOUS (0.8%)\n❌ <55% → NO TRADE\n━━━━━━━━━━━━━━━━━━━━━━\n*RULES:*\n- Higher % = larger position\n- Always set stop loss\n- Probability ≠ guarantee`;
+    const keyboard = { inline_keyboard: [[{ text: "🔙 BACK TO MENU", callback_data: "menu_main" }]] };
+    if (messageId) await editMessageText(messageId, msg, keyboard);
+    else await sendMessage(msg, keyboard);
+}
+
+async function showHelp(messageId = null) {
+    const msg = `*📋 HELP*\n━━━━━━━━━━━━━━━━━━━━━━\n*COMMANDS:*\n/start – Menu\n/scan – Manual full scan\n/scanpair EUR/USD – Scan one pair\n/status – Bot status\n/stats – Performance stats\n/help – This message\n━━━━━━━━━━━━━━━━━━━━━━\n*BUTTONS:*\n- FULL SCAN: scan all pairs (15m)\n- SELECT PAIRS: scan individual pair\n- TIMEFRAME: change scan TF\n- AUTO-SCAN: on/off\n- HISTORY: past signals`;
+    const keyboard = { inline_keyboard: [[{ text: "🔙 BACK TO MENU", callback_data: "menu_main" }]] };
+    if (messageId) await editMessageText(messageId, msg, keyboard);
+    else await sendMessage(msg, keyboard);
+}
+
+async function showStats(messageId = null) {
+    const trades = analyzer.tradeHistory.slice(-50);
+    if (trades.length === 0) {
+        const msg = "📊 *No trade data yet.* After you mark WIN/LOSS, stats appear.";
+        if (messageId) await editMessageText(messageId, msg);
+        else await sendMessage(msg);
+        return;
+    }
+    const wins = trades.filter(t => t.win).length;
+    const winRate = (wins / trades.length * 100).toFixed(1);
+    const msg = `📊 *STRATEGY STATS* (last ${trades.length} trades)\n━━━━━━━━━━━━━━━━━━━━━━\n✅ Win rate: ${winRate}%\n🎯 Total trades: ${trades.length}\n━━━━━━━━━━━━━━━━━━━━━━\nKeep marking WIN/LOSS to improve calibration.`;
+    const keyboard = { inline_keyboard: [[{ text: "🔙 BACK TO MENU", callback_data: "menu_main" }]] };
+    if (messageId) await editMessageText(messageId, msg, keyboard);
+    else await sendMessage(msg, keyboard);
+}
+
+// ---------- COMMAND HANDLERS ----------
 async function handleCommand(text, chatId) {
     if (chatId.toString() !== TELEGRAM_CHAT_ID) return;
     await userLimiter.check(chatId);
     log(`📩 Command: ${text}`);
     if (text === '/start') {
-        await sendMessage("🤖 *LEGENDARY BOT v2.0 ONLINE*\nCommands:\n/ping – test response\n/scan – run analysis\n/testdata – check data source\n/forcesignal – test strategy logic\n/help – full help");
-    } else if (text === '/ping') {
-        await sendMessage("🏓 Pong! Bot is responding.");
+        await showMainMenu();
     } else if (text === '/scan') {
         await sendTyping();
         await performScan(PRIMARY_TF, false);
-    } else if (text === '/testdata') {
+    } else if (text.startsWith('/scanpair')) {
+        const parts = text.split(' ');
+        if (parts.length < 2) {
+            await sendMessage("Usage: /scanpair EUR/USD");
+            return;
+        }
+        const pair = parts[1].toUpperCase();
+        if (!PAIRS.includes(pair)) {
+            await sendMessage(`Pair ${pair} not in list.`);
+            return;
+        }
         await sendTyping();
-        const symbol = 'EURUSD=X';
-        const result = await fetchCandles(symbol, '15m');
-        const status = result.isMock ? "⚠️ MOCK DATA" : "✅ REAL YAHOO DATA";
-        const last = result.candles[result.candles.length-1];
-        await sendMessage(`📡 *Data Test*\n━━━━━━━━━━━━━━━━━━━━━━\nSymbol: ${symbol}\nSource: ${status}\nCandles: ${result.candles.length}\nLast price: ${last.close.toFixed(5)}\nLast time: ${new Date(last.time).toLocaleString()}`);
-    } else if (text === '/forcesignal') {
-        await sendTyping();
-        const mock = [];
-        let p = 1.1000;
-        for (let i = 0; i < 100; i++) { p += 0.0002; mock.push({ open: p-0.0001, high: p+0.0001, low: p-0.0002, close: p, volume: 2000, time: Date.now()-(100-i)*900000 }); }
-        const a = analyzer.calculateProbability(mock, "EUR/USD", "15m", null);
-        await sendMessage(`💪 *FORCED SIGNAL*\n━━━━━━━━━━━━━━━━━━━━━━\nSignal: ${a.signal}\nProbability: ${a.probability}%\nRSI: ${a.rsi} | ADX: ${a.adx}\nDivergence: ${a.divergence}`);
+        await performScan(PRIMARY_TF, false, [pair]);
+    } else if (text === '/status') {
+        await showStatus();
+    } else if (text === '/stats') {
+        await showStats();
     } else if (text === '/help') {
-        await sendMessage("Commands:\n/start – main menu\n/ping – alive check\n/scan – run analysis\n/testdata – check Yahoo data\n/forcesignal – test logic\n/help – this message");
+        await showHelp();
     } else {
-        await sendMessage("❌ Unknown. Try /help");
+        await sendMessage("❌ Unknown command. Send /start for menu.");
     }
 }
 
+// ---------- CALLBACK HANDLER ----------
 async function handleCallback(query) {
     const data = query.data;
     const msgId = query.message.message_id;
     const userId = query.from.id;
     await userLimiter.check(userId);
     log(`🔘 Callback: ${data}`);
+
+    // Trade recording
     if (data.startsWith("record_win")) {
         const rawScore = parseInt(data.split('_')[2]);
         analyzer.recordTradeOutcome(true, rawScore, 2);
         await sendMessage("👍 Trade recorded as WIN.");
         await editMessageText(msgId, query.message.text);
-    } else if (data.startsWith("record_loss")) {
+        return;
+    }
+    if (data.startsWith("record_loss")) {
         const rawScore = parseInt(data.split('_')[2]);
         analyzer.recordTradeOutcome(false, rawScore, -2);
         await sendMessage("👎 Trade recorded as LOSS.");
         await editMessageText(msgId, query.message.text);
-    } else {
+        return;
+    }
+
+    // Scan pair
+    if (data.startsWith("scan_pair_")) {
+        const pair = data.replace("scan_pair_", "");
+        await sendTyping();
+        await performScan(PRIMARY_TF, false, [pair]);
+        return;
+    }
+
+    // Pair selection page navigation
+    if (data.startsWith("pairs_page_")) {
+        const page = parseInt(data.replace("pairs_page_", ""));
+        if (!isNaN(page)) await showPairSelection(page, msgId);
+        return;
+    }
+
+    // Set timeframe
+    if (data.startsWith("set_tf_")) {
+        const tf = data.replace("set_tf_", "");
+        if (TIMEFRAMES.includes(tf)) {
+            global.tempTimeframe = tf;
+            await sendMessage(`✅ Timeframe set to ${tf} for manual scans. Use /scan to scan.`);
+        }
+        await showTimeframeSelection(msgId);
+        return;
+    }
+
+    // Auto-scan controls
+    if (data === "autoscan_start") {
+        startAutoScan();
+        await showAutoScanMenu(msgId);
+        return;
+    }
+    if (data === "autoscan_stop") {
+        stopAutoScan();
+        await showAutoScanMenu(msgId);
+        return;
+    }
+
+    // History clear
+    if (data === "history_clear") {
+        signalHistory = [];
+        await sendMessage("🗑️ History cleared.");
+        await showHistory(msgId);
+        return;
+    }
+
+    // Menu navigation
+    if (data === "menu_main") await showMainMenu(msgId);
+    else if (data === "full_scan") {
+        await sendTyping();
+        await performScan(PRIMARY_TF, false);
+        await showMainMenu(msgId);
+    } else if (data === "menu_pairs") await showPairSelection(0, msgId);
+    else if (data === "menu_timeframe") await showTimeframeSelection(msgId);
+    else if (data === "menu_autoscan") await showAutoScanMenu(msgId);
+    else if (data === "menu_history") await showHistory(msgId);
+    else if (data === "menu_status") await showStatus(msgId);
+    else if (data === "menu_guide") await showGuide(msgId);
+    else if (data === "menu_help") await showHelp(msgId);
+    else if (data === "menu_stats") await showStats(msgId);
+    else {
         await sendMessage("Unknown action.");
     }
 }
 
+// ---------- POLLING, HEALTH, SHUTDOWN ----------
 async function deleteWebhook() {
     try {
         const res = await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/deleteWebhook`, { method: 'POST' });
@@ -365,11 +552,12 @@ function startHealthServer() {
     server.listen(PORT, () => log(`🩺 Health server on port ${PORT}`));
 }
 
-process.on('SIGTERM', () => { log("SIGTERM"); process.exit(0); });
-process.on('SIGINT', () => { log("SIGINT"); process.exit(0); });
+process.on('SIGTERM', () => { log("SIGTERM"); stopAutoScan(); process.exit(0); });
+process.on('SIGINT', () => { log("SIGINT"); stopAutoScan(); process.exit(0); });
 process.on('uncaughtException', (e) => { log("Uncaught", e); process.exit(1); });
 
-log("🏆 LEGENDARY BOT v2.0 – INSTITUTIONAL GRADE");
+global.botStartTime = Date.now();
+log("🏆 PROFESSIONAL TRADING BOT v5.0 – FULL INTERFACE");
 log(`Pairs: ${PAIRS.length} loaded`);
 log(`Telegram: ${TELEGRAM_TOKEN ? "✅" : "❌"}`);
 log(`HTTP Port: ${PORT}`);
