@@ -394,16 +394,20 @@ async function sendMessage(text, replyMarkup = null, retries = 3) {
     let lastError;
     for (let attempt = 1; attempt <= retries; attempt++) {
         try {
+            const body = {
+                chat_id: TELEGRAM_CHAT_ID,
+                text,
+                parse_mode: "Markdown",
+                disable_web_page_preview: true
+            };
+            // Only add reply_markup if it's a valid object
+            if (replyMarkup && typeof replyMarkup === 'object') {
+                body.reply_markup = replyMarkup;
+            }
             const response = await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    chat_id: TELEGRAM_CHAT_ID,
-                    text,
-                    parse_mode: "Markdown",
-                    disable_web_page_preview: true,
-                    reply_markup: replyMarkup
-                })
+                body: JSON.stringify(body)
             });
             const json = await response.json();
             if (!json.ok && json.error_code === 429) {
@@ -427,16 +431,19 @@ async function editMessageText(messageId, text, replyMarkup = null) {
     if (!messageId || !TELEGRAM_TOKEN) return;
     await telegramRateLimiter.consume(1);
     try {
+        const body = {
+            chat_id: TELEGRAM_CHAT_ID,
+            message_id: messageId,
+            text,
+            parse_mode: "Markdown"
+        };
+        if (replyMarkup && typeof replyMarkup === 'object') {
+            body.reply_markup = replyMarkup;
+        }
         await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/editMessageText`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                chat_id: TELEGRAM_CHAT_ID,
-                message_id: messageId,
-                text,
-                parse_mode: "Markdown",
-                reply_markup: replyMarkup
-            })
+            body: JSON.stringify(body)
         });
     } catch (e) { logger.warn(`EditMessage failed: ${e.message}`); }
 }
