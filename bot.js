@@ -239,27 +239,13 @@ async function performScan(timeframe, isAuto = false, selectedPairs = null) {
 function formatSignal(analysis, pair, timeframe, isAuto, isMock) {
     const arrow = analysis.signal === 'CALL' ? '📈' : (analysis.signal === 'PUT' ? '📉' : '➡️');
     const bar = '█'.repeat(Math.floor(analysis.probability / 5)) + '░'.repeat(20 - Math.floor(analysis.probability / 5));
-    // Escape all dynamic fields
+    // Escape all special Markdown characters in user‑provided strings
     const safePair = escapeMarkdown(pair);
-    const safeSignal = escapeMarkdown(analysis.signal === 'CALL' ? 'CALL (BUY)' : 'PUT (SELL)');
     const safeAction = escapeMarkdown(analysis.recommendedAction);
-    const safeDivergence = escapeMarkdown(analysis.divergence);
-    const safeFactors = escapeMarkdown(analysis.activeFactors.join(', ') || 'none');
-    const safeGuidance = escapeMarkdown(analysis.guidance || '');
-    const safeRegime = escapeMarkdown(analysis.marketRegime);
-    const safeMajorTrend = escapeMarkdown(analysis.majorTrend);
-    const rsi = analysis.rsi;
-    const adx = analysis.adx;
-    const prob = analysis.probability;
-    const risk = analysis.suggestedRisk;
-    const sl = analysis.stopLoss;
-    const tp = analysis.takeProfit;
-    const entry = analysis.currentPrice;
-    const rr = analysis.riskRewardRatio;
-    const time = new Date().toLocaleTimeString();
-
-    let msg = `${isAuto ? '🤖 AUTO-SCAN\n' : ''}*${arrow} SIGNAL ${arrow}*\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n📊 *${safePair}* | ${timeframe}\n🎯 *${safeSignal}* | Probability: *${prob}%*\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n📊 *PROBABILITY METER:*\n\`${bar}\` ${prob}%\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n📈 *TECHNICALS:* RSI ${rsi} | ADX ${adx} | Regime ${safeRegime}\n🌀 Divergence: ${safeDivergence}\n📊 Factors: ${safeFactors}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n💡 *ACTION:* ${safeAction} (Risk ${risk})\n🛡️ SL: ${sl} pips | TP: ${tp} pips\n💰 Entry: ${entry} | R:R ${rr}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n⚠️ *Probability ≠ Guarantee* – Manage risk.\n🕐 ${time}`;
+    let msg = `${isAuto ? '🤖 AUTO-SCAN\n' : ''}*${arrow} SIGNAL ${arrow}*\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n📊 *${safePair}* | ${timeframe}\n🎯 *${analysis.signal === 'CALL' ? 'CALL (BUY)' : 'PUT (SELL)'}* | Probability: *${analysis.probability}%*\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n📊 *PROBABILITY METER:*\n\`${bar}\` ${analysis.probability}%\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n📈 *TECHNICALS:* RSI ${analysis.rsi} | ADX ${analysis.adx} | Regime ${analysis.marketRegime}\n🌀 Divergence: ${analysis.divergence}\n📊 Factors: ${analysis.activeFactors.join(', ') || 'none'}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n💡 *ACTION:* ${safeAction} (Risk ${analysis.suggestedRisk})\n🛡️ SL: ${analysis.stopLoss} pips | TP: ${analysis.takeProfit} pips\n💰 Entry: ${analysis.currentPrice} | R:R ${analysis.riskRewardRatio}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n⚠️ *Probability ≠ Guarantee* – Manage risk.\n🕐 ${new Date().toLocaleTimeString()}`;
     if (isMock) msg += `\n⚠️ *Using simulated data*`;
+    // Remove any raw ampersands or other problematic characters
+    msg = msg.replace(/&/g, '&amp;');
     return msg;
 }
 
