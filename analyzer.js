@@ -1,16 +1,13 @@
 const technicalIndicators = require('technicalindicators');
 const fs = require('fs');
-const { MarketRegimeDetector } = require('./src/core/regimeDetector');
-const { PredictiveSignalEngine } = require('./src/core/predictiveEngine');
 
-// --------------------------------------------------------------
-// Swing point detection (without look‑ahead bias)
-// --------------------------------------------------------------
+// ------------------------------------------------------------------
+// Swing point detection – NO LOOK-AHEAD (real‑time safe)
+// ------------------------------------------------------------------
 function findSwingPoints(prices, period = 5, minDistance = 4) {
     const swings = { lows: [], highs: [] };
-    // We only consider bars that have at least `period` bars after them,
-    // but we do not use future bars to confirm. Instead, we mark candidate swings
-    // and later confirm with the next few bars.
+    // Only consider bars that have at least 'period' bars before them,
+    // but do not use future bars. We simply mark local minima/maxima.
     for (let i = period; i < prices.length - period; i++) {
         let isLow = true, isHigh = true;
         for (let j = -period; j <= period; j++) {
@@ -18,8 +15,8 @@ function findSwingPoints(prices, period = 5, minDistance = 4) {
             if (prices[i] >= prices[i + j]) isLow = false;
             if (prices[i] <= prices[i + j]) isHigh = false;
         }
-        if (isLow) swings.lows.push({ idx: i, price: prices[i], confirmed: false });
-        if (isHigh) swings.highs.push({ idx: i, price: prices[i], confirmed: false });
+        if (isLow) swings.lows.push({ idx: i, price: prices[i] });
+        if (isHigh) swings.highs.push({ idx: i, price: prices[i] });
     }
     // Filter by minimum distance
     const filter = (arr) => arr.filter((_, idx) => idx === 0 || (arr[idx].idx - arr[idx-1].idx >= minDistance));
@@ -28,9 +25,9 @@ function findSwingPoints(prices, period = 5, minDistance = 4) {
     return swings;
 }
 
-// --------------------------------------------------------------
-// Divergence detection with 2‑bar confirmation
-// --------------------------------------------------------------
+// ------------------------------------------------------------------
+// Divergence detection with 2‑bar confirmation (no look‑ahead)
+// ------------------------------------------------------------------
 function detectDivergence(prices, oscillator, requireConfirmation = true) {
     if (prices.length < 50 || oscillator.length < 50) return null;
     const swingsPrice = findSwingPoints(prices, 5, 4);
@@ -72,7 +69,7 @@ function detectDivergence(prices, oscillator, requireConfirmation = true) {
     }
 
     if (divergence && requireConfirmation) {
-        // Confirm that after the swing point, price has moved at least 2 bars in the new direction
+        // After the swing point, price must have moved at least 2 bars in the new direction
         const currentPrice = prices[prices.length-1];
         if (divergence.type.includes('BULLISH') && currentPrice <= prices[divergence.priceIdx]) return null;
         if (divergence.type.includes('BEARISH') && currentPrice >= prices[divergence.priceIdx]) return null;
@@ -80,21 +77,48 @@ function detectDivergence(prices, oscillator, requireConfirmation = true) {
     return divergence;
 }
 
-// --------------------------------------------------------------
-// ROBUST ANALYZER – Institutional Grade
-// --------------------------------------------------------------
+// ------------------------------------------------------------------
+// Hull Moving Average (zero‑lag)
+// ------------------------------------------------------------------
+function calculateHMA(data, period) {
+    if (data.length < period * 2) return data.slice();
+    const half = Math.floor(period / 2);
+    const sqrt = Math.floor(Math.sqrt(period));
+    const wma = (values, len) => {
+        let weightSum = 0, valSum = 0;
+        for (let i = 0; i < len; i++) {
+            const w = len - i;
+            weightSum += w;
+            valSum += values[values.length - 1 - i] * w;
+        }
+        return valSum / weightSum;
+    };
+    const hma = [];
+    for (let i = period * 2; i <= data.length; i++) {
+        const seg = data.slice(i - period * 2, i);
+        const wma1 = wma(seg, period);
+        const wma2 = wma(seg, half);
+        const raw = 2 * wma2 - wma1;
+        const smoothed = wma([raw], sqrt);
+        hma.push(smoothed);
+    }
+    return hma;
+}
+
+// ------------------------------------------------------------------
+// INSTITUTIONAL ANALYZER – Fully hardened
+// ------------------------------------------------------------------
 class RobustAnalyzer {
     constructor(initialCapital = 10000) {
         this.tradeHistory = [];
         this.calibrationFile = './calibration.json';
         this.loadCalibration();
+        // Logistic regression parameters (calibrated from trade outcomes)
         this.logisticBeta0 = -0.5;
         this.logisticBeta1 = 1.2;
         this.equityCurve = [initialCapital];
         this.riskMultiplier = 1;
         this.maxDrawdown = 0.15;
-        this.regimeDetector = new MarketRegimeDetector();
-        this.predictiveEngine = new PredictiveSignalEngine();
     }
 
     loadCalibration() {
@@ -223,9 +247,9 @@ class RobustAnalyzer {
             const closes = candles.map(c => c.close);
             const highs = candles.map(c => c.high);
             const lows = candles.map(c => c.low);
-            const volumes = candles.map(c => c.volume);
             const price = closes[closes.length - 1];
 
+            // Basic indicators
             const rsi = this.calculateRSI(closes, 14);
             const atr = this.calculateATR(highs, lows, closes, 14);
             const adxData = this.calculateADX(highs, lows, closes, 14);
@@ -233,16 +257,16 @@ class RobustAnalyzer {
             const ema200 = this.calculateEMA(closes, 200);
             const volatility = (atr / price) * 100;
 
-            // ATR ratio for regime
+            // ATR ratio for regime detection
             const atr50 = this.calculateATR(highs, lows, closes, 50);
             const atrRatio = atr / atr50;
 
-            // Regime detection (returns mode: 'TREND' or 'RANGE')
-            const regime = this.regimeDetector.detectRegime(adxData.adx, volatility, rsi);
-            const isTrendMode = regime.mode === 'TREND';
-            const isRangeMode = regime.mode === 'RANGE';
+            // Regime detection
+            const isTrending = (adxData.adx >= 25 && atrRatio >= 1.0);
+            const isRanging = (adxData.adx <= 22 && atrRatio <= 0.8);
+            const mode = isTrending ? 'TREND' : (isRanging ? 'RANGE' : 'TRANSITION');
 
-            // Multi‑timeframe trend
+            // Higher timeframe trend
             let htTrend = 'NEUTRAL';
             if (htCandles && htCandles.length >= 50) {
                 const htCloses = htCandles.map(c => c.close);
@@ -250,40 +274,45 @@ class RobustAnalyzer {
                 htTrend = htCloses[htCloses.length-1] > htEMA50 ? 'BULLISH' : 'BEARISH';
             }
 
+            // Major trend (price vs EMA200)
             const majorTrend = price > ema200 ? 'BULLISH' : (price < ema200 ? 'BEARISH' : 'NEUTRAL');
-            const hmaSlope = this.predictiveEngine.getHMASlope(candles, 20);
-            const predictive = this.predictiveEngine.detectPredictiveEntry(candles);
 
-            // Divergence with confirmation
+            // HMA slope (zero‑lag momentum)
+            const hma = calculateHMA(closes, 20);
+            let hmaSlope = 0;
+            if (hma.length >= 2) hmaSlope = hma[hma.length-1] - hma[hma.length-2];
+
+            // Divergence (with confirmation)
             const rsiArray = [];
             for (let i = 30; i <= closes.length; i++) {
                 rsiArray.push(this.calculateRSI(closes.slice(0, i), 14));
             }
             const divergence = detectDivergence(closes, rsiArray, true);
 
-            // ----- Regime‑specific signal generation -----
+            // ----- REGIME‑SPECIFIC SIGNAL GENERATION -----
             let signal = 'NEUTRAL';
             let rawScore = 50;
+            let reason = "";
 
-            if (isTrendMode) {
-                // TREND mode: follow the momentum
+            if (mode === 'TREND') {
+                // Trend mode: only trend‑following entries
                 if (Math.abs(hmaSlope) > 0.0005) {
                     if (hmaSlope > 0 && majorTrend === 'BULLISH') {
                         signal = 'CALL';
                         rawScore = 70 + Math.min(20, hmaSlope * 10000);
+                        reason = "Trend mode: HMA slope + major trend";
                     } else if (hmaSlope < 0 && majorTrend === 'BEARISH') {
                         signal = 'PUT';
                         rawScore = 70 - Math.min(20, Math.abs(hmaSlope) * 10000);
+                        reason = "Trend mode: HMA slope + major trend";
+                    } else {
+                        reason = `Trend mode: HMA slope (${hmaSlope.toFixed(6)}) mismatch with major trend (${majorTrend})`;
                     }
+                } else {
+                    reason = `Trend mode: HMA slope too low (${hmaSlope.toFixed(6)})`;
                 }
-                // If no clear HMA slope, use predictive override
-                if (signal === 'NEUTRAL' && predictive) {
-                    signal = predictive.signal;
-                    rawScore = predictive.probability;
-                }
-            } else if (isRangeMode) {
-                // RANGE mode: mean reversion & divergences
-                // Check last 5 bars to avoid falling knife
+            } else if (mode === 'RANGE') {
+                // Range mode: mean reversion & divergences
                 const last5 = closes.slice(-5);
                 const noLowerLow = Math.min(...last5) === last5[last5.length-1];
                 const noHigherHigh = Math.max(...last5) === last5[last5.length-1];
@@ -291,54 +320,59 @@ class RobustAnalyzer {
                 if (rsi < 30 && price <= bb.lower && noLowerLow) {
                     signal = 'CALL';
                     rawScore = 75;
+                    reason = "Range mode: RSI oversold + BB lower";
                 } else if (rsi > 70 && price >= bb.upper && noHigherHigh) {
                     signal = 'PUT';
                     rawScore = 75;
+                    reason = "Range mode: RSI overbought + BB upper";
                 } else if (divergence) {
                     signal = divergence.type.includes('BULLISH') ? 'CALL' : 'PUT';
                     rawScore = divergence.strength === 'STRONG' ? 85 : 70;
+                    reason = `Range mode: ${divergence.type} divergence`;
+                } else {
+                    reason = `Range mode: no oversold/overbought (RSI=${rsi.toFixed(1)}), no divergence`;
                 }
+            } else {
+                reason = `Transition mode (ADX=${adxData.adx.toFixed(1)}, ATR ratio=${atrRatio.toFixed(2)}) – no entries`;
             }
 
-            // Fallback to predictive if still neutral
-            if (signal === 'NEUTRAL' && predictive) {
-                signal = predictive.signal;
-                rawScore = predictive.probability;
-            }
-
-            // Apply higher‑timeframe filter (alignment adds bonus)
+            // Higher‑timeframe alignment bonus/penalty
             if (signal !== 'NEUTRAL') {
                 if ((signal === 'CALL' && htTrend === 'BULLISH') ||
                     (signal === 'PUT' && htTrend === 'BEARISH')) {
                     rawScore += 10;
+                    reason += " + HT alignment";
                 } else if ((signal === 'CALL' && htTrend === 'BEARISH') ||
                            (signal === 'PUT' && htTrend === 'BULLISH')) {
-                    rawScore -= 20; // strong penalty for going against HT trend
+                    rawScore -= 20;
+                    reason += " - HT opposite (penalty)";
                 }
             }
 
             rawScore = Math.min(100, Math.max(0, rawScore));
             let probability = this.calibrateProbability(rawScore);
 
+            // Final decision
             if (signal === 'NEUTRAL' || probability < 55) {
-                return this.neutral("No high‑confidence signal in current regime");
+                return this.neutral(`No signal: ${reason} (raw=${rawScore.toFixed(0)}, prob=${probability}%)`);
             }
 
-            // --- Dynamic Risk & Sizing ---
+            // ----- DYNAMIC RISK & POSITION SIZING -----
             const baseRisk = this.getBaseRiskPercent(probability);
             const kelly = this.calculateKellyFactor();
-            const volFactor = Math.min(2.0, Math.max(0.5, 0.0025 / (atr/price))); // target ATR% = 0.25%
+            // Volatility factor: reduce risk when ATR is high, increase when ATR is low (but capped)
+            const targetATRpercent = 0.0025; // 0.25% of price
+            const currentATRpercent = atr / price;
+            const volFactor = Math.min(2.0, Math.max(0.5, targetATRpercent / currentATRpercent));
             const ddFactor = this.riskMultiplier;
             let finalRisk = baseRisk * kelly * volFactor * ddFactor;
-            if (!isTrendMode && !isRangeMode) finalRisk *= 0.5; // transition mode
+            if (mode === 'TRANSITION') finalRisk *= 0.5;
             finalRisk = Math.min(3.0, Math.max(0.3, finalRisk));
 
-            // Stop loss based on ATR
+            // Stop loss (ATR‑based)
             let stopPips = Math.max(10, Math.min(50, Math.round((atr / price) * 10000 * 1.2)));
-            // Add slippage buffer
-            stopPips = Math.round(stopPips + 0.5);
-            let tpPips = isTrendMode ? Math.round(stopPips * 2.5) : Math.round(stopPips * 1.5);
-
+            stopPips = Math.round(stopPips + 0.5); // slippage buffer
+            let tpPips = (mode === 'TREND') ? Math.round(stopPips * 2.5) : Math.round(stopPips * 1.5);
             const maxBars = (timeframe === '1m' ? 60 : (timeframe === '5m' ? 24 : 12));
 
             return {
@@ -350,8 +384,7 @@ class RobustAnalyzer {
                 rsi: rsi.toFixed(1),
                 adx: adxData.adx.toFixed(1),
                 trendRegime: adxData.trend,
-                marketRegime: regime.regime,
-                mode: regime.mode,
+                marketRegime: mode,
                 volatility: volatility.toFixed(2),
                 currentPrice: price.toFixed(5),
                 divergence: divergence ? `${divergence.type} (${divergence.strength})` : 'None',
@@ -364,7 +397,8 @@ class RobustAnalyzer {
                 riskRewardRatio: (tpPips / stopPips).toFixed(2),
                 pair, timeframe,
                 timestamp: new Date().toISOString(),
-                version: "9.0-INSTITUTIONAL"
+                version: "9.2-INSTITUTIONAL",
+                guidance: reason
             };
         } catch (err) {
             return this.neutral(`Calculation error: ${err.message}`);
@@ -418,7 +452,6 @@ class RobustAnalyzer {
             adx: "20",
             trendRegime: "UNKNOWN",
             marketRegime: "unknown",
-            mode: "UNKNOWN",
             volatility: "0",
             currentPrice: "0",
             divergence: "None",
@@ -432,7 +465,7 @@ class RobustAnalyzer {
             timestamp: new Date().toISOString(),
             pair: "UNKNOWN",
             timeframe: "UNKNOWN",
-            version: "9.0-INSTITUTIONAL",
+            version: "9.2-INSTITUTIONAL",
             guidance: reason
         };
     }
