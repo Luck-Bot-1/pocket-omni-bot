@@ -1,163 +1,182 @@
 const technicalIndicators = require('technicalindicators');
-const pairsConfig = require('./pairs.json');
-const { MarketRegimeDetector } = require('./src/core/regimeDetector');
-const { PredictiveSignalEngine } = require('./src/core/predictiveEngine');
+const fs = require('fs');
+const path = require('path');
 
-function detectTrueDivergence(closes, rsiValues) {
-    if (closes.length < 50 || rsiValues.length < 50) return null;
-    const swingLows = [], swingHighs = [];
-    for (let i = 5; i < closes.length - 5; i++) {
+// ------------------------------------------------------------------
+// Swing point detection (for divergence & market structure)
+// ------------------------------------------------------------------
+function findSwingPoints(prices, period = 5, minDistance = 4) {
+    const swings = { lows: [], highs: [] };
+    for (let i = period; i < prices.length - period; i++) {
         let isLow = true, isHigh = true;
-        for (let j = -5; j <= 5; j++) {
+        for (let j = -period; j <= period; j++) {
             if (j === 0) continue;
-            if (closes[i] > closes[i + j]) isLow = false;
-            if (closes[i] < closes[i + j]) isHigh = false;
+            if (prices[i] >= prices[i + j]) isLow = false;
+            if (prices[i] <= prices[i + j]) isHigh = false;
         }
-        if (isLow) swingLows.push({ price: closes[i], rsi: rsiValues[i] });
-        if (isHigh) swingHighs.push({ price: closes[i], rsi: rsiValues[i] });
+        if (isLow) swings.lows.push({ idx: i, price: prices[i] });
+        if (isHigh) swings.highs.push({ idx: i, price: prices[i] });
     }
-    if (swingLows.length >= 2) {
-        const last = swingLows[swingLows.length - 1];
-        const prev = swingLows[swingLows.length - 2];
-        if (last.price < prev.price && last.rsi > prev.rsi) {
-            const diff = ((last.rsi - prev.rsi) / prev.rsi) * 100;
-            return { type: 'BULLISH', strength: diff > 15 ? 'STRONG' : 'WEAK', confidence: Math.min(90, 60 + diff) };
-        }
-    }
-    if (swingHighs.length >= 2) {
-        const last = swingHighs[swingHighs.length - 1];
-        const prev = swingHighs[swingHighs.length - 2];
-        if (last.price > prev.price && last.rsi < prev.rsi) {
-            const diff = ((prev.rsi - last.rsi) / prev.rsi) * 100;
-            return { type: 'BEARISH', strength: diff > 15 ? 'STRONG' : 'WEAK', confidence: Math.min(90, 60 + diff) };
-        }
-    }
-    return null;
+    // filter by minimum distance
+    const filter = (arr) => arr.filter((_, idx) => idx === 0 || (arr[idx].idx - arr[idx-1].idx >= minDistance));
+    swings.lows = filter(swings.lows);
+    swings.highs = filter(swings.highs);
+    return swings;
 }
 
-class KellyPositionSizer {
+// ------------------------------------------------------------------
+// Divergence detection (Regular & Hidden)
+// ------------------------------------------------------------------
+function detectDivergence(prices, oscillator) {
+    if (prices.length < 50 || oscillator.length < 50) return null;
+    const swingsPrice = findSwingPoints(prices, 5, 4);
+    const swingsOsc = findSwingPoints(oscillator, 5, 4);
+    
+    // Bullish Regular: price lower low, oscillator higher low
+    let bullishRegular = null;
+    if (swingsPrice.lows.length >= 2 && swingsOsc.lows.length >= 2) {
+        const pL = swingsPrice.lows.slice(-2);
+        const oL = swingsOsc.lows.slice(-2);
+        if (pL[1].price < pL[0].price && oL[1].price > oL[0].price)
+            bullishRegular = { type: 'BULLISH_REGULAR', strength: 'MODERATE' };
+    }
+    // Bearish Regular: price higher high, oscillator lower high
+    let bearishRegular = null;
+    if (swingsPrice.highs.length >= 2 && swingsOsc.highs.length >= 2) {
+        const pH = swingsPrice.highs.slice(-2);
+        const oH = swingsOsc.highs.slice(-2);
+        if (pH[1].price > pH[0].price && oH[1].price < oH[0].price)
+            bearishRegular = { type: 'BEARISH_REGULAR', strength: 'MODERATE' };
+    }
+    // Bullish Hidden: price higher low, oscillator lower low
+    let bullishHidden = null;
+    if (swingsPrice.lows.length >= 2 && swingsOsc.lows.length >= 2) {
+        const pL = swingsPrice.lows.slice(-2);
+        const oL = swingsOsc.lows.slice(-2);
+        if (pL[1].price > pL[0].price && oL[1].price < oL[0].price)
+            bullishHidden = { type: 'BULLISH_HIDDEN', strength: 'STRONG' };
+    }
+    // Bearish Hidden: price lower high, oscillator higher high
+    let bearishHidden = null;
+    if (swingsPrice.highs.length >= 2 && swingsOsc.highs.length >= 2) {
+        const pH = swingsPrice.highs.slice(-2);
+        const oH = swingsOsc.highs.slice(-2);
+        if (pH[1].price < pH[0].price && oH[1].price > oH[0].price)
+            bearishHidden = { type: 'BEARISH_HIDDEN', strength: 'STRONG' };
+    }
+    return bullishRegular || bearishRegular || bullishHidden || bearishHidden;
+}
+
+// ------------------------------------------------------------------
+// ROBUST ANALYZER – No ADX override, no forced direction, calibrated probabilities
+// ------------------------------------------------------------------
+class RobustAnalyzer {
     constructor() {
-        this.trades = [];
-        this.winRate = 0.55;
-        this.avgWinLoss = 1.8;
-        this.maxRisk = 0.03;
-        this.minRisk = 0.005;
-        this.kellyFraction = 0.25;
-    }
-    update(win, pnl) {
-        this.trades.push({ win, pnl });
-        if (this.trades.length > 200) this.trades.shift();
-        const wins = this.trades.filter(t => t.win).length;
-        const total = this.trades.length;
-        this.winRate = total ? wins / total : 0.55;
-        const avgWin = this.trades.filter(t => t.win).reduce((s, t) => s + t.pnl, 0) / (wins || 1);
-        const avgLoss = Math.abs(this.trades.filter(t => !t.win).reduce((s, t) => s + t.pnl, 0) / (total - wins || 1));
-        this.avgWinLoss = avgWin / (avgLoss || 1);
-    }
-    getRisk(probability) {
-        const winProb = probability / 100;
-        const lossProb = 1 - winProb;
-        const b = this.avgWinLoss;
-        let kelly = (winProb * b - lossProb) / b;
-        kelly = Math.max(0, Math.min(this.maxRisk, kelly * this.kellyFraction));
-        return Math.max(this.minRisk, Math.min(this.maxRisk, kelly));
-    }
-}
-
-class LegendaryAnalyzer {
-    constructor() {
-        this.config = pairsConfig;
-        this.tech = this.config.technicalParameters;
-        this.probLevels = this.config.probabilityLevels;
-        this.regimeDetector = new MarketRegimeDetector();
-        this.predictive = new PredictiveSignalEngine();
-        this.kelly = new KellyPositionSizer();
+        this.tradeHistory = [];
+        this.calibrationFile = './calibration.json';
+        this.loadCalibration();
+        // logistic regression parameters (fitted from past trades)
+        this.logisticBeta0 = -0.5;
+        this.logisticBeta1 = 1.2;
     }
 
-    recordTradeResult(win, pnl) {
-        this.kelly.update(win, pnl);
-    }
-
-    calculateRSI(closes, period) {
-        if (!closes || closes.length < period + 1) return 50;
-        let gains = 0, losses = 0;
-        for (let i = 1; i <= period; i++) {
-            const diff = closes[i] - closes[i-1];
-            if (diff >= 0) gains += diff;
-            else losses -= diff;
-        }
-        let avgGain = gains / period;
-        let avgLoss = losses / period;
-        for (let i = period + 1; i < closes.length; i++) {
-            const diff = closes[i] - closes[i-1];
-            if (diff >= 0) {
-                avgGain = (avgGain * (period - 1) + diff) / period;
-                avgLoss = (avgLoss * (period - 1)) / period;
-            } else {
-                avgGain = (avgGain * (period - 1)) / period;
-                avgLoss = (avgLoss * (period - 1) - diff) / period;
-            }
-        }
-        if (avgLoss === 0) return 100;
-        const rs = avgGain / avgLoss;
-        let rsi = 100 - (100 / (1 + rs));
-        if (isNaN(rsi) || !isFinite(rsi)) return 50;
-        return Math.min(100, Math.max(0, Math.round(rsi * 10) / 10));
-    }
-
-    calculateATR(highs, lows, closes, period) {
-        if (highs.length < period + 1) return 0.001;
-        const tr = [];
-        for (let i = 1; i < highs.length; i++) {
-            const hl = highs[i] - lows[i];
-            const hc = Math.abs(highs[i] - closes[i-1]);
-            const lc = Math.abs(lows[i] - closes[i-1]);
-            tr.push(Math.max(hl, hc, lc));
-        }
-        const atr = tr.slice(-period).reduce((a, b) => a + b, 0) / period;
-        return isNaN(atr) ? 0.001 : atr;
-    }
-
-    // INSTITUTIONAL ADX WITH OVERRIDE – guarantees ADX >20 when price moves
-    calculateADX(highs, lows, closes, period) {
-    if (highs.length < period + 2) return { adx: 20, trend: 'RANGING' };
-    let adx = 20;
-    let trend = 'RANGING';
-    try {
-        const adxResult = technicalIndicators.ADX({ high: highs, low: lows, close: closes, period });
-        adx = adxResult[adxResult.length - 1] || 20;
-        if (isNaN(adx) || !isFinite(adx)) adx = 20;
-    } catch(e) { adx = 20; }
-
-    // ---- INSTITUTIONAL OVERRIDE - Lowered threshold to 0.2% ----
-    const last20Closes = closes.slice(-20);
-    const minPrice = Math.min(...last20Closes);
-    const maxPrice = Math.max(...last20Closes);
-    const priceRangePercent = (maxPrice - minPrice) / minPrice * 100;
-    if (priceRangePercent > 0.2) {
-        // Map range 0.2%..2% to ADX 25..55
-        const forcedAdx = Math.min(55, Math.max(25, 25 + (priceRangePercent - 0.2) * 15));
-        adx = Math.max(adx, forcedAdx);
-    } else if (priceRangePercent > 0) {
-        // Even tiny movement: ADX between 22 and 25
-        adx = Math.max(adx, 22 + priceRangePercent * 15);
-    }
-
-    if (adx >= 35) trend = 'STRONG_TRENDING';
-    else if (adx >= 22) trend = 'WEAK_TRENDING';
-    return { adx: Math.round(adx * 10) / 10, trend };
-}
-    calculateBollingerBands(closes, period, stdDev) {
-        if (closes.length < period) return { lower: null, upper: null };
+    loadCalibration() {
         try {
-            const bb = technicalIndicators.BollingerBands({ period, values: closes, stdDev });
-            const last = bb[bb.length - 1];
-            return { lower: last.lower, upper: last.upper };
-        } catch { return { lower: null, upper: null }; }
+            if (fs.existsSync(this.calibrationFile)) {
+                const data = JSON.parse(fs.readFileSync(this.calibrationFile));
+                this.tradeHistory = data.trades || [];
+                if (data.logisticBeta0 && data.logisticBeta1) {
+                    this.logisticBeta0 = data.logisticBeta0;
+                    this.logisticBeta1 = data.logisticBeta1;
+                }
+            }
+        } catch(e) { /* ignore */ }
     }
 
-    calculateMACD(closes, fast, slow, signal) {
-        if (closes.length < slow + signal) return { cross: 'NEUTRAL' };
+    saveCalibration() {
+        try {
+            fs.writeFileSync(this.calibrationFile, JSON.stringify({
+                trades: this.tradeHistory.slice(-500),
+                logisticBeta0: this.logisticBeta0,
+                logisticBeta1: this.logisticBeta1
+            }, null, 2));
+        } catch(e) {}
+    }
+
+    recordTradeOutcome(wasWin, rawScore) {
+        this.tradeHistory.push({ win: wasWin, rawScore, timestamp: Date.now() });
+        if (this.tradeHistory.length > 500) this.tradeHistory.shift();
+        this.updateCalibration();
+        this.saveCalibration();
+    }
+
+    updateCalibration() {
+        const recent = this.tradeHistory.slice(-200);
+        if (recent.length < 50) return;
+        let beta0 = this.logisticBeta0, beta1 = this.logisticBeta1;
+        const lr = 0.01;
+        for (let iter = 0; iter < 100; iter++) {
+            let grad0 = 0, grad1 = 0;
+            for (let t of recent) {
+                const z = beta0 + beta1 * (t.rawScore / 50 - 1);
+                const p = 1 / (1 + Math.exp(-z));
+                const error = t.win ? 1 - p : 0 - p;
+                grad0 += error;
+                grad1 += error * (t.rawScore / 50 - 1);
+            }
+            beta0 += lr * grad0 / recent.length;
+            beta1 += lr * grad1 / recent.length;
+        }
+        this.logisticBeta0 = beta0;
+        this.logisticBeta1 = beta1;
+    }
+
+    calibrateProbability(rawScore) {
+        const z = this.logisticBeta0 + this.logisticBeta1 * (rawScore / 50 - 1);
+        let prob = 1 / (1 + Math.exp(-z));
+        prob = Math.min(0.95, Math.max(0.05, prob));
+        return Math.round(prob * 100);
+    }
+
+    // ------------------------- Technical Indicators -------------------------
+    calculateRSI(closes, period = 14) {
+        if (closes.length < period + 1) return 50;
+        try {
+            const rsi = technicalIndicators.RSI({ values: closes, period });
+            return rsi[rsi.length - 1] || 50;
+        } catch(e) { return 50; }
+    }
+
+    calculateATR(highs, lows, closes, period = 14) {
+        if (highs.length < period + 1) return 0.001;
+        try {
+            const atr = technicalIndicators.ATR({ high: highs, low: lows, close: closes, period });
+            return atr[atr.length - 1] || 0.001;
+        } catch(e) { return 0.001; }
+    }
+
+    calculateADX(highs, lows, closes, period = 14) {
+        if (highs.length < period + 2) return { adx: 20, trend: 'RANGING' };
+        try {
+            const adx = technicalIndicators.ADX({ high: highs, low: lows, close: closes, period });
+            const val = adx[adx.length - 1] || 20;
+            let trend = 'RANGING';
+            if (val >= 25) trend = 'WEAK_TRENDING';
+            if (val >= 40) trend = 'STRONG_TRENDING';
+            return { adx: Math.round(val * 10) / 10, trend };
+        } catch(e) { return { adx: 20, trend: 'RANGING' }; }
+    }
+
+    calculateEMA(data, period) {
+        if (data.length < period) return data[data.length - 1];
+        try {
+            const ema = technicalIndicators.EMA({ values: data, period });
+            return ema[ema.length - 1];
+        } catch(e) { return data[data.length - 1]; }
+    }
+
+    calculateMACD(closes, fast = 12, slow = 26, signal = 9) {
+        if (closes.length < slow + signal) return { histogram: 0, macd: 0, signal: 0, cross: 'NEUTRAL' };
         try {
             const macd = technicalIndicators.MACD({ values: closes, fastPeriod: fast, slowPeriod: slow, signalPeriod: signal });
             const last = macd[macd.length - 1];
@@ -167,218 +186,186 @@ class LegendaryAnalyzer {
                 if (prev.MACD <= prev.signal && last.MACD > last.signal) cross = 'BULLISH';
                 else if (prev.MACD >= prev.signal && last.MACD < last.signal) cross = 'BEARISH';
             }
-            return { cross };
-        } catch { return { cross: 'NEUTRAL' }; }
+            return { histogram: last.histogram, macd: last.MACD, signal: last.signal, cross };
+        } catch(e) { return { histogram: 0, macd: 0, signal: 0, cross: 'NEUTRAL' }; }
     }
 
-    calculateEMA(data, period) {
-        if (data.length < period) return data;
-        const k = 2 / (period + 1);
-        let ema = data[0];
-        const result = [ema];
-        for (let i = 1; i < data.length; i++) {
-            ema = data[i] * k + ema * (1 - k);
-            result.push(ema);
-        }
-        return result;
-    }
-
-    getCurrentSession() {
-        const now = new Date();
-        const utcHour = now.getUTCHours();
-        const utcDay = now.getUTCDay();
-
-        if (utcDay === 6 || utcDay === 0) return { session: 'WEEKEND', liquidityBoost: 0.9, reason: 'Weekend' };
-        if (utcHour >= 0 && utcHour < 7) return { session: 'ASIAN', liquidityBoost: 0.9, reason: 'Asian session' };
-        if (utcHour >= 7 && utcHour < 8) return { session: 'LONDON_OPEN', liquidityBoost: 1.0, reason: 'London open' };
-        if (utcHour >= 8 && utcHour < 12) return { session: 'LONDON', liquidityBoost: 1.1, reason: 'London session' };
-        if (utcHour >= 12 && utcHour < 16) return { session: 'LONDON_NY_OVERLAP', liquidityBoost: 1.2, reason: 'London-NY overlap' };
-        if (utcHour >= 16 && utcHour < 20) return { session: 'NEW_YORK', liquidityBoost: 1.1, reason: 'New York session' };
-        if (utcHour >= 20 && utcHour < 24) return { session: 'NY_CLOSE', liquidityBoost: 0.9, reason: 'NY close' };
-        return { session: 'OTHER', liquidityBoost: 0.9, reason: 'Regular' };
-    }
-
-    calculateProbability(candles, pair, timeframe, forceMockDirection = false) {
+    calculateBollingerBands(closes, period = 20, stdDev = 2) {
+        if (closes.length < period) return { lower: null, upper: null, middle: null };
         try {
-            const session = this.getCurrentSession();
+            const bb = technicalIndicators.BollingerBands({ period, values: closes, stdDev });
+            const last = bb[bb.length - 1];
+            return { lower: last.lower, upper: last.upper, middle: last.middle };
+        } catch(e) { return { lower: null, upper: null, middle: null }; }
+    }
 
-            if (!candles || !Array.isArray(candles) || candles.length < 50) {
-                return this.neutral("Insufficient data (less than 50 candles)");
+    // ------------------------- Main Signal Engine -------------------------
+    calculateProbability(candles, pair, timeframe) {
+        try {
+            if (!candles || candles.length < 50) {
+                return this.neutral("Insufficient data (<50 candles)");
             }
-            let limitedCandles = candles.filter(c => 
-                c && typeof c.open === 'number' && typeof c.high === 'number' &&
-                typeof c.low === 'number' && typeof c.close === 'number' &&
-                typeof c.time === 'number'
-            );
-            if (limitedCandles.length < 50) return this.neutral("Insufficient valid candles");
-
-            const maxCandles = 300;
-            if (limitedCandles.length > maxCandles) limitedCandles = limitedCandles.slice(-maxCandles);
-            const sevenDaysAgo = Date.now() - 7 * 24 * 3600 * 1000;
-            limitedCandles = limitedCandles.filter(c => c.time > sevenDaysAgo);
-            if (limitedCandles.length < 50) return this.neutral("Insufficient recent data");
-
-            const closes = limitedCandles.map(c => c.close);
-            const highs = limitedCandles.map(c => c.high);
-            const lows = limitedCandles.map(c => c.low);
-            const volumes = limitedCandles.map(c => c.volume);
+            const closes = candles.map(c => c.close);
+            const highs = candles.map(c => c.high);
+            const lows = candles.map(c => c.low);
             const price = closes[closes.length - 1];
+
+            const rsi = this.calculateRSI(closes, 14);
             const atr = this.calculateATR(highs, lows, closes, 14);
-            const vol = (atr / price) * 100;
-            const adxData = this.calculateADX(highs, lows, closes, this.tech.adxPeriod);
-            const rsi = this.calculateRSI(closes, this.tech.rsiPeriod);
+            const adxData = this.calculateADX(highs, lows, closes, 14);
+            const macd = this.calculateMACD(closes);
+            const bb = this.calculateBollingerBands(closes, 20, 2);
+            const ema200 = this.calculateEMA(closes, 200);
+            const ema20 = this.calculateEMA(closes, 20);
+            const ema20Prev = closes.length > 21 ? this.calculateEMA(closes.slice(0, -1), 20) : ema20;
+            const volatility = (atr / price) * 100;
 
-            const rsiArr = [];
-            for (let i = 30; i <= closes.length; i++) rsiArr.push(this.calculateRSI(closes.slice(0, i), 14));
-            const divergence = detectTrueDivergence(closes, rsiArr);
+            const majorTrend = price > ema200 ? 'BULLISH' : (price < ema200 ? 'BEARISH' : 'NEUTRAL');
+            const shortTrend = ema20 > ema20Prev ? 'UP' : (ema20 < ema20Prev ? 'DOWN' : 'FLAT');
 
-            const regime = this.regimeDetector.detectRegime(adxData.adx, vol, rsi);
-            const predictive = this.predictive.detectPredictiveEntry(limitedCandles);
-            const bb = this.calculateBollingerBands(closes, this.tech.bbPeriod, this.tech.bbStdDev);
-            const macd = this.calculateMACD(closes, this.tech.macdFast, this.tech.macdSlow, this.tech.macdSignal);
-
-            const volFactor = Math.min(1, Math.max(0, (vol - 0.2) / 1.3));
-            const rsiLowDynamic = Math.max(20, Math.min(35, 30 - volFactor * 10));
-            const rsiHighDynamic = Math.min(80, Math.max(65, 70 + volFactor * 10));
-
-            let direction = "NEUTRAL";
-            let prob = 50;
-            let active = [];
-
-            if (predictive && predictive.signal !== 'NEUTRAL') {
-                direction = predictive.signal;
-                prob = predictive.probability;
-                active.push({ name: "PREDICTIVE", signal: predictive.signal, probability: predictive.probability });
+            // RSI oscillator array for divergence
+            const rsiArray = [];
+            for (let i = 30; i <= closes.length; i++) {
+                rsiArray.push(this.calculateRSI(closes.slice(0, i), 14));
             }
-            if (rsi <= rsiLowDynamic && bb.lower && price <= bb.lower) {
-                direction = "CALL";
-                prob = Math.max(prob, 75);
-                active.push({ name: "MEAN_REVERSION", signal: "CALL", probability: 75 });
-            } else if (rsi >= rsiHighDynamic && bb.upper && price >= bb.upper) {
-                direction = "PUT";
-                prob = Math.max(prob, 75);
-                active.push({ name: "MEAN_REVERSION", signal: "PUT", probability: 75 });
-            }
-            if (macd.cross === 'BULLISH') {
-                if (direction === "NEUTRAL") direction = "CALL";
-                prob = Math.max(prob, 70);
-                active.push({ name: "MOMENTUM", signal: "CALL", probability: 70 });
-            } else if (macd.cross === 'BEARISH') {
-                if (direction === "NEUTRAL") direction = "PUT";
-                prob = Math.max(prob, 70);
-                active.push({ name: "MOMENTUM", signal: "PUT", probability: 70 });
-            }
+            const divergence = detectDivergence(closes, rsiArray);
 
-            // Micro‑trend fallback
-            if (direction === "NEUTRAL") {
-                const ema5 = this.calculateEMA(closes, 5);
-                const ema5Prev = ema5[ema5.length - 2];
-                const ema5Curr = ema5[ema5.length - 1];
-                const microTrend = ema5Curr > ema5Prev ? 'BULLISH' : (ema5Curr < ema5Prev ? 'BEARISH' : 'NEUTRAL');
-                const momentum3 = (closes[closes.length - 1] - closes[closes.length - 4]) / closes[closes.length - 4] * 100;
+            // ----- Raw score (0-100, >50 bullish) -----
+            let rawScore = 50;
 
-                if (microTrend === 'BULLISH' && momentum3 > 0) {
-                    direction = "CALL";
-                    prob = 55;
-                    active.push({ name: "MICRO_TREND", signal: "CALL", probability: 55 });
-                } else if (microTrend === 'BEARISH' && momentum3 < 0) {
-                    direction = "PUT";
-                    prob = 55;
-                    active.push({ name: "MICRO_TREND", signal: "PUT", probability: 55 });
-                } else {
-                    const priceChange = (closes[closes.length - 1] - closes[closes.length - 4]) / closes[closes.length - 4] * 100;
-                    if (priceChange > 0.05) {
-                        direction = "CALL";
-                        prob = 50;
-                        active.push({ name: "PRICE_MOMENTUM", signal: "CALL", probability: 50 });
-                    } else if (priceChange < -0.05) {
-                        direction = "PUT";
-                        prob = 50;
-                        active.push({ name: "PRICE_MOMENTUM", signal: "PUT", probability: 50 });
-                    }
-                }
+            // MACD momentum
+            if (macd.histogram > 0) rawScore += 8;
+            else if (macd.histogram < 0) rawScore -= 8;
+            if (macd.cross === 'BULLISH') rawScore += 10;
+            else if (macd.cross === 'BEARISH') rawScore -= 10;
+
+            // RSI with trend context
+            if (rsi < 30 && majorTrend === 'BULLISH') rawScore += 12;
+            else if (rsi < 25) rawScore += 8;
+            else if (rsi > 70 && majorTrend === 'BEARISH') rawScore -= 12;
+            else if (rsi > 75) rawScore -= 8;
+            else if (rsi > 50) rawScore += 2;
+            else if (rsi < 50) rawScore -= 2;
+
+            // Bollinger Bands
+            if (bb.lower && price <= bb.lower && majorTrend === 'BULLISH') rawScore += 10;
+            else if (bb.lower && price <= bb.lower) rawScore += 4;
+            if (bb.upper && price >= bb.upper && majorTrend === 'BEARISH') rawScore -= 10;
+            else if (bb.upper && price >= bb.upper) rawScore -= 4;
+
+            // Trend following
+            if (shortTrend === 'UP' && adxData.adx >= 25) rawScore += 15;
+            else if (shortTrend === 'UP') rawScore += 6;
+            else if (shortTrend === 'DOWN' && adxData.adx >= 25) rawScore -= 15;
+            else if (shortTrend === 'DOWN') rawScore -= 6;
+
+            // Divergence
+            if (divergence) {
+                if (divergence.type === 'BULLISH_REGULAR') rawScore += 12;
+                else if (divergence.type === 'BULLISH_HIDDEN') rawScore += 16;
+                else if (divergence.type === 'BEARISH_REGULAR') rawScore -= 12;
+                else if (divergence.type === 'BEARISH_HIDDEN') rawScore -= 16;
             }
 
-            let finalProb = prob * regime.positionMultiplier * session.liquidityBoost;
-            if (vol >= 0.35 && vol <= 0.85) finalProb *= 1.1;
+            // Reduce confidence in low volatility
+            if (volatility < 0.15) rawScore = rawScore * 0.7 + 15;
 
-            if (active.length >= 2) finalProb *= 1.05;
-            if (active.length >= 3) finalProb *= 1.1;
-            if (divergence && ((direction === "CALL" && divergence.type === "BULLISH") || (direction === "PUT" && divergence.type === "BEARISH")))
-                finalProb += 12;
+            rawScore = Math.min(100, Math.max(0, rawScore));
+            const probability = this.calibrateProbability(rawScore);
 
-            finalProb = Math.min(98, Math.max(0, Math.round(finalProb)));
-
-            if (forceMockDirection && (direction === "NEUTRAL" || finalProb < 30)) {
-                const lastChange = closes[closes.length - 1] - closes[closes.length - 2];
-                direction = lastChange > 0 ? "CALL" : (lastChange < 0 ? "PUT" : "CALL");
-                finalProb = Math.max(finalProb, 35);
-                active.push({ name: "FORCED_DIRECTION", signal: direction, probability: finalProb });
+            // Neutral if no clear edge
+            if (Math.abs(rawScore - 50) < 8 && !divergence && adxData.adx < 22) {
+                return this.neutral("Low conviction – no clear edge");
             }
 
-            if (finalProb < 25) {
-                return this.neutral(`Signal probability ${finalProb}% < 25% – very low confidence`);
+            let signal = 'NEUTRAL';
+            if (probability >= 55) signal = rawScore > 50 ? 'CALL' : (rawScore < 50 ? 'PUT' : 'NEUTRAL');
+            if (signal === 'NEUTRAL' && probability >= 52) {
+                signal = rawScore > 50 ? 'CALL' : (rawScore < 50 ? 'PUT' : 'NEUTRAL');
             }
 
-            const level = this.getLevel(finalProb);
-            let kellyRisk = this.kelly.getRisk(finalProb);
-            if (vol < 0.18) kellyRisk *= 0.5;
-
-            const stop = Math.min(45, Math.max(10, Math.round((atr / price) * 10000 * 1.5)));
-            const tp = Math.round(stop * 1.8);
+            const riskPercent = this.getRiskPercent(probability);
+            const stopPips = Math.max(10, Math.min(50, Math.round((atr / price) * 10000 * 1.2)));
+            const tpPips = Math.round(stopPips * (probability >= 70 ? 2.0 : 1.5));
 
             return {
-                signal: direction,
-                probability: finalProb,
-                probabilityLevel: level.level,
-                probabilityEmoji: level.emoji,
-                recommendedAction: level.action,
-                suggestedRisk: kellyRisk.toFixed(1) + '%',
+                signal,
+                probability,
+                rawScore: Math.round(rawScore),
+                recommendedAction: this.getAction(probability),
+                suggestedRisk: `${riskPercent}%`,
                 rsi: rsi.toFixed(1),
                 adx: adxData.adx.toFixed(1),
-                trend: adxData.trend,
-                volatility: vol.toFixed(2),
+                trendRegime: adxData.trend,
+                volatility: volatility.toFixed(2),
                 currentPrice: price.toFixed(5),
-                regime: regime.regime,
-                activeStrategies: active,
                 divergence: divergence ? `${divergence.type} (${divergence.strength})` : 'None',
-                session: session.session,
-                guidance: this.buildGuidance(level, finalProb, active.length, regime.regime),
-                stopLoss: stop,
-                takeProfit: tp,
-                riskRewardRatio: (tp / stop).toFixed(2),
-                timestamp: new Date().toISOString(),
+                majorTrend,
+                activeFactors: this.getActiveFactors(rawScore, divergence, macd, rsi, bb),
+                stopLoss: stopPips,
+                takeProfit: tpPips,
+                riskRewardRatio: (tpPips / stopPips).toFixed(2),
                 pair, timeframe,
-                version: "41.0-ADX-OVERRIDE"
+                timestamp: new Date().toISOString(),
+                version: "5.0-ROBUST"
             };
-        } catch (e) { return this.neutral(`Error: ${e.message}`); }
+        } catch (err) {
+            return this.neutral(`Calculation error: ${err.message}`);
+        }
     }
 
-    getLevel(p) {
-        const l = this.probLevels;
-        if (p >= l.legendary.min) return l.legendary;
-        if (p >= l.exceptional.min) return l.exceptional;
-        if (p >= l.high.min) return l.high;
-        if (p >= l.good.min) return l.good;
-        if (p >= l.moderate.min) return l.moderate;
-        if (p >= l.low.min) return l.low;
-        return l.veryLow;
+    getRiskPercent(prob) {
+        if (prob >= 85) return 2.5;
+        if (prob >= 75) return 2.0;
+        if (prob >= 65) return 1.5;
+        if (prob >= 55) return 0.8;
+        return 0;
     }
 
-    buildGuidance(level, prob, stratCount, regime) {
-        let msg = `${level.emoji} ${level.action} (${prob}%)\n━━━━━━━━━━━━━━━━━━━━━━\n📊 ${stratCount} strategies\n📈 Regime: ${regime.toUpperCase()}\n━━━━━━━━━━━━━━━━━━━━━━\n💡 YOUR DECISION:\n• ${prob}%+ → Consider position (${level.risk} risk)\n• 25-54% → Very cautious or skip`;
-        return msg;
+    getAction(prob) {
+        if (prob >= 85) return "STRONG_TRADE";
+        if (prob >= 75) return "CONFIDENT_TRADE";
+        if (prob >= 65) return "NORMAL_TRADE";
+        if (prob >= 55) return "CAUTIOUS_TRADE";
+        return "NO_TRADE";
+    }
+
+    getActiveFactors(rawScore, divergence, macd, rsi, bb) {
+        const factors = [];
+        if (divergence) factors.push(divergence.type);
+        if (macd.cross !== 'NEUTRAL') factors.push(`MACD_${macd.cross}`);
+        if (rsi < 30) factors.push('RSI_OVERSOLD');
+        if (rsi > 70) factors.push('RSI_OVERBOUGHT');
+        if (bb.lower && rawScore > 55) factors.push('BB_SUPPORT');
+        if (bb.upper && rawScore < 45) factors.push('BB_RESISTANCE');
+        return factors;
     }
 
     neutral(reason) {
         return {
-            signal: "NEUTRAL", probability: 0, probabilityLevel: "VERY_LOW", probabilityEmoji: "❌",
-            recommendedAction: "NO_TRADE", suggestedRisk: "0%", rsi: "50", adx: "20", trend: "UNKNOWN",
-            volatility: "0", currentPrice: "0", regime: "unknown", activeStrategies: [], divergence: "None",
-            session: "UNKNOWN", guidance: reason, stopLoss: 15, takeProfit: 27, riskRewardRatio: "1.80",
-            timestamp: new Date().toISOString(), pair: "UNKNOWN", timeframe: "UNKNOWN", version: "41.0-ADX-OVERRIDE"
+            signal: "NEUTRAL",
+            probability: 0,
+            rawScore: 50,
+            recommendedAction: "NO_TRADE",
+            suggestedRisk: "0%",
+            rsi: "50",
+            adx: "20",
+            trendRegime: "UNKNOWN",
+            volatility: "0",
+            currentPrice: "0",
+            divergence: "None",
+            majorTrend: "NEUTRAL",
+            activeFactors: [],
+            stopLoss: 15,
+            takeProfit: 27,
+            riskRewardRatio: "1.80",
+            timestamp: new Date().toISOString(),
+            pair: "UNKNOWN",
+            timeframe: "UNKNOWN",
+            version: "5.0-ROBUST",
+            guidance: reason
         };
     }
 }
 
-module.exports = { LegendaryAnalyzer };
+module.exports = { RobustAnalyzer, detectDivergence };
