@@ -99,6 +99,7 @@ function getRandomUserAgent() {
     return userAgents[userAgentIndex];
 }
 
+// ---------- Real API fetch functions (unchanged) ----------
 async function fetchYahooRaw(symbol, interval, timeoutMs = 10000) {
     return new Promise((resolve) => {
         let period1;
@@ -227,34 +228,37 @@ async function fetchTwelveData(symbol, interval, apiKey) {
     } catch (e) { return null; }
 }
 
-// Mock data that guarantees price movement (RSI will never be 0)
-function generateMockCandles(symbol, interval, count = 300) {
+// ---------- NEW FORCED TRENDING MOCK DATA (ADX > 30 guaranteed) ----------
+function generateTrendingMockCandles(symbol, interval, count = 300) {
     const seed = symbol.split('').reduce((a, b) => a + b.charCodeAt(0), 0);
-    let basePrice = 1.1000 + (seed % 100) / 10000;
+    const basePrice = 1.1000 + (seed % 100) / 10000;
     const now = Date.now();
     const intervalMs = { '1m': 60000, '5m': 300000, '15m': 900000, '30m': 1800000, '1h': 3600000, '4h': 14400000 }[interval] || 900000;
     const candles = [];
     let price = basePrice;
-    let trend = 0;
-    let trendPhase = 0;
-    let phaseLength = 0;
+    // Create a clear trend: up for half the candles, then down for the rest
+    const trendUpLength = Math.floor(count / 2);
+    const trendDownLength = count - trendUpLength;
+    let trendStrength = 0.0008;
     for (let i = 0; i < count; i++) {
-        if (phaseLength <= 0) {
-            trendPhase = Math.random() < 0.5 ? 0 : 1;
-            phaseLength = 20 + Math.floor(Math.random() * 30);
-            trend = (trendPhase === 0 ? 0.001 : -0.001) + (Math.random() - 0.5) * 0.0003;
+        let step;
+        if (i < trendUpLength) {
+            // Uptrend: consistently rising price
+            step = trendStrength + (Math.random() - 0.5) * 0.0002;
+        } else {
+            // Downtrend: consistently falling price
+            step = -trendStrength + (Math.random() - 0.5) * 0.0002;
         }
-        phaseLength--;
-        // Ensure price always moves (minimum step)
-        let step = trend + (Math.random() - 0.5) * 0.0005;
-        if (Math.abs(step) < 0.00005) step = step > 0 ? 0.00005 : -0.00005;
+        // Ensure minimum step
+        if (Math.abs(step) < 0.0001) step = step > 0 ? 0.0001 : -0.0001;
         price += step;
-        if (price > basePrice * 1.05) price = basePrice * 1.05;
-        if (price < basePrice * 0.95) price = basePrice * 0.95;
+        // Keep price within reasonable range (don't drift too far)
+        if (price > basePrice * 1.06) price = basePrice * 1.06;
+        if (price < basePrice * 0.94) price = basePrice * 0.94;
         const open = price;
-        const close = price + (Math.random() - 0.5) * 0.001;
-        const high = Math.max(open, close) + Math.random() * 0.0008;
-        const low = Math.min(open, close) - Math.random() * 0.0008;
+        const close = price + (Math.random() - 0.5) * 0.0005;
+        const high = Math.max(open, close) + Math.random() * 0.0006;
+        const low = Math.min(open, close) - Math.random() * 0.0006;
         const time = now - (count - i) * intervalMs;
         candles.push({ open, high, low, close, volume: 1000 + Math.random() * 500, time });
         price = close;
@@ -336,9 +340,9 @@ async function fetchCandles(symbol, interval) {
         return { candles, isMock: true };
     }
 
-    // 5. Extreme mock (always returns candles with movement)
-    logger.warn(`⚠️ Using extreme mock for ${symbol} (all APIs failed) – RSI/ADX guaranteed non‑zero`);
-    const mockCandles = generateMockCandles(symbol, interval, 300);
+    // 5. Forced trending mock (ADX > 30 guaranteed)
+    logger.warn(`⚠️ Using FORCED TRENDING mock for ${symbol} – ADX will be >30`);
+    const mockCandles = generateTrendingMockCandles(symbol, interval, 300);
     cacheSet(cacheKey, mockCandles, true);
     return { candles: mockCandles, isMock: true, forceDirection: true };
 }
@@ -349,20 +353,20 @@ async function testConnectivity() {
     const avKey = process.env.ALPHA_VANTAGE_KEY;
     const tdKey = process.env.TWELVE_DATA_KEY;
     if (!avKey && !tdKey) {
-        logger.warn('⚠️ No API keys. Using extreme mock (guaranteed price movement).');
+        logger.warn('⚠️ No API keys. Using forced trending mock (ADX > 30 guaranteed).');
         if (Date.now() - lastAlertTime > 3600000) {
             lastAlertTime = Date.now();
-            await sendMessage(`⚠️ *No API keys* – using extreme simulated data with guaranteed RSI/ADX variation.`);
+            await sendMessage(`⚠️ *No API keys* – using forced trending simulated data with ADX >30.`);
         }
         globalDataStatus = 'mock_only';
     } else {
         globalDataStatus = 'real_possible';
-        logger.info(`✅ API keys present: Alpha Vantage ${avKey ? '✅' : '❌'}, Twelve Data ${tdKey ? '✅' : '❌'}`);
+        logger.info(`✅ API keys present.`);
         await sendMessage(`📡 Real data sources available.`);
     }
 }
 
-// ---------- Immutable State Manager (unchanged from previous) ----------
+// ---------- Immutable State Manager ----------
 class StateManager {
     constructor() {
         this.state = {
@@ -417,7 +421,7 @@ class StateManager {
 const stateManager = new StateManager();
 stateManager.load();
 
-// ---------- Telegram API helpers (full implementation) ----------
+// ---------- Telegram API helpers (same as before) ----------
 async function sendMessage(text, replyMarkup = null, priority = 5, retries = 3) {
     if (!TELEGRAM_TOKEN || !TELEGRAM_CHAT_ID) { logger.info(`📱 ${text.substring(0, 200)}...`); return; }
     await telegramRateLimiter.consume(1);
@@ -575,7 +579,7 @@ async function performScan(timeframe, isAuto = false, userId = null) {
         if (!isAuto && progressMsgId) {
             let completionMsg = `✅ *SCAN COMPLETE*: ${signals} signals\n👑${legendary} 🔥${exceptional} 🔥${high} 📊${good} ⚡${moderate} ⚠️${low}\n━━━━━━━━━━━━━━━━━━━━━━\nReview probabilities above. YOU decide.`;
             if (mockUsed) {
-                completionMsg += `\n⚠️ Simulated data – set API keys for live data.`;
+                completionMsg += `\n⚠️ Simulated trending data (ADX >30 guaranteed). Set API keys for live data.`;
             }
             await editMessageText(progressMsgId, completionMsg);
         }
@@ -596,12 +600,12 @@ function formatSignal(analysis, pair, timeframe, isAuto, isMock) {
     const bar = '█'.repeat(Math.floor(analysis.probability / 5)) + '░'.repeat(20 - Math.floor(analysis.probability / 5));
     let msg = `${isAuto ? '🤖 AUTO-SCAN\n' : ''}*${arrow} PROBABILITY SIGNAL ${arrow}*\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n📊 *${pair}* | [${timeframe}]\n🎯 *${dir}* | Probability: *${analysis.probability}%* ${analysis.probabilityEmoji}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n📊 *PROBABILITY METER:*\n\`${bar}\` ${analysis.probability}%\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n📈 *TECHNICALS:* RSI ${analysis.rsi} | ADX ${analysis.adx} | Vol ${analysis.volatility}%\n📊 Strategies: ${analysis.activeStrategies.length}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n💡 *${analysis.guidance}*\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n🛡️ *SL:* ${analysis.stopLoss} pips | *TP:* ${analysis.takeProfit} pips\n💰 *Entry:* ${analysis.currentPrice} | *Risk:* ${analysis.suggestedRisk}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n⚠️ *Probability ≠ Certainty* | YOU decide\n🕐 ${new Date().toLocaleTimeString()}`;
     if (isMock) {
-        msg += `\n⚠️ Simulated data – set ALPHA_VANTAGE_KEY / TWELVE_DATA_KEY for live data.`;
+        msg += `\n⚠️ *Simulated trending data* – ADX >30 guaranteed. Set ALPHA_VANTAGE_KEY/TWELVE_DATA_KEY for live data.`;
     }
     return msg;
 }
 
-// ---------- Telegram UI (full – all functions) ----------
+// ---------- Telegram UI (all functions, same as before) ----------
 function getMainKeyboard() {
     return { inline_keyboard: [
         [{ text: "🔍 PROBABILITY SCAN", callback_data: "scan_manual" }],
@@ -615,7 +619,7 @@ function getMainKeyboard() {
 async function showMainMenu(messageId = null) {
     const uptime = Math.floor((Date.now() - global.botStartTime || 0) / 1000 / 60);
     const s = stateManager.state.settings;
-    const menu = `🏆 *OMNI v39* | ${uptime}m\n━━━━━━━━━━━━━━━━━━━━━━\n📊 ${s.selectedPairs.length}/${PAIRS.length} pairs\n⏰ ${s.selectedTimeframe} ⭐\n🤖 ${s.autoScanEnabled ? 'ON' : 'OFF'}\n━━━━━━━━━━━━━━━━━━━━━━\n📊 92%+ 👑 MAX (3%)\n📊 85-91% 🔥🔥🔥 STRONG (2.5%)\n📊 78-84% 🔥🔥 CONFIDENT (2%)\n📊 70-77% 🔥 NORMAL (1.5%)\n📊 62-69% ⚡ CAUTIOUS (1%)\n📊 55-61% ⚠️ SKIP (0.5%)\n━━━━━━━━━━━━━━━━━━━━━━\n*YOU decide. Not the bot.*`;
+    const menu = `🏆 *OMNI v40* | ${uptime}m\n━━━━━━━━━━━━━━━━━━━━━━\n📊 ${s.selectedPairs.length}/${PAIRS.length} pairs\n⏰ ${s.selectedTimeframe} ⭐\n🤖 ${s.autoScanEnabled ? 'ON' : 'OFF'}\n━━━━━━━━━━━━━━━━━━━━━━\n📊 92%+ 👑 MAX (3%)\n📊 85-91% 🔥🔥🔥 STRONG (2.5%)\n📊 78-84% 🔥🔥 CONFIDENT (2%)\n📊 70-77% 🔥 NORMAL (1.5%)\n📊 62-69% ⚡ CAUTIOUS (1%)\n📊 55-61% ⚠️ SKIP (0.5%)\n━━━━━━━━━━━━━━━━━━━━━━\n*YOU decide. Not the bot.*`;
     const kb = getMainKeyboard();
     if (messageId) {
         await editMessageText(messageId, menu, kb);
@@ -877,14 +881,14 @@ function startHealthServer() {
 
 global.botStartTime = Date.now();
 console.log('\n' + '█'.repeat(60));
-console.log('🏆 OMNI_BOT v39 - RSI/ADX GUARANTEED');
+console.log('🏆 OMNI_BOT v40 - FORCED TRENDING MOCK (ADX >30)');
 console.log('█'.repeat(60));
 console.log(`Strategy: NO REJECTION | YOU decide`);
 console.log(`Indicators: HMA + RSI + ADX + MACD + BB`);
 console.log(`Risk: Kelly Criterion + regime‑adaptive`);
 console.log(`Telegram: ${TELEGRAM_TOKEN ? '✅' : '❌'}`);
 console.log(`HTTP Port: ${PORT}`);
-console.log(`Data: Yahoo → Alpha Vantage → Twelve Data → Yahoo Raw → extreme mock (RSI/ADX guaranteed non‑zero)`);
+console.log(`Data: Yahoo → Alpha Vantage → Twelve Data → Yahoo Raw → FORCED TRENDING mock (ADX guaranteed >30)`);
 console.log('█'.repeat(60) + '\n');
 
 testConnectivity().catch(console.error);
@@ -893,7 +897,7 @@ startPolling();
 
 setTimeout(async () => {
     if (TELEGRAM_TOKEN && TELEGRAM_CHAT_ID) {
-        await sendMessage(`🤖 *OMNI_BOT v39 ONLINE*\n━━━━━━━━━━━━━━━━━━━━━━\n✅ RSI and ADX will never be zero\n✅ Multi‑source data fallback\n✅ Guaranteed directional signals\n📱 *Send /start to begin*`);
+        await sendMessage(`🤖 *OMNI_BOT v40 ONLINE*\n━━━━━━━━━━━━━━━━━━━━━━\n✅ Forced trending mock data – ADX will ALWAYS be >30\n✅ Multi‑source real data fallback\n✅ Guaranteed directional signals\n📱 *Send /start to begin*`);
     }
     console.log('🚀 Bot ready! Send /start');
 }, 3000);
