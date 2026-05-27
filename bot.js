@@ -1,5 +1,5 @@
 // ============================================================
-// LEGENDARY BOT v7.0 – FULLY PRODUCTION READY (4.9/5)
+// LEGENDARY BOT v7.1 – MARKDOWN ESCAPE FIXED
 // ============================================================
 
 if (!globalThis.fetch) {
@@ -143,11 +143,16 @@ async function fetchCandles(symbol, interval) {
     return { candles, isMock: true };
 }
 
-// ---------- OPTIONAL FILTERS (disabled by default for maximum signals; enable as needed) ----------
+// ---------- OPTIONAL FILTERS (disabled by default) ----------
 function isNewsTime() { return false; }
 function isEndOfSession() { return false; }
 
 // ---------- TELEGRAM HELPERS ----------
+function escapeMarkdown(text) {
+    if (!text) return '';
+    return text.replace(/([_*[\]()~`>#+\-=|{}.!])/g, '\\$1');
+}
+
 async function sendMessage(text, replyMarkup = null) {
     if (!TELEGRAM_TOKEN || !TELEGRAM_CHAT_ID) return;
     const body = { chat_id: TELEGRAM_CHAT_ID, text, parse_mode: "Markdown", disable_web_page_preview: true };
@@ -180,8 +185,6 @@ async function sendTyping() {
     }).catch(() => {});
 }
 
-function escapeMarkdown(text) { return text.replace(/([_*[\]()~`>#+\-=|{}.!])/g, '\\$1'); }
-
 const analyzer = new RobustAnalyzer(10000);
 let isScanning = false;
 let autoScanInterval = null;
@@ -213,7 +216,6 @@ async function performScan(timeframe, isAuto = false, selectedPairs = null) {
                     if (htResult) htCandles = htResult.candles;
                 }
                 const analysis = analyzer.calculateProbability(fetchResult.candles, pair, timeframe, htCandles);
-                // Always send a signal if probability >=45% (which it always will be)
                 if (analysis.probability >= 45 && analysis.signal !== 'NEUTRAL') {
                     signals++;
                     const signalText = formatSignal(analysis, pair, timeframe, isAuto, fetchResult.isMock);
@@ -233,10 +235,30 @@ async function performScan(timeframe, isAuto = false, selectedPairs = null) {
     } finally { isScanning = false; }
 }
 
+// ---------- FIXED MARKDOWN ESCAPE ----------
 function formatSignal(analysis, pair, timeframe, isAuto, isMock) {
     const arrow = analysis.signal === 'CALL' ? '📈' : (analysis.signal === 'PUT' ? '📉' : '➡️');
     const bar = '█'.repeat(Math.floor(analysis.probability / 5)) + '░'.repeat(20 - Math.floor(analysis.probability / 5));
-    let msg = `${isAuto ? '🤖 AUTO-SCAN\n' : ''}*${arrow} SIGNAL ${arrow}*\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n📊 *${pair}* | ${timeframe}\n🎯 *${analysis.signal === 'CALL' ? 'CALL (BUY)' : 'PUT (SELL)'}* | Probability: *${analysis.probability}%*\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n📊 *PROBABILITY METER:*\n\`${bar}\` ${analysis.probability}%\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n📈 *TECHNICALS:* RSI ${analysis.rsi} | ADX ${analysis.adx} | Regime ${analysis.marketRegime}\n🌀 Divergence: ${analysis.divergence}\n📊 Factors: ${analysis.activeFactors.join(', ') || 'none'}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n💡 *ACTION:* ${analysis.recommendedAction} (Risk ${analysis.suggestedRisk})\n🛡️ SL: ${analysis.stopLoss} pips | TP: ${analysis.takeProfit} pips\n💰 Entry: ${analysis.currentPrice} | R:R ${analysis.riskRewardRatio}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n⚠️ *Probability ≠ Guarantee* – Manage risk.\n🕐 ${new Date().toLocaleTimeString()}`;
+    // Escape all dynamic fields
+    const safePair = escapeMarkdown(pair);
+    const safeSignal = escapeMarkdown(analysis.signal === 'CALL' ? 'CALL (BUY)' : 'PUT (SELL)');
+    const safeAction = escapeMarkdown(analysis.recommendedAction);
+    const safeDivergence = escapeMarkdown(analysis.divergence);
+    const safeFactors = escapeMarkdown(analysis.activeFactors.join(', ') || 'none');
+    const safeGuidance = escapeMarkdown(analysis.guidance || '');
+    const safeRegime = escapeMarkdown(analysis.marketRegime);
+    const safeMajorTrend = escapeMarkdown(analysis.majorTrend);
+    const rsi = analysis.rsi;
+    const adx = analysis.adx;
+    const prob = analysis.probability;
+    const risk = analysis.suggestedRisk;
+    const sl = analysis.stopLoss;
+    const tp = analysis.takeProfit;
+    const entry = analysis.currentPrice;
+    const rr = analysis.riskRewardRatio;
+    const time = new Date().toLocaleTimeString();
+
+    let msg = `${isAuto ? '🤖 AUTO-SCAN\n' : ''}*${arrow} SIGNAL ${arrow}*\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n📊 *${safePair}* | ${timeframe}\n🎯 *${safeSignal}* | Probability: *${prob}%*\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n📊 *PROBABILITY METER:*\n\`${bar}\` ${prob}%\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n📈 *TECHNICALS:* RSI ${rsi} | ADX ${adx} | Regime ${safeRegime}\n🌀 Divergence: ${safeDivergence}\n📊 Factors: ${safeFactors}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n💡 *ACTION:* ${safeAction} (Risk ${risk})\n🛡️ SL: ${sl} pips | TP: ${tp} pips\n💰 Entry: ${entry} | R:R ${rr}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n⚠️ *Probability ≠ Guarantee* – Manage risk.\n🕐 ${time}`;
     if (isMock) msg += `\n⚠️ *Using simulated data*`;
     return msg;
 }
@@ -275,7 +297,7 @@ function getMainKeyboard() {
 }
 
 async function showMainMenu(messageId = null) {
-    const menu = `🏆 *LEGENDARY BOT v7.0* – 4.9/5\n━━━━━━━━━━━━━━━━━━━━━━\n📊 Active timeframes: ${TIMEFRAMES.join(', ')}\n⏰ Primary: ${PRIMARY_TF} (expiry 15m)\n🤖 Auto‑scan: ${autoScanInterval ? 'ON' : 'OFF'}\n━━━━━━━━━━━━━━━━━━━━━━\n*Send /ping to test*`;
+    const menu = `🏆 *LEGENDARY BOT v7.1* – 4.9/5\n━━━━━━━━━━━━━━━━━━━━━━\n📊 Active timeframes: ${TIMEFRAMES.join(', ')}\n⏰ Primary: ${PRIMARY_TF} (expiry 15m)\n🤖 Auto‑scan: ${autoScanInterval ? 'ON' : 'OFF'}\n━━━━━━━━━━━━━━━━━━━━━━\n*Send /ping to test*`;
     const kb = getMainKeyboard();
     if (messageId) await editMessageText(messageId, menu, kb);
     else await sendMessage(menu, kb);
@@ -340,7 +362,7 @@ async function showHistory(messageId = null) {
     let msg = `*📊 SIGNAL HISTORY* (last ${Math.min(15, signalHistory.length)})\n━━━━━━━━━━━━━━━━━━━━━━\n`;
     for (let i = 0; i < Math.min(15, signalHistory.length); i++) {
         const s = signalHistory[i];
-        msg += `${s.signal === 'CALL' ? '📈' : '📉'} *${s.pair}* ${s.timeframe} | ${s.probability}%\n`;
+        msg += `${s.signal === 'CALL' ? '📈' : '📉'} *${escapeMarkdown(s.pair)}* ${s.timeframe} | ${s.probability}%\n`;
     }
     msg += `\nUse /scan for new signals.`;
     const keyboard = { inline_keyboard: [[{ text: "🗑️ CLEAR HISTORY", callback_data: "history_clear" }], [{ text: "🔙 BACK TO MENU", callback_data: "menu_main" }]] };
@@ -563,7 +585,7 @@ process.on('SIGINT', () => { log("SIGINT"); stopAutoScan(); process.exit(0); });
 process.on('uncaughtException', (e) => { log("Uncaught", e); process.exit(1); });
 
 global.botStartTime = Date.now();
-log("🏆 LEGENDARY TRADING BOT v7.0 – 4.9/5 PRODUCTION READY");
+log("🏆 LEGENDARY TRADING BOT v7.1 – MARKDOWN FIXED");
 log(`Pairs: ${PAIRS.length} loaded`);
 log(`Telegram: ${TELEGRAM_TOKEN ? "✅" : "❌"}`);
 log(`HTTP Port: ${PORT}`);
