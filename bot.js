@@ -1,5 +1,5 @@
 // ============================================================
-// ULTIMATE BOT v7.0 – ENTERPRISE GRADE (4.9/5)
+// ULTIMATE BOT v7.0 – COMPLETE (NO MISSING FUNCTIONS)
 // ============================================================
 
 // Polyfill for Node <18
@@ -203,13 +203,12 @@ class StateManager {
     async withMutex(fn) { return this.mutex.runExclusive(async () => fn(this.getSnapshot())); }
     getSnapshot() { return JSON.parse(JSON.stringify(this.state)); }
     async update(updates) {
-        // Perform state update inside mutex to avoid races
         await this.mutex.runExclusive(async () => {
             if (updates.scanning) this.state.scanning = { ...this.state.scanning, ...updates.scanning };
             if (updates.settings) this.state.settings = { ...this.state.settings, ...updates.settings };
             if (updates.signals) this.state.signals = [...updates.signals];
             if (updates.stats) this.state.stats = { ...this.state.stats, ...updates.stats };
-            await this.persist();   // persist inside same lock
+            await this.persist();
         });
     }
     async persist() {
@@ -346,7 +345,7 @@ async function fetchCandles(symbol, interval) {
     return null;
 }
 
-// ------------------------- Telegram Helpers (unchanged but used via queue) -------------------------
+// ------------------------- Telegram Helpers -------------------------
 function escapeMarkdown(text) {
     return text.replace(/([_*[\]()~`>#+\-=|{}.!])/g, '\\$1');
 }
@@ -495,14 +494,230 @@ async function autoScan() {
     await performScan(stateManager.state.settings.selectedTimeframe, true);
 }
 
-// ------------------------- UI Components (unchanged, but included for completeness) -------------------------
-// (The UI functions showMainMenu, showPairSelection, etc. are identical to v6.2 – omitted here for brevity.
-//  They must be kept exactly as in the previous version. I will include them in the final downloadable file.)
+// ------------------------- UI Components -------------------------
+function getMainKeyboard() {
+    return { inline_keyboard: [
+        [{ text: "🔍 PROBABILITY SCAN", callback_data: "scan_manual" }],
+        [{ text: "🎯 SELECT PAIRS", callback_data: "menu_pairs" }, { text: "⏰ TIMEFRAME", callback_data: "menu_timeframe" }],
+        [{ text: "🤖 AUTO-SCAN", callback_data: "menu_autoscan" }, { text: "📊 HISTORY", callback_data: "menu_history" }],
+        [{ text: "📈 STATUS", callback_data: "menu_status" }, { text: "📋 GUIDE", callback_data: "menu_guide" }],
+        [{ text: "📊 STATS", callback_data: "menu_stats" }, { text: "❓ HELP", callback_data: "menu_help" }]
+    ] };
+}
 
-// ... (all UI functions remain the same as in v6.2) ...
+async function showMainMenu(messageId = null) {
+    const s = stateManager.state.settings;
+    const menu = `🏆 *ULTIMATE BOT v7.0* | 4.9/5\n━━━━━━━━━━━━━━━━━━━━━━\n📊 ${s.selectedPairs.length}/${PAIRS.length} pairs\n⏰ ${s.selectedTimeframe} ⭐\n🤖 ${s.autoScanEnabled ? 'ON' : 'OFF'}\n━━━━━━━━━━━━━━━━━━━━━━\n📊 85%+ → STRONG (2.5% risk)\n📊 75-84% → CONFIDENT (2.0%)\n📊 65-74% → NORMAL (1.5%)\n📊 55-64% → CAUTIOUS (0.8%)\n━━━━━━━━━━━━━━━━━━━━━━\n*YOU decide. Not the bot.*`;
+    const kb = getMainKeyboard();
+    if (messageId) await editMessageText(messageId, menu, kb);
+    else await sendMessage(menu, kb);
+}
 
-// ------------------------- Handlers (unchanged) -------------------------
-// ... (handleCommand, handleCallback same as v6.2) ...
+async function showPairSelection(page = 0, messageId = null) {
+    const perPage = 10;
+    const totalPages = Math.ceil(PAIRS.length / perPage);
+    const start = page * perPage;
+    const currentPairs = PAIRS.slice(start, start + perPage);
+    const selected = stateManager.state.settings.selectedPairs;
+    let menu = `*🎯 SELECT PAIRS* (${selected.length}/${PAIRS.length})\nPage ${page + 1}/${totalPages}\n\n`;
+    const keyboard = { inline_keyboard: [] };
+    for (const p of currentPairs) {
+        const check = selected.includes(p) ? '✅' : '⬜';
+        keyboard.inline_keyboard.push([{ text: `${check} ${p}`, callback_data: `toggle_${p}_${page}` }]);
+    }
+    const nav = [];
+    if (page > 0) nav.push({ text: "◀️ PREV", callback_data: `pairs_page_${page - 1}` });
+    if (page < totalPages - 1) nav.push({ text: "NEXT ▶️", callback_data: `pairs_page_${page + 1}` });
+    if (nav.length) keyboard.inline_keyboard.push(nav);
+    keyboard.inline_keyboard.push([{ text: "✅ SELECT ALL", callback_data: "pairs_select_all" }, { text: "❌ CLEAR ALL", callback_data: "pairs_clear_all" }]);
+    keyboard.inline_keyboard.push([{ text: "🔙 BACK TO MENU", callback_data: "menu_main" }]);
+    if (messageId) await editMessageText(messageId, menu, keyboard);
+    else await sendMessage(menu, keyboard);
+}
+
+async function showTimeframeSelection(messageId = null) {
+    let menu = `*⏰ SELECT TIMEFRAME*\nCurrent: *${stateManager.state.settings.selectedTimeframe}*\n━━━━━━━━━━━━━━━━━━━━━━\n*Choose timeframe:*`;
+    const keyboard = { inline_keyboard: [] };
+    for (const tf of TIMEFRAMES) {
+        const emoji = stateManager.state.settings.selectedTimeframe === tf ? '✅' : '🔘';
+        keyboard.inline_keyboard.push([{ text: `${emoji} ${tf}`, callback_data: `set_tf_${tf}` }]);
+    }
+    keyboard.inline_keyboard.push([{ text: "🔙 BACK TO MENU", callback_data: "menu_main" }]);
+    if (messageId) await editMessageText(messageId, menu, keyboard);
+    else await sendMessage(menu, keyboard);
+}
+
+async function showAutoScanMenu(messageId = null) {
+    const auto = stateManager.state.settings.autoScanEnabled;
+    const status = auto ? "🟢 ACTIVE" : "🔴 STOPPED";
+    const buttonText = auto ? "⏸️ STOP AUTO-SCAN" : "▶️ START AUTO-SCAN";
+    const buttonData = auto ? "autoscan_stop" : "autoscan_start";
+    let menu = `*🤖 AUTO-SCAN CONTROL*\nStatus: ${status}\nInterval: 15 minutes\nPrimary Timeframe: ${PRIMARY_TF}\n━━━━━━━━━━━━━━━━━━━━━━\nWhen enabled, bot automatically scans all selected pairs every 15 minutes.`;
+    const keyboard = { inline_keyboard: [[{ text: buttonText, callback_data: buttonData }], [{ text: "🔙 BACK TO MENU", callback_data: "menu_main" }]] };
+    if (messageId) await editMessageText(messageId, menu, keyboard);
+    else await sendMessage(menu, keyboard);
+}
+
+async function showHistory(messageId = null) {
+    const signals = stateManager.state.signals.slice(0, 15);
+    let msg = `*📊 SIGNAL HISTORY*\n━━━━━━━━━━━━━━━━━━━━━━\n`;
+    for (const s of signals) {
+        let emoji = s.probability >= 85 ? '🔥🔥' : (s.probability >= 75 ? '🔥' : (s.probability >= 65 ? '📊' : '⚠️'));
+        msg += `${emoji} ${s.signal === 'CALL' ? '📈' : '📉'} *${escapeMarkdown(s.pair)}* | ${s.probability}%\n   ${escapeMarkdown(s.recommendedAction)}\n\n`;
+    }
+    msg += `━━━━━━━━━━━━━━━━━━━━━━\n📊 Total: ${stateManager.state.signals.length}\n💡 Use probability to guide decisions.`;
+    const keyboard = { inline_keyboard: [[{ text: "🗑️ CLEAR HISTORY", callback_data: "history_clear" }], [{ text: "🔙 BACK TO MENU", callback_data: "menu_main" }]] };
+    if (messageId) await editMessageText(messageId, msg, keyboard);
+    else await sendMessage(msg, keyboard);
+}
+
+async function showStatus(messageId = null) {
+    const uptime = Math.floor((Date.now() - global.botStartTime) / 60000);
+    const signals = stateManager.state.signals;
+    const high = signals.filter(s => s.probability >= 75).length;
+    const dataAge = Math.floor((Date.now() - lastDataTimestamp) / 1000);
+    const msg = `*📈 STATUS*\n━━━━━━━━━━━━━━━━━━━━━━\nUptime: ${uptime}m\nPairs: ${stateManager.state.settings.selectedPairs.length}/${PAIRS.length}\nAuto: ${stateManager.state.settings.autoScanEnabled ? 'ON' : 'OFF'}\nData age: ${dataAge}s ago\n━━━━━━━━━━━━━━━━━━━━━━\n*SIGNALS:* ${signals.length}\n🔥 High (≥75%): ${high}\n━━━━━━━━━━━━━━━━━━━━━━\n*YOU are the decision maker*`;
+    const keyboard = { inline_keyboard: [[{ text: "🔙 BACK TO MENU", callback_data: "menu_main" }]] };
+    if (messageId) await editMessageText(messageId, msg, keyboard);
+    else await sendMessage(msg, keyboard);
+}
+
+async function showGuide(messageId = null) {
+    const msg = `*📋 PROBABILITY GUIDE*\n━━━━━━━━━━━━━━━━━━━━━━\n🔥🔥 85-100% → STRONG (2.5% risk)\n🔥 75-84% → CONFIDENT (2.0%)\n📊 65-74% → NORMAL (1.5%)\n⚠️ 55-64% → CAUTIOUS (0.8%)\n❌ <55% → NO TRADE\n━━━━━━━━━━━━━━━━━━━━━━\n*GOLDEN RULES:*\n• Higher % = Larger position\n• Lower % = Skip or tiny\n• YOU decide based on risk\n━━━━━━━━━━━━━━━━━━━━━━\n*REMEMBER:* Probability ≠ Guarantee`;
+    const keyboard = { inline_keyboard: [[{ text: "🔙 BACK TO MENU", callback_data: "menu_main" }]] };
+    if (messageId) await editMessageText(messageId, msg, keyboard);
+    else await sendMessage(msg, keyboard);
+}
+
+async function showHelp(messageId = null) {
+    const msg = `*📋 HELP*\n━━━━━━━━━━━━━━━━━━━━━━\n*COMMANDS:*\n/start - Menu\n/scan - Manual scan\n/status - Status\n/stats - Strategy performance\n/help - Help\n━━━━━━━━━━━━━━━━━━━━━━\n*HOW TO USE:*\n1. Bot shows EVERY signal with %\n2. After a trade, click WIN/LOSS to calibrate\n3. Higher % = Larger position\n━━━━━━━━━━━━━━━━━━━━━━\n*YOU are the decision maker*`;
+    const keyboard = { inline_keyboard: [[{ text: "🔙 BACK TO MENU", callback_data: "menu_main" }]] };
+    if (messageId) await editMessageText(messageId, msg, keyboard);
+    else await sendMessage(msg, keyboard);
+}
+
+async function showStats(messageId = null) {
+    const trades = analyzer.tradeHistory.slice(-50);
+    if (trades.length === 0) {
+        const msg = "📊 *No trade data yet.*\nAfter you receive signals and mark WIN/LOSS, stats will appear here.";
+        if (messageId) await editMessageText(messageId, msg);
+        else await sendMessage(msg);
+        return;
+    }
+    const wins = trades.filter(t => t.win).length;
+    const winRate = (wins / trades.length * 100).toFixed(1);
+    const returns = trades.map(t => t.win ? 1 : -1);
+    const avgReturn = returns.reduce((a,b)=>a+b,0)/returns.length;
+    const variance = returns.reduce((a,b)=>a + Math.pow(b - avgReturn,2),0)/returns.length;
+    const sharpe = avgReturn / (Math.sqrt(variance) || 1);
+    const profitFactor = (trades.filter(t=>t.win).length / (trades.filter(t=>!t.win).length || 1)).toFixed(2);
+    const msg = `📊 *STRATEGY STATS* (last ${trades.length} trades)\n━━━━━━━━━━━━━━━━━━━━━━\n✅ Win rate: ${winRate}%\n📈 Sharpe ratio: ${sharpe.toFixed(2)}\n💵 Profit factor: ${profitFactor}\n🎯 Total trades: ${trades.length}\n━━━━━━━━━━━━━━━━━━━━━━\n*Keep marking WIN/LOSS to improve calibration!*`;
+    const keyboard = { inline_keyboard: [[{ text: "🔙 BACK TO MENU", callback_data: "menu_main" }]] };
+    if (messageId) await editMessageText(messageId, msg, keyboard);
+    else await sendMessage(msg, keyboard);
+}
+
+// ------------------------- Command & Callback Handlers -------------------------
+async function handleCommand(text, chatId) {
+    if (chatId.toString() !== TELEGRAM_CHAT_ID) return;
+    await userLimiter.allow(chatId);
+    logger.info(`📩 Command: ${text}`);
+    if (text === '/start') await showMainMenu();
+    else if (text === '/status') await showStatus();
+    else if (text === '/stats') await showStats();
+    else if (text === '/scan') { await sendTypingAction(); await performScan(stateManager.state.settings.selectedTimeframe, false); }
+    else if (text === '/help') await showHelp();
+    else await sendMessage(`❌ Unknown command. Send /start for menu.`);
+}
+
+async function handleCallback(query) {
+    const data = query.data;
+    const msgId = query.message.message_id;
+    const userId = query.from.id;
+    await userLimiter.allow(userId);
+    logger.info(`🔘 Callback: ${data}`);
+
+    if (data.startsWith("record_win")) {
+        const rawScore = parseInt(data.split('_')[2]);
+        analyzer.recordTradeOutcome(true, rawScore);
+        await sendMessage("👍 Trade recorded as WIN. Calibration updated.");
+        await editMessageText(msgId, query.message.text);
+        return;
+    }
+    if (data.startsWith("record_loss")) {
+        const rawScore = parseInt(data.split('_')[2]);
+        analyzer.recordTradeOutcome(false, rawScore);
+        await sendMessage("👎 Trade recorded as LOSS. Calibration updated.");
+        await editMessageText(msgId, query.message.text);
+        return;
+    }
+    if (data === "cancel_scan") {
+        await stateManager.update({ scanning: { cancelRequested: true } });
+        await sendMessage("⏹️ Cancelling scan...");
+        return;
+    }
+    if (data === "history_clear") {
+        const confirmKeyboard = { inline_keyboard: [[
+            { text: "✅ YES, CLEAR", callback_data: "history_clear_confirm" },
+            { text: "❌ CANCEL", callback_data: "menu_history" }
+        ]] };
+        await editMessageText(msgId, "⚠️ *Are you sure?* This will delete all signal history permanently.", confirmKeyboard);
+        return;
+    }
+    if (data === "history_clear_confirm") {
+        await stateManager.update({ signals: [] });
+        await showHistory(msgId);
+        return;
+    }
+    // Main menu handlers
+    if (data === "menu_main") await showMainMenu(msgId);
+    else if (data === "menu_stats") await showStats(msgId);
+    else if (data === "scan_manual") { await sendTypingAction(); await performScan(stateManager.state.settings.selectedTimeframe, false); await showMainMenu(msgId); }
+    else if (data === "menu_pairs") await showPairSelection(0, msgId);
+    else if (data === "menu_timeframe") await showTimeframeSelection(msgId);
+    else if (data === "menu_autoscan") await showAutoScanMenu(msgId);
+    else if (data === "menu_history") await showHistory(msgId);
+    else if (data === "menu_status") await showStatus(msgId);
+    else if (data === "menu_guide") await showGuide(msgId);
+    else if (data === "menu_help") await showHelp(msgId);
+    else if (data === "autoscan_start") {
+        await stateManager.update({ settings: { autoScanEnabled: true } });
+        if (global.autoScanInterval) clearInterval(global.autoScanInterval);
+        global.autoScanInterval = setInterval(autoScan, 15 * 60 * 1000);
+        await showAutoScanMenu(msgId);
+        setTimeout(autoScan, 2000);
+    } else if (data === "autoscan_stop") {
+        await stateManager.update({ settings: { autoScanEnabled: false } });
+        if (global.autoScanInterval) clearInterval(global.autoScanInterval);
+        global.autoScanInterval = null;
+        await showAutoScanMenu(msgId);
+    } else if (data === "pairs_select_all") { await stateManager.update({ settings: { selectedPairs: [...PAIRS] } }); await showPairSelection(0, msgId); }
+    else if (data === "pairs_clear_all") { await stateManager.update({ settings: { selectedPairs: [] } }); await showPairSelection(0, msgId); }
+    else if (data.startsWith("toggle_")) {
+        const parts = data.split('_');
+        const pair = parts[1];
+        const page = parseInt(parts[2]) || 0;
+        if (!PAIRS.includes(pair)) return;
+        const current = stateManager.state.settings.selectedPairs;
+        const updated = current.includes(pair) ? current.filter(p => p !== pair) : [...current, pair];
+        await stateManager.update({ settings: { selectedPairs: updated } });
+        await showPairSelection(page, msgId);
+    }
+    else if (data.startsWith("pairs_page_")) {
+        const page = parseInt(data.replace("pairs_page_", ""));
+        if (!isNaN(page)) await showPairSelection(page, msgId);
+    }
+    else if (data.startsWith("set_tf_")) {
+        const tf = data.replace("set_tf_", "");
+        if (TIMEFRAMES.includes(tf)) {
+            await stateManager.update({ settings: { selectedTimeframe: tf } });
+            await showTimeframeSelection(msgId);
+        }
+    }
+    else {
+        await sendMessage("Unknown action. Use /start menu.");
+    }
+}
 
 // ------------------------- Resilient Polling (forever loop) -------------------------
 async function deleteWebhook(retries = 3) {
@@ -598,7 +813,7 @@ process.on('unhandledRejection', (r) => { logger.error('Unhandled rejection', { 
 // ------------------------- Startup -------------------------
 global.botStartTime = Date.now();
 console.log('\n' + '█'.repeat(60));
-console.log('🏆 ULTIMATE BOT v7.0 – 4.9/5 ENTERPRISE GRADE');
+console.log('🏆 ULTIMATE BOT v7.0 – 4.9/5 ENTERPRISE GRADE (COMPLETE)');
 console.log('█'.repeat(60));
 console.log(`Data: Yahoo Finance raw HTTP (live) with retry & circuit breaker`);
 console.log(`Pairs: ${PAIRS.length} pairs loaded from pairs.json`);
