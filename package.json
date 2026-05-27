@@ -1,18 +1,19 @@
 {
-  "name": "omni-pocket-bot",
-  "version": "27.0.0",
-  "description": "PRODUCTION GRADE – Yahoo Finance official package, no mock data",
+  "name": "institutional-trading-bot",
+  "version": "9.0.0",
+  "description": "INSTITUTIONAL GRADE – Yahoo Finance raw HTTP, regime‑adaptive, Kelly sizing, session liquidation",
   "main": "bot.js",
   "scripts": {
     "start": "node bot.js",
-    "pm2:start": "pm2 start bot.js --name omni-bot --max-memory-restart 500M",
-    "pm2:stop": "pm2 stop omni-bot",
-    "pm2:restart": "pm2 restart omni-bot"
+    "pm2:start": "pm2 start bot.js --name inst-bot --max-memory-restart 500M",
+    "pm2:stop": "pm2 stop inst-bot",
+    "pm2:restart": "pm2 restart inst-bot"
   },
   "dependencies": {
     "technicalindicators": "^3.1.0",
     "winston": "^3.13.0",
-    "yahoo-finance2": "^2.11.3"
+    "node-fetch": "^3.3.2",
+    "node-abort-controller": "^3.1.1"
   },
   "engines": {
     "node": ">=18.0.0"
