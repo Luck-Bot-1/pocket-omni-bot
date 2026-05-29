@@ -1,8 +1,8 @@
 // ============================================================
-// INSTITUTIONAL GRADE ANALYZER v20.1 – SAME SIGNAL COUNT, CORRECT DIRECTION
+// INSTITUTIONAL GRADE ANALYZER v22.0 – DIRECTION FIX ONLY
 // ============================================================
-// FIXES: Corrected divergence, soft SMA20/MACD filters (reduce confidence instead of skip),
-// adjusted thresholds to maintain similar signal frequency while eliminating wrong direction.
+// FIXES: Removed regime multiplier, hard MACD slope & SMA20 requirements,
+// corrected divergence detection, no look‑ahead bias, sustained EMA cross.
 // ============================================================
 const fs = require('fs');
 
@@ -20,7 +20,6 @@ class WorldClassAnalyzer {
             maxRSI_CALL: 65,
             minRSI_PUT: 35,
             minVolatilityPercent: 0.035,
-            volatilityLookback: 20,
             minSwingDistance: 5,
             divergenceRSILow: 45,
             divergenceRSIHigh: 55
@@ -28,7 +27,6 @@ class WorldClassAnalyzer {
         this.loadDynamicThresholds();
     }
 
-    // ---------- PERSISTENCE ----------
     loadCalibration() {
         try {
             if (fs.existsSync(this.calibrationFile)) {
@@ -70,13 +68,9 @@ class WorldClassAnalyzer {
         const winRate = wins / recent.length;
         if (winRate < 0.45) {
             this.thresholds.minADX = Math.min(28, this.thresholds.minADX + 1);
-            this.thresholds.maxRSI_CALL = Math.max(55, this.thresholds.maxRSI_CALL - 2);
-            this.thresholds.minRSI_PUT = Math.min(45, this.thresholds.minRSI_PUT + 2);
             this.saveDynamicThresholds();
         } else if (winRate > 0.7) {
             this.thresholds.minADX = Math.max(20, this.thresholds.minADX - 1);
-            this.thresholds.maxRSI_CALL = Math.min(70, this.thresholds.maxRSI_CALL + 1);
-            this.thresholds.minRSI_PUT = Math.max(30, this.thresholds.minRSI_PUT - 1);
             this.saveDynamicThresholds();
         }
     }
@@ -202,9 +196,6 @@ class WorldClassAnalyzer {
 
     calculateMACD(closes, fast=12, slow=26, signal=9) {
         if (closes.length < slow+signal) return { histogram: 0, slope: 0 };
-        const emaFast = this.calculateEMA(closes, fast);
-        const emaSlow = this.calculateEMA(closes, slow);
-        const macdLine = emaFast - emaSlow;
         const macdValues = [];
         for (let i = slow; i < closes.length; i++) {
             const ef = this.calculateEMA(closes.slice(0, i+1), fast);
@@ -218,7 +209,6 @@ class WorldClassAnalyzer {
         return { histogram, slope };
     }
 
-    // ---------- CORRECTED DIVERGENCE DETECTION ----------
     findSwings(arr, type = 'low', lookback = 3, minDistance = 5) {
         const swings = [];
         for (let i = lookback; i < arr.length - lookback; i++) {
@@ -246,7 +236,6 @@ class WorldClassAnalyzer {
         const priceHighs = this.findSwings(prices, 'high', 3, this.thresholds.minSwingDistance);
         const oscHighs = this.findSwings(oscillator, 'high', 3, this.thresholds.minSwingDistance);
 
-        // Regular bullish: price lower low, oscillator higher low
         if (priceLows.length >= 2 && oscLows.length >= 2) {
             const pLast = priceLows.slice(-2);
             const oLast = oscLows.slice(-2);
@@ -254,7 +243,6 @@ class WorldClassAnalyzer {
                 return "BULLISH_REGULAR";
             }
         }
-        // Regular bearish: price higher high, oscillator lower high
         if (priceHighs.length >= 2 && oscHighs.length >= 2) {
             const pLast = priceHighs.slice(-2);
             const oLast = oscHighs.slice(-2);
@@ -262,21 +250,15 @@ class WorldClassAnalyzer {
                 return "BEARISH_REGULAR";
             }
         }
-        // Hidden bullish: price higher low, oscillator lower low (continuation up)
         if (priceLows.length >= 2 && oscLows.length >= 2) {
             const pLast = priceLows.slice(-2);
             const oLast = oscLows.slice(-2);
-            if (pLast[1].val > pLast[0].val && oLast[1].val < oLast[0].val) {
-                return "BULLISH_HIDDEN";
-            }
+            if (pLast[1].val > pLast[0].val && oLast[1].val < oLast[0].val) return "BULLISH_HIDDEN";
         }
-        // Hidden bearish: price lower high, oscillator higher high (continuation down)
         if (priceHighs.length >= 2 && oscHighs.length >= 2) {
             const pLast = priceHighs.slice(-2);
             const oLast = oscHighs.slice(-2);
-            if (pLast[1].val < pLast[0].val && oLast[1].val > oLast[0].val) {
-                return "BEARISH_HIDDEN";
-            }
+            if (pLast[1].val < pLast[0].val && oLast[1].val > oLast[0].val) return "BEARISH_HIDDEN";
         }
         return null;
     }
@@ -291,19 +273,6 @@ class WorldClassAnalyzer {
         return map[divergence] || null;
     }
 
-    // ---------- ADAPTIVE VOLATILITY REGIME (SMOOTHED) ----------
-    calculateVolatilityRegime(atrArray, currentATR) {
-        if (atrArray.length < this.thresholds.volatilityLookback) return 1.0;
-        const mean = atrArray.reduce((a,b)=>a+b,0) / atrArray.length;
-        const variance = atrArray.map(x => Math.pow(x-mean,2)).reduce((a,b)=>a+b,0) / atrArray.length;
-        const std = Math.sqrt(variance);
-        const z = (currentATR - mean) / std;
-        if (z < -0.8) return 0.85;
-        if (z > 1.3) return 1.35;
-        return 1.0;
-    }
-
-    // ---------- MAIN SIGNAL ENGINE ----------
     calculateProbability(candles, pair, timeframe, htCandles = null) {
         try {
             if (!candles || candles.length < 61) {
@@ -323,16 +292,6 @@ class WorldClassAnalyzer {
                 console.log(`[SKIP] ${pair} ultra-low volatility (${volatility.toFixed(2)}%)`);
                 return this.neutral("Ultra-low volatility");
             }
-
-            const atrValues = [];
-            for (let i = Math.max(0, closedCandles.length - 50); i < closedCandles.length; i++) {
-                const slice = closedCandles.slice(0, i+1);
-                if (slice.length >= 15) {
-                    const h = slice.map(c=>c.high), l=slice.map(c=>c.low), c=slice.map(c=>c.close);
-                    atrValues.push(this.calculateATR(h, l, c, 14));
-                }
-            }
-            const regimeMultiplier = this.calculateVolatilityRegime(atrValues, atr);
 
             const { adx, plusDI, minusDI } = this.calculateADX(highs, lows, closes, 14);
             if (adx < this.thresholds.minADX) {
@@ -358,6 +317,7 @@ class WorldClassAnalyzer {
             let fifteenMinTrend = "NEUTRAL";
             if (ema9 > ema21) fifteenMinTrend = "BULLISH";
             else if (ema9 < ema21) fifteenMinTrend = "BEARISH";
+
             let sustained = true;
             if (closedCandles.length > 10) {
                 for (let shift = 1; shift <= 2; shift++) {
@@ -389,22 +349,18 @@ class WorldClassAnalyzer {
                 return this.neutral(`RSI extreme (${rsi.toFixed(0)}) for ${signal}`);
             }
 
-            // Soft filters (penalties)
-            let confidence = 70;
             const sma20 = this.calculateSMA(closes, 20);
-            let smaPenalty = 0;
-            if (signal === 'CALL' && currentPrice < sma20) smaPenalty = 15;
-            if (signal === 'PUT' && currentPrice > sma20) smaPenalty = 15;
+            if ((signal === 'CALL' && currentPrice < sma20) || (signal === 'PUT' && currentPrice > sma20)) {
+                console.log(`[SKIP] ${pair} price on wrong side of SMA20 (${currentPrice.toFixed(5)} vs ${sma20.toFixed(5)})`);
+                return this.neutral("Price vs SMA20 mismatch");
+            }
 
             const macd = this.calculateMACD(closes);
             const macdSlopePositive = macd.slope > 0;
-            let macdPenalty = 0;
             if ((signal === 'CALL' && !macdSlopePositive) || (signal === 'PUT' && macdSlopePositive)) {
-                macdPenalty = 12;
+                console.log(`[SKIP] ${pair} MACD slope opposes signal`);
+                return this.neutral("MACD slope mismatch");
             }
-
-            if (adx > 30) confidence += 12;
-            else if (adx > 25) confidence += 6;
 
             const rsiArray = [];
             for (let i = 30; i <= closes.length; i++) {
@@ -416,31 +372,31 @@ class WorldClassAnalyzer {
                 console.log(`[SKIP] ${pair} divergence mismatch: ${divergence} requires ${requiredDir}, got ${signal}`);
                 return this.neutral(`Divergence mismatch (${divergence})`);
             }
-            if (divergence) confidence += 18;
 
+            let confidence = 65;
+            if (adx > 35) confidence += 12;
+            else if (adx > 28) confidence += 8;
+            else if (adx > 22) confidence += 4;
+            if (divergence) confidence += 15;
             if (signal === "CALL" && rsi < 55 && rsi > 40) confidence += 5;
             if (signal === "PUT" && rsi > 45 && rsi < 60) confidence += 5;
+            let probability = Math.min(85, Math.max(65, confidence));
 
-            confidence -= smaPenalty;
-            confidence -= macdPenalty;
-            confidence = Math.round(confidence * regimeMultiplier);
-            let probability = Math.min(92, Math.max(65, confidence));
+            console.log(`[SIGNAL] ${pair} ${timeframe}: ${signal} prob=${probability}% ADX=${adx.toFixed(0)} RSI=${rsi.toFixed(0)} Div=${divergence || 'none'}`);
 
-            console.log(`[SIGNAL] ${pair} ${timeframe}: ${signal} prob=${probability}% ADX=${adx.toFixed(0)} RSI=${rsi.toFixed(0)} Div=${divergence || 'none'} SMApenalty=${smaPenalty} MACDpenalty=${macdPenalty}`);
-
-            const baseRisk = probability >= 85 ? 2.0 : (probability >= 75 ? 1.6 : 1.2);
+            const baseRisk = probability >= 80 ? 1.8 : (probability >= 70 ? 1.4 : 1.0);
             const kelly = this.calculateKellyFactor();
-            const volFactor = Math.min(1.4, Math.max(0.5, 0.0025 / (atr/currentPrice)));
+            const volFactor = Math.min(1.3, Math.max(0.5, 0.0025 / (atr/currentPrice)));
             let finalRisk = baseRisk * kelly * volFactor * this.riskMultiplier;
-            finalRisk = Math.min(3.0, Math.max(0.5, finalRisk));
+            finalRisk = Math.min(2.5, Math.max(0.5, finalRisk));
 
-            const stopPips = Math.max(7, Math.min(40, Math.round((atr / currentPrice) * 10000 * 1.15)));
-            const tpPips = Math.round(stopPips * (adx > 30 ? 2.1 : 1.7));
+            const stopPips = Math.max(7, Math.min(40, Math.round((atr / currentPrice) * 10000 * 1.1)));
+            const tpPips = Math.round(stopPips * (adx > 30 ? 2.0 : 1.6));
             const maxBars = (timeframe === '1m' ? 60 : 12);
 
             return {
                 signal, probability, rawScore: probability,
-                recommendedAction: probability >= 85 ? "STRONG_TRADE" : (probability >= 75 ? "CONFIDENT_TRADE" : "NORMAL_TRADE"),
+                recommendedAction: probability >= 80 ? "STRONG_TRADE" : (probability >= 70 ? "CONFIDENT_TRADE" : "NORMAL_TRADE"),
                 suggestedRisk: `${finalRisk.toFixed(2)}%`,
                 rsi: rsi.toFixed(1),
                 adx: adx.toFixed(1),
@@ -457,13 +413,13 @@ class WorldClassAnalyzer {
                     divergence ? `Divergence: ${divergence}` : '',
                     `ADX=${adx.toFixed(0)}`,
                     `1h trend: ${htTrend}`,
-                    `Price vs SMA20: ${currentPrice > sma20 ? 'above' : 'below'} (penalty ${smaPenalty})`,
-                    `MACD slope: ${macd.slope > 0 ? 'positive' : 'negative'} (penalty ${macdPenalty})`
+                    `Price vs SMA20: ${currentPrice > sma20 ? 'above' : 'below'}`,
+                    `MACD slope: ${macd.slope > 0 ? 'positive' : 'negative'}`
                 ].filter(f => f),
                 stopLoss: stopPips, takeProfit: tpPips, maxHoldBars: maxBars,
                 riskRewardRatio: (tpPips / stopPips).toFixed(2),
                 pair, timeframe, timestamp: new Date().toISOString(),
-                version: "WORLDCLASS-v20.1",
+                version: "WORLDCLASS-v22.0",
                 guidance: `${signal} | ADX ${adx.toFixed(0)} | RSI ${rsi.toFixed(0)} | ${divergence || 'no divergence'}`
             };
         } catch (err) {
@@ -481,7 +437,7 @@ class WorldClassAnalyzer {
             majorTrend: "NEUTRAL", hmaSlope: "0", activeFactors: [],
             stopLoss: 15, takeProfit: 27, maxHoldBars: 12,
             riskRewardRatio: "1.80", timestamp: new Date().toISOString(),
-            pair: "UNKNOWN", timeframe: "UNKNOWN", version: "WORLDCLASS-v20.1", guidance: reason
+            pair: "UNKNOWN", timeframe: "UNKNOWN", version: "WORLDCLASS-v22.0", guidance: reason
         };
     }
 
