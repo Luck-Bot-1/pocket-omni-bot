@@ -345,14 +345,8 @@ class WorldClassAnalyzer {
                 return this.neutral(`ADX too low (${adx.toFixed(0)})`);
             }
 
-            // RSI extreme filter (hard skip)
+            // RSI (value only, filter applied after signal is known)
             const rsi = this.calculateRSI(closes, 14);
-            // Direction‑aware RSI extreme filter
-if ((signal === 'CALL' && rsi > this.thresholds.maxRSI_CALL) ||
-    (signal === 'PUT' && rsi < this.thresholds.minRSI_PUT)) {
-    console.log(`[SKIP] ${pair} RSI extreme for ${signal} (${rsi.toFixed(0)})`);
-    return this.neutral(`RSI extreme (${rsi.toFixed(0)}) for ${signal}`);
-}
 
             // Higher timeframe trend (if provided, also closed candles)
             let htTrend = null;
@@ -398,6 +392,13 @@ if ((signal === 'CALL' && rsi > this.thresholds.maxRSI_CALL) ||
             else {
                 console.log(`[SKIP] ${pair} trend mismatch: 15m ${fifteenMinTrend}, 1h ${htTrend}, DI call=${diCall} put=${diPut}`);
                 return this.neutral("Trend alignment failure");
+            }
+
+            // ***** DIRECTION‑AWARE RSI FILTER (AFTER SIGNAL IS KNOWN) *****
+            if ((signal === 'CALL' && rsi > this.thresholds.maxRSI_CALL) ||
+                (signal === 'PUT' && rsi < this.thresholds.minRSI_PUT)) {
+                console.log(`[SKIP] ${pair} RSI extreme for ${signal} (${rsi.toFixed(0)})`);
+                return this.neutral(`RSI extreme (${rsi.toFixed(0)}) for ${signal}`);
             }
 
             // Divergence detection & direction enforcement
