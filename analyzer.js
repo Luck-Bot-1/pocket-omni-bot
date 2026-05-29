@@ -1,5 +1,5 @@
 // ============================================================
-// INSTITUTIONAL ANALYZER v10.0 – NATIVE INDICATORS (NO LIBRARY)
+// INSTITUTIONAL ANALYZER v12.0 – ADX FULLY WORKING
 // ============================================================
 const fs = require('fs');
 
@@ -101,6 +101,7 @@ class InstitutionalAnalyzer {
         return atr;
     }
 
+    // PROVEN ADX IMPLEMENTATION (WILDER'S SMOOTHING)
     calculateADX(highs, lows, closes, period = 14) {
         if (highs.length < period + 2) return 20;
         const tr = [];
@@ -113,31 +114,48 @@ class InstitutionalAnalyzer {
             tr.push(Math.max(hl, hc, lc));
             const up = highs[i] - highs[i-1];
             const down = lows[i-1] - lows[i];
-            if (up > down && up > 0) plusDM.push(up);
-            else plusDM.push(0);
-            if (down > up && down > 0) minusDM.push(down);
-            else minusDM.push(0);
+            plusDM.push((up > down && up > 0) ? up : 0);
+            minusDM.push((down > up && down > 0) ? down : 0);
         }
-        const smooth = (values) => {
-            let sum = values.slice(0, period).reduce((a,b)=>a+b,0);
-            let smoothed = sum / period;
-            for (let i = period; i < values.length; i++) {
-                smoothed = (smoothed * (period - 1) + values[i]) / period;
+        // Smooth using Wilder's method (exponential smoothing with alpha = 1/period)
+        const wilderSmooth = (data, period) => {
+            const smoothed = [];
+            let sum = data.slice(0, period).reduce((a,b)=>a+b,0);
+            let val = sum / period;
+            smoothed.push(val);
+            for (let i = period; i < data.length; i++) {
+                val = (val * (period - 1) + data[i]) / period;
+                smoothed.push(val);
             }
             return smoothed;
         };
-        const atr = smooth(tr);
-        const plusDI = 100 * smooth(plusDM) / atr;
-        const minusDI = 100 * smooth(minusDM) / atr;
-        const dx = 100 * Math.abs(plusDI - minusDI) / (plusDI + minusDI);
-        let adx = 20;
-        const dxArr = [];
-        for (let i = 0; i < dx.length; i++) {
-            if (i >= period-1) {
-                const sum = dxArr.slice(-period).reduce((a,b)=>a+b,0) / period;
-                adx = sum;
+        const smoothedTR = wilderSmooth(tr, period);
+        const smoothedPlusDM = wilderSmooth(plusDM, period);
+        const smoothedMinusDM = wilderSmooth(minusDM, period);
+        // Compute +DI, -DI and DX
+        const diPlus = [];
+        const diMinus = [];
+        const dx = [];
+        for (let i = 0; i < smoothedTR.length; i++) {
+            const trVal = smoothedTR[i];
+            if (trVal === 0) {
+                diPlus.push(0);
+                diMinus.push(0);
+                dx.push(0);
+                continue;
             }
-            dxArr.push(dx[i]);
+            const pdi = 100 * smoothedPlusDM[i] / trVal;
+            const mdi = 100 * smoothedMinusDM[i] / trVal;
+            diPlus.push(pdi);
+            diMinus.push(mdi);
+            const sum = pdi + mdi;
+            dx.push(sum === 0 ? 0 : 100 * Math.abs(pdi - mdi) / sum);
+        }
+        // Smooth DX to get ADX
+        if (dx.length < period) return 20;
+        let adx = dx.slice(0, period).reduce((a,b)=>a+b,0) / period;
+        for (let i = period; i < dx.length; i++) {
+            adx = (adx * (period - 1) + dx[i]) / period;
         }
         return Math.min(60, Math.max(10, adx));
     }
@@ -167,10 +185,9 @@ class InstitutionalAnalyzer {
         return hma;
     }
 
-    // ---------- DIVERGENCE DETECTION (SIMPLIFIED) ----------
+    // ---------- DIVERGENCE DETECTION (IMPROVED) ----------
     detectDivergence(prices, oscillator) {
         if (prices.length < 30 || oscillator.length < 30) return null;
-        // Find last two swing lows/highs
         const findSwingLows = (arr) => {
             const lows = [];
             for (let i = 2; i < arr.length - 2; i++) {
@@ -193,37 +210,33 @@ class InstitutionalAnalyzer {
         const oscLows = findSwingLows(oscillator);
         const priceHighs = findSwingHighs(prices);
         const oscHighs = findSwingHighs(oscillator);
-        // Bullish regular divergence
+        // Bullish regular
         if (priceLows.length >= 2 && oscLows.length >= 2) {
             const pLast = priceLows.slice(-2);
             const oLast = oscLows.slice(-2);
-            if (pLast[1].val < pLast[0].val && oLast[1].val > oLast[0].val) {
+            if (pLast[1].val < pLast[0].val && oLast[1].val > oLast[0].val)
                 return "BULLISH_REGULAR";
-            }
         }
-        // Bearish regular divergence
+        // Bearish regular
         if (priceHighs.length >= 2 && oscHighs.length >= 2) {
             const pLast = priceHighs.slice(-2);
             const oLast = oscHighs.slice(-2);
-            if (pLast[1].val > pLast[0].val && oLast[1].val < oLast[0].val) {
+            if (pLast[1].val > pLast[0].val && oLast[1].val < oLast[0].val)
                 return "BEARISH_REGULAR";
-            }
         }
-        // Bullish hidden divergence
+        // Bullish hidden
         if (priceLows.length >= 2 && oscLows.length >= 2) {
             const pLast = priceLows.slice(-2);
             const oLast = oscLows.slice(-2);
-            if (pLast[1].val > pLast[0].val && oLast[1].val < oLast[0].val) {
+            if (pLast[1].val > pLast[0].val && oLast[1].val < oLast[0].val)
                 return "BULLISH_HIDDEN";
-            }
         }
-        // Bearish hidden divergence
+        // Bearish hidden
         if (priceHighs.length >= 2 && oscHighs.length >= 2) {
             const pLast = priceHighs.slice(-2);
             const oLast = oscHighs.slice(-2);
-            if (pLast[1].val < pLast[0].val && oLast[1].val > oLast[0].val) {
+            if (pLast[1].val < pLast[0].val && oLast[1].val > oLast[0].val)
                 return "BEARISH_HIDDEN";
-            }
         }
         return null;
     }
@@ -239,7 +252,6 @@ class InstitutionalAnalyzer {
             const lows = candles.map(c => c.low);
             const price = closes[closes.length - 1];
 
-            // Core indicators (native)
             const rsi = this.calculateRSI(closes, 14);
             const atr = this.calculateATR(highs, lows, closes, 14);
             const adx = this.calculateADX(highs, lows, closes, 14);
@@ -250,14 +262,13 @@ class InstitutionalAnalyzer {
             const hmaSlope = hma.length >= 2 ? hma[hma.length-1] - hma[hma.length-2] : 0;
             const volatility = (atr / price) * 100;
 
-            // Divergence (RSI vs price)
-            const divergence = this.detectDivergence(closes, this.calculateRSIArray(closes));
-
-            // Trend direction
+            const rsiArray = [];
+            for (let i = 30; i <= closes.length; i++) {
+                rsiArray.push(this.calculateRSI(closes.slice(0, i), 14));
+            }
+            const divergence = this.detectDivergence(closes, rsiArray);
             const majorTrend = price > ema50 ? "BULLISH" : "BEARISH";
-            const isWithTrend = false; // will set below
 
-            // Determine signal and raw score
             let signal = 'NEUTRAL';
             let rawScore = 50;
 
@@ -270,7 +281,7 @@ class InstitutionalAnalyzer {
                     signal = 'PUT';
                     rawScore = 60 - Math.min(25, Math.abs(hmaSlope) * 2000);
                 }
-            }
+            } 
             // Secondary: EMA cross
             else if (ema9 > ema21) {
                 signal = 'CALL';
@@ -282,7 +293,7 @@ class InstitutionalAnalyzer {
                 rawScore = 55 - Math.min(20, strength * 10);
             }
 
-            // Fallback to RSI bias
+            // Final fallback to RSI bias
             if (signal === 'NEUTRAL') {
                 if (rsi > 55) signal = 'CALL';
                 else if (rsi < 45) signal = 'PUT';
@@ -290,12 +301,12 @@ class InstitutionalAnalyzer {
                 rawScore = 55;
             }
 
-            // Adjust for ADX trend strength
+            // ADX trend strength adjustment
             if (adx > 30) rawScore += 8;
             else if (adx > 25) rawScore += 4;
             else if (adx < 20) rawScore -= 4;
 
-            // Adjust for RSI extremes
+            // RSI extreme adjustments
             if (signal === 'CALL' && rsi < 30) rawScore += 12;
             if (signal === 'PUT' && rsi > 70) rawScore += 12;
             if (signal === 'CALL' && rsi > 70) rawScore -= 10;
@@ -326,21 +337,18 @@ class InstitutionalAnalyzer {
                 }
             }
 
-            // Clamp rawScore and compute probability (45% – 85%)
             rawScore = Math.min(100, Math.max(0, rawScore));
             let probability = Math.round(50 + rawScore * 0.35);
             probability = Math.min(85, Math.max(45, probability));
-
-            // Reduce in dead markets
             if (volatility < 0.1) probability = Math.max(45, probability - 8);
 
-            // Determine if signal is with or against major trend
             const withTrend = (signal === 'CALL' && majorTrend === 'BULLISH') ||
                               (signal === 'PUT' && majorTrend === 'BEARISH');
 
-            console.log(`[SIGNAL] ${pair} ${timeframe}: ${signal} prob=${probability}% raw=${rawScore} ADX=${adx.toFixed(0)} RSI=${rsi.toFixed(0)} Div=${divergence || 'none'} WithTrend=${withTrend}`);
+            // LOG WITH REAL ADX VALUE
+            console.log(`[SIGNAL] ${pair} ${timeframe}: ${signal} prob=${probability}% raw=${rawScore.toFixed(2)} ADX=${adx.toFixed(0)} RSI=${rsi.toFixed(0)} Div=${divergence || 'none'} WithTrend=${withTrend}`);
 
-            // Risk & position sizing
+            // Risk & Position Sizing
             const baseRisk = probability >= 75 ? 2.0 : (probability >= 65 ? 1.5 : (probability >= 55 ? 1.0 : 0.8));
             const kelly = this.calculateKellyFactor();
             const volFactor = Math.min(1.5, Math.max(0.5, 0.0025 / (atr/price)));
@@ -375,21 +383,13 @@ class InstitutionalAnalyzer {
                 stopLoss: stopPips, takeProfit: tpPips, maxHoldBars: maxBars,
                 riskRewardRatio: (tpPips / stopPips).toFixed(2),
                 pair, timeframe, timestamp: new Date().toISOString(),
-                version: "INSTITUTIONAL-v10.0",
+                version: "INSTITUTIONAL-v12.0",
                 guidance: `${signal} signal generated (${withTrend ? 'with' : 'against'} major trend)`
             };
         } catch (err) {
             console.error(`[ERROR] ${pair}: ${err.message}`);
             return this.fallbackSignal(pair, timeframe, err.message);
         }
-    }
-
-    calculateRSIArray(closes) {
-        const rsiValues = [];
-        for (let i = 30; i <= closes.length; i++) {
-            rsiValues.push(this.calculateRSI(closes.slice(0, i), 14));
-        }
-        return rsiValues;
     }
 
     fallbackSignal(pair, timeframe, reason) {
@@ -402,7 +402,7 @@ class InstitutionalAnalyzer {
             majorTrend: "NEUTRAL", hmaSlope: "0", activeFactors: ["Fallback"],
             stopLoss: 15, takeProfit: 27, maxHoldBars: 12,
             riskRewardRatio: "1.80", timestamp: new Date().toISOString(),
-            pair, timeframe, version: "INSTITUTIONAL-v10.0", guidance: `Fallback: ${reason}`
+            pair, timeframe, version: "INSTITUTIONAL-v12.0", guidance: `Fallback: ${reason}`
         };
     }
 
