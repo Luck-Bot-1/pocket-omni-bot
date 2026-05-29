@@ -1,9 +1,9 @@
 // ============================================================
-// INSTITUTIONAL ANALYZER v12.0 – ADX FULLY WORKING
+// WORLD‑CLASS ANALYZER v13.0 – INSTITUTIONAL QUALITY
 // ============================================================
 const fs = require('fs');
 
-class InstitutionalAnalyzer {
+class WorldClassAnalyzer {
     constructor(initialCapital = 10000) {
         this.tradeHistory = [];
         this.calibrationFile = './calibration.json';
@@ -49,14 +49,12 @@ class InstitutionalAnalyzer {
         else this.riskMultiplier = 1;
     }
 
-    // ---------- NATIVE INDICATOR IMPLEMENTATIONS ----------
+    // ---------- NATIVE INDICATORS (FAST & RELIABLE) ----------
     calculateEMA(data, period) {
         if (data.length < period) return data[data.length-1];
         const k = 2 / (period + 1);
         let ema = data[0];
-        for (let i = 1; i < data.length; i++) {
-            ema = data[i] * k + ema * (1 - k);
-        }
+        for (let i = 1; i < data.length; i++) ema = data[i] * k + ema * (1 - k);
         return ema;
     }
 
@@ -68,8 +66,7 @@ class InstitutionalAnalyzer {
             if (diff >= 0) gains += diff;
             else losses -= diff;
         }
-        let avgGain = gains / period;
-        let avgLoss = losses / period;
+        let avgGain = gains / period, avgLoss = losses / period;
         for (let i = period + 1; i < closes.length; i++) {
             const diff = closes[i] - closes[i-1];
             if (diff >= 0) {
@@ -81,8 +78,7 @@ class InstitutionalAnalyzer {
             }
         }
         if (avgLoss === 0) return 100;
-        const rs = avgGain / avgLoss;
-        return 100 - (100 / (1 + rs));
+        return 100 - (100 / (1 + avgGain / avgLoss));
     }
 
     calculateATR(highs, lows, closes, period = 14) {
@@ -95,18 +91,13 @@ class InstitutionalAnalyzer {
             tr.push(Math.max(hl, hc, lc));
         }
         let atr = tr.slice(0, period).reduce((a,b)=>a+b,0) / period;
-        for (let i = period; i < tr.length; i++) {
-            atr = (atr * (period - 1) + tr[i]) / period;
-        }
+        for (let i = period; i < tr.length; i++) atr = (atr * (period - 1) + tr[i]) / period;
         return atr;
     }
 
-    // PROVEN ADX IMPLEMENTATION (WILDER'S SMOOTHING)
     calculateADX(highs, lows, closes, period = 14) {
         if (highs.length < period + 2) return 20;
-        const tr = [];
-        const plusDM = [];
-        const minusDM = [];
+        const tr = [], plusDM = [], minusDM = [];
         for (let i = 1; i < highs.length; i++) {
             const hl = highs[i] - lows[i];
             const hc = Math.abs(highs[i] - closes[i-1]);
@@ -117,8 +108,7 @@ class InstitutionalAnalyzer {
             plusDM.push((up > down && up > 0) ? up : 0);
             minusDM.push((down > up && down > 0) ? down : 0);
         }
-        // Smooth using Wilder's method (exponential smoothing with alpha = 1/period)
-        const wilderSmooth = (data, period) => {
+        const wilderSmooth = (data) => {
             const smoothed = [];
             let sum = data.slice(0, period).reduce((a,b)=>a+b,0);
             let val = sum / period;
@@ -129,35 +119,26 @@ class InstitutionalAnalyzer {
             }
             return smoothed;
         };
-        const smoothedTR = wilderSmooth(tr, period);
-        const smoothedPlusDM = wilderSmooth(plusDM, period);
-        const smoothedMinusDM = wilderSmooth(minusDM, period);
-        // Compute +DI, -DI and DX
-        const diPlus = [];
-        const diMinus = [];
-        const dx = [];
+        const smoothedTR = wilderSmooth(tr);
+        const smoothedPlus = wilderSmooth(plusDM);
+        const smoothedMinus = wilderSmooth(minusDM);
+        const diPlus = [], diMinus = [], dx = [];
         for (let i = 0; i < smoothedTR.length; i++) {
             const trVal = smoothedTR[i];
             if (trVal === 0) {
-                diPlus.push(0);
-                diMinus.push(0);
-                dx.push(0);
+                diPlus.push(0); diMinus.push(0); dx.push(0);
                 continue;
             }
-            const pdi = 100 * smoothedPlusDM[i] / trVal;
-            const mdi = 100 * smoothedMinusDM[i] / trVal;
-            diPlus.push(pdi);
-            diMinus.push(mdi);
+            const pdi = 100 * smoothedPlus[i] / trVal;
+            const mdi = 100 * smoothedMinus[i] / trVal;
+            diPlus.push(pdi); diMinus.push(mdi);
             const sum = pdi + mdi;
             dx.push(sum === 0 ? 0 : 100 * Math.abs(pdi - mdi) / sum);
         }
-        // Smooth DX to get ADX
         if (dx.length < period) return 20;
         let adx = dx.slice(0, period).reduce((a,b)=>a+b,0) / period;
-        for (let i = period; i < dx.length; i++) {
-            adx = (adx * (period - 1) + dx[i]) / period;
-        }
-        return Math.min(60, Math.max(10, adx));
+        for (let i = period; i < dx.length; i++) adx = (adx * (period - 1) + dx[i]) / period;
+        return Math.min(60, Math.max(0, adx));
     }
 
     calculateHMA(data, period) {
@@ -179,30 +160,27 @@ class InstitutionalAnalyzer {
             const wma1 = wma(seg, period);
             const wma2 = wma(seg, half);
             const raw = 2 * wma2 - wma1;
-            const smoothed = wma([raw], sqrt);
-            hma.push(smoothed);
+            hma.push(wma([raw], sqrt));
         }
         return hma;
     }
 
-    // ---------- DIVERGENCE DETECTION (IMPROVED) ----------
+    // ---------- ENHANCED DIVERGENCE (WITH RSI THRESHOLDS) ----------
     detectDivergence(prices, oscillator) {
         if (prices.length < 30 || oscillator.length < 30) return null;
         const findSwingLows = (arr) => {
             const lows = [];
             for (let i = 2; i < arr.length - 2; i++) {
-                if (arr[i] < arr[i-1] && arr[i] < arr[i-2] && arr[i] < arr[i+1] && arr[i] < arr[i+2]) {
+                if (arr[i] < arr[i-1] && arr[i] < arr[i-2] && arr[i] < arr[i+1] && arr[i] < arr[i+2])
                     lows.push({ idx: i, val: arr[i] });
-                }
             }
             return lows;
         };
         const findSwingHighs = (arr) => {
             const highs = [];
             for (let i = 2; i < arr.length - 2; i++) {
-                if (arr[i] > arr[i-1] && arr[i] > arr[i-2] && arr[i] > arr[i+1] && arr[i] > arr[i+2]) {
+                if (arr[i] > arr[i-1] && arr[i] > arr[i-2] && arr[i] > arr[i+1] && arr[i] > arr[i+2])
                     highs.push({ idx: i, val: arr[i] });
-                }
             }
             return highs;
         };
@@ -210,28 +188,27 @@ class InstitutionalAnalyzer {
         const oscLows = findSwingLows(oscillator);
         const priceHighs = findSwingHighs(prices);
         const oscHighs = findSwingHighs(oscillator);
-        // Bullish regular
+        // Bullish regular (price lower low, oscillator higher low) + RSI < 45 at the swing
         if (priceLows.length >= 2 && oscLows.length >= 2) {
             const pLast = priceLows.slice(-2);
             const oLast = oscLows.slice(-2);
-            if (pLast[1].val < pLast[0].val && oLast[1].val > oLast[0].val)
+            if (pLast[1].val < pLast[0].val && oLast[1].val > oLast[0].val && oLast[1].val < 45)
                 return "BULLISH_REGULAR";
         }
-        // Bearish regular
+        // Bearish regular (price higher high, oscillator lower high) + RSI > 55 at the swing
         if (priceHighs.length >= 2 && oscHighs.length >= 2) {
             const pLast = priceHighs.slice(-2);
             const oLast = oscHighs.slice(-2);
-            if (pLast[1].val > pLast[0].val && oLast[1].val < oLast[0].val)
+            if (pLast[1].val > pLast[0].val && oLast[1].val < oLast[0].val && oLast[1].val > 55)
                 return "BEARISH_REGULAR";
         }
-        // Bullish hidden
+        // Hidden divergences (stronger) – no RSI threshold needed
         if (priceLows.length >= 2 && oscLows.length >= 2) {
             const pLast = priceLows.slice(-2);
             const oLast = oscLows.slice(-2);
             if (pLast[1].val > pLast[0].val && oLast[1].val < oLast[0].val)
                 return "BULLISH_HIDDEN";
         }
-        // Bearish hidden
         if (priceHighs.length >= 2 && oscHighs.length >= 2) {
             const pLast = priceHighs.slice(-2);
             const oLast = oscHighs.slice(-2);
@@ -241,7 +218,7 @@ class InstitutionalAnalyzer {
         return null;
     }
 
-    // ---------- MAIN SIGNAL ENGINE ----------
+    // ---------- MAIN SIGNAL ENGINE (WORLD-CLASS) ----------
     calculateProbability(candles, pair, timeframe, htCandles = null) {
         try {
             if (!candles || candles.length < 50) {
@@ -262,6 +239,19 @@ class InstitutionalAnalyzer {
             const hmaSlope = hma.length >= 2 ? hma[hma.length-1] - hma[hma.length-2] : 0;
             const volatility = (atr / price) * 100;
 
+            // ----- QUALITY FILTERS (WORLD-CLASS) -----
+            // 1. Dead market: ultra-low volatility -> no trade
+            if (volatility < 0.05) {
+                console.log(`[SKIP] ${pair} ${timeframe}: ultra-low volatility (${volatility.toFixed(2)}%)`);
+                return this.neutral("Ultra-low volatility");
+            }
+            // 2. Very low ADX (<15) -> no trade (chop zone)
+            if (adx < 15) {
+                console.log(`[SKIP] ${pair} ${timeframe}: ADX=${adx.toFixed(0)} < 15 (ranging, no trend)`);
+                return this.neutral("ADX too low (ranging market)");
+            }
+
+            // Compute divergence with RSI swings
             const rsiArray = [];
             for (let i = 30; i <= closes.length; i++) {
                 rsiArray.push(this.calculateRSI(closes.slice(0, i), 14));
@@ -269,100 +259,118 @@ class InstitutionalAnalyzer {
             const divergence = this.detectDivergence(closes, rsiArray);
             const majorTrend = price > ema50 ? "BULLISH" : "BEARISH";
 
+            // Determine direction and raw score (0-100)
             let signal = 'NEUTRAL';
             let rawScore = 50;
 
-            // Primary momentum: HMA slope
-            if (Math.abs(hmaSlope) > 0.0001) {
+            // Primary: HMA slope (zero lag)
+            if (Math.abs(hmaSlope) > 0.00015) {
                 if (hmaSlope > 0) {
                     signal = 'CALL';
-                    rawScore = 60 + Math.min(25, hmaSlope * 2000);
+                    rawScore = 65 + Math.min(25, hmaSlope * 2000);
                 } else {
                     signal = 'PUT';
-                    rawScore = 60 - Math.min(25, Math.abs(hmaSlope) * 2000);
+                    rawScore = 65 - Math.min(25, Math.abs(hmaSlope) * 2000);
                 }
-            } 
+            }
             // Secondary: EMA cross
             else if (ema9 > ema21) {
                 signal = 'CALL';
                 const strength = (ema9 - ema21) / price * 100;
-                rawScore = 55 + Math.min(20, strength * 10);
+                rawScore = 58 + Math.min(22, strength * 12);
             } else if (ema9 < ema21) {
                 signal = 'PUT';
                 const strength = (ema21 - ema9) / price * 100;
-                rawScore = 55 - Math.min(20, strength * 10);
+                rawScore = 58 - Math.min(22, strength * 12);
+            } else {
+                // Neutral: RSI bias
+                if (rsi > 55) { signal = 'CALL'; rawScore = 55; }
+                else if (rsi < 45) { signal = 'PUT'; rawScore = 55; }
+                else { signal = 'CALL'; rawScore = 52; }
             }
 
-            // Final fallback to RSI bias
-            if (signal === 'NEUTRAL') {
-                if (rsi > 55) signal = 'CALL';
-                else if (rsi < 45) signal = 'PUT';
-                else signal = 'CALL';
-                rawScore = 55;
-            }
-
-            // ADX trend strength adjustment
-            if (adx > 30) rawScore += 8;
-            else if (adx > 25) rawScore += 4;
-            else if (adx < 20) rawScore -= 4;
+            // ---- ADX WEIGHT (very important) ----
+            if (adx > 30) rawScore += 12;      // strong trend
+            else if (adx > 25) rawScore += 6;   // moderate trend
+            else if (adx < 20) rawScore -= 8;   // weak trend (but ADX>15 already, so not too harsh)
 
             // RSI extreme adjustments
-            if (signal === 'CALL' && rsi < 30) rawScore += 12;
-            if (signal === 'PUT' && rsi > 70) rawScore += 12;
-            if (signal === 'CALL' && rsi > 70) rawScore -= 10;
-            if (signal === 'PUT' && rsi < 30) rawScore -= 10;
+            if (signal === 'CALL' && rsi < 30) rawScore += 14;
+            if (signal === 'PUT' && rsi > 70) rawScore += 14;
+            if (signal === 'CALL' && rsi > 70) rawScore -= 12;
+            if (signal === 'PUT' && rsi < 30) rawScore -= 12;
 
-            // Divergence adjustment
+            // Divergence adjustment (strong bonus)
             if (divergence) {
                 if ((signal === 'CALL' && divergence.includes('BULLISH')) ||
                     (signal === 'PUT' && divergence.includes('BEARISH'))) {
-                    rawScore += 15;
+                    rawScore += 18;
                 } else {
-                    rawScore -= 10;
+                    rawScore -= 12; // divergence against signal
                 }
             }
 
-            // Higher timeframe alignment
+            // Higher timeframe alignment (mandatory for high confidence)
             let htTrend = 'NEUTRAL';
+            let htBonus = 0;
             if (htCandles && htCandles.length >= 50) {
                 const htCloses = htCandles.map(c => c.close);
                 const htEMA50 = this.calculateEMA(htCloses, 50);
                 htTrend = htCloses[htCloses.length-1] > htEMA50 ? 'BULLISH' : 'BEARISH';
                 if ((signal === 'CALL' && htTrend === 'BULLISH') ||
                     (signal === 'PUT' && htTrend === 'BEARISH')) {
-                    rawScore += 10;
+                    htBonus = 12;
+                    rawScore += 12;
                 } else if ((signal === 'CALL' && htTrend === 'BEARISH') ||
                            (signal === 'PUT' && htTrend === 'BULLISH')) {
+                    htBonus = -15;
                     rawScore -= 15;
                 }
+            } else {
+                // No higher timeframe data – reduce confidence a bit
+                rawScore -= 5;
             }
 
+            // Clamp rawScore and compute probability (45-95%)
             rawScore = Math.min(100, Math.max(0, rawScore));
-            let probability = Math.round(50 + rawScore * 0.35);
-            probability = Math.min(85, Math.max(45, probability));
-            if (volatility < 0.1) probability = Math.max(45, probability - 8);
+            let probability = Math.round(45 + rawScore * 0.5);
+            probability = Math.min(92, Math.max(50, probability));
+
+            // Final quality gate: if probability < 60 after all adjustments, skip
+            if (probability < 60) {
+                console.log(`[SKIP] ${pair} ${timeframe}: probability ${probability}% < 60% after filtering`);
+                return this.neutral(`Probability ${probability}% below threshold (60%)`);
+            }
 
             const withTrend = (signal === 'CALL' && majorTrend === 'BULLISH') ||
                               (signal === 'PUT' && majorTrend === 'BEARISH');
+            // If against major trend and no divergence or strong momentum, lower confidence
+            if (!withTrend && !divergence && Math.abs(hmaSlope) < 0.0002) {
+                probability = Math.min(probability, 65);
+                console.log(`[WARN] ${pair}: signal against trend, probability capped at ${probability}%`);
+            }
 
-            // LOG WITH REAL ADX VALUE
             console.log(`[SIGNAL] ${pair} ${timeframe}: ${signal} prob=${probability}% raw=${rawScore.toFixed(2)} ADX=${adx.toFixed(0)} RSI=${rsi.toFixed(0)} Div=${divergence || 'none'} WithTrend=${withTrend}`);
 
             // Risk & Position Sizing
-            const baseRisk = probability >= 75 ? 2.0 : (probability >= 65 ? 1.5 : (probability >= 55 ? 1.0 : 0.8));
+            const baseRisk = probability >= 85 ? 2.5 : (probability >= 75 ? 2.0 : (probability >= 65 ? 1.5 : 1.0));
             const kelly = this.calculateKellyFactor();
-            const volFactor = Math.min(1.5, Math.max(0.5, 0.0025 / (atr/price)));
+            const volFactor = Math.min(1.5, Math.max(0.6, 0.0025 / (atr/price)));
             const ddFactor = this.riskMultiplier;
             let finalRisk = baseRisk * kelly * volFactor * ddFactor;
-            finalRisk = Math.min(3.0, Math.max(0.3, finalRisk));
+            finalRisk = Math.min(3.5, Math.max(0.4, finalRisk));
 
-            let stopPips = Math.max(10, Math.min(50, Math.round((atr / price) * 10000 * 1.2)));
-            let tpPips = Math.round(stopPips * 1.8);
+            // ADX based risk adjustment: stronger trend allows higher risk
+            if (adx > 35) finalRisk = Math.min(4.0, finalRisk * 1.2);
+            if (adx < 18) finalRisk = finalRisk * 0.6;
+
+            let stopPips = Math.max(8, Math.min(55, Math.round((atr / price) * 10000 * 1.3)));
+            let tpPips = Math.round(stopPips * (adx > 25 ? 2.2 : 1.6));
             const maxBars = (timeframe === '1m' ? 60 : 12);
 
             return {
                 signal, probability, rawScore: Math.round(rawScore),
-                recommendedAction: probability >= 75 ? "CONFIDENT_TRADE" : (probability >= 65 ? "NORMAL_TRADE" : "CAUTIOUS_TRADE"),
+                recommendedAction: probability >= 85 ? "STRONG_TRADE" : (probability >= 75 ? "CONFIDENT_TRADE" : (probability >= 65 ? "NORMAL_TRADE" : "CAUTIOUS_TRADE")),
                 suggestedRisk: `${finalRisk.toFixed(2)}%`,
                 rsi: rsi.toFixed(1),
                 adx: adx.toFixed(1),
@@ -378,13 +386,14 @@ class InstitutionalAnalyzer {
                     `EMA9/21: ${ema9 > ema21 ? 'CALL' : 'PUT'}`,
                     `RSI: ${rsi.toFixed(0)}`,
                     divergence ? `Divergence: ${divergence}` : '',
-                    withTrend ? '✅ With trend' : '⚠️ Against trend'
+                    withTrend ? '✅ With trend' : '⚠️ Against trend',
+                    adx > 25 ? `🔥 ADX=${adx.toFixed(0)} trending` : `ADX=${adx.toFixed(0)} ranging`
                 ].filter(f => f),
                 stopLoss: stopPips, takeProfit: tpPips, maxHoldBars: maxBars,
                 riskRewardRatio: (tpPips / stopPips).toFixed(2),
                 pair, timeframe, timestamp: new Date().toISOString(),
-                version: "INSTITUTIONAL-v12.0",
-                guidance: `${signal} signal generated (${withTrend ? 'with' : 'against'} major trend)`
+                version: "WORLDCLASS-v13.0",
+                guidance: `${signal} signal (${withTrend ? 'with' : 'against'} trend) | ADX ${adx.toFixed(0)} | RSI ${rsi.toFixed(0)}`
             };
         } catch (err) {
             console.error(`[ERROR] ${pair}: ${err.message}`);
@@ -392,18 +401,22 @@ class InstitutionalAnalyzer {
         }
     }
 
-    fallbackSignal(pair, timeframe, reason) {
-        console.log(`[FALLBACK] ${pair}: ${reason} -> default CALL`);
+    neutral(reason) {
         return {
-            signal: "CALL", probability: 55, rawScore: 55,
-            recommendedAction: "CAUTIOUS_TRADE", suggestedRisk: "0.8%",
+            signal: "NEUTRAL", probability: 0, rawScore: 50,
+            recommendedAction: "NO_TRADE", suggestedRisk: "0%",
             rsi: "50", adx: "20", trendRegime: "UNKNOWN", marketRegime: "unknown",
-            volatility: "0.2", currentPrice: "0", divergence: "None",
-            majorTrend: "NEUTRAL", hmaSlope: "0", activeFactors: ["Fallback"],
+            volatility: "0", currentPrice: "0", divergence: "None",
+            majorTrend: "NEUTRAL", hmaSlope: "0", activeFactors: [],
             stopLoss: 15, takeProfit: 27, maxHoldBars: 12,
             riskRewardRatio: "1.80", timestamp: new Date().toISOString(),
-            pair, timeframe, version: "INSTITUTIONAL-v12.0", guidance: `Fallback: ${reason}`
+            pair: "UNKNOWN", timeframe: "UNKNOWN", version: "WORLDCLASS-v13.0", guidance: reason
         };
+    }
+
+    fallbackSignal(pair, timeframe, reason) {
+        console.log(`[FALLBACK] ${pair}: ${reason} -> no trade`);
+        return this.neutral(`Fallback: ${reason}`);
     }
 
     calculateKellyFactor() {
@@ -414,8 +427,8 @@ class InstitutionalAnalyzer {
         const avgWin = trades.filter(t => t.win).reduce((a,b)=>a+b.pnlPercent,0) / (wins || 1);
         const avgLoss = Math.abs(trades.filter(t => !t.win).reduce((a,b)=>a+b.pnlPercent,0) / (trades.length - wins || 1));
         const kelly = (winRate * (avgWin/avgLoss) - (1-winRate)) / (avgWin/avgLoss);
-        return Math.min(0.25, Math.max(0.05, kelly));
+        return Math.min(0.3, Math.max(0.05, kelly));
     }
 }
 
-module.exports = { RobustAnalyzer: InstitutionalAnalyzer };
+module.exports = { RobustAnalyzer: WorldClassAnalyzer };
