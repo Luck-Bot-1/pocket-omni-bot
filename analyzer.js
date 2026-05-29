@@ -1,10 +1,9 @@
 // ============================================================
-// SIMPLE BUT POWERFUL ANALYZER v9.0 – NO FIXED ADX
+// INSTITUTIONAL ANALYZER v10.0 – NATIVE INDICATORS (NO LIBRARY)
 // ============================================================
-const technicalIndicators = require('technicalindicators');
 const fs = require('fs');
 
-class SimpleAnalyzer {
+class InstitutionalAnalyzer {
     constructor(initialCapital = 10000) {
         this.tradeHistory = [];
         this.calibrationFile = './calibration.json';
@@ -50,37 +49,99 @@ class SimpleAnalyzer {
         else this.riskMultiplier = 1;
     }
 
-    // ---------- RELIABLE INDICATORS ----------
+    // ---------- NATIVE INDICATOR IMPLEMENTATIONS ----------
     calculateEMA(data, period) {
         if (data.length < period) return data[data.length-1];
-        try { return technicalIndicators.EMA({ values: data, period }).slice(-1)[0]; } catch(e) { return data[data.length-1]; }
+        const k = 2 / (period + 1);
+        let ema = data[0];
+        for (let i = 1; i < data.length; i++) {
+            ema = data[i] * k + ema * (1 - k);
+        }
+        return ema;
     }
 
     calculateRSI(closes, period = 14) {
         if (closes.length < period + 1) return 50;
-        try { return technicalIndicators.RSI({ values: closes, period }).slice(-1)[0] || 50; } catch(e) { return 50; }
+        let gains = 0, losses = 0;
+        for (let i = 1; i <= period; i++) {
+            const diff = closes[i] - closes[i-1];
+            if (diff >= 0) gains += diff;
+            else losses -= diff;
+        }
+        let avgGain = gains / period;
+        let avgLoss = losses / period;
+        for (let i = period + 1; i < closes.length; i++) {
+            const diff = closes[i] - closes[i-1];
+            if (diff >= 0) {
+                avgGain = (avgGain * (period - 1) + diff) / period;
+                avgLoss = (avgLoss * (period - 1)) / period;
+            } else {
+                avgGain = (avgGain * (period - 1)) / period;
+                avgLoss = (avgLoss * (period - 1) - diff) / period;
+            }
+        }
+        if (avgLoss === 0) return 100;
+        const rs = avgGain / avgLoss;
+        return 100 - (100 / (1 + rs));
     }
 
     calculateATR(highs, lows, closes, period = 14) {
         if (highs.length < period + 1) return 0.001;
-        try { return technicalIndicators.ATR({ high: highs, low: lows, close: closes, period }).slice(-1)[0] || 0.001; } catch(e) { return 0.001; }
+        const tr = [];
+        for (let i = 1; i < highs.length; i++) {
+            const hl = highs[i] - lows[i];
+            const hc = Math.abs(highs[i] - closes[i-1]);
+            const lc = Math.abs(lows[i] - closes[i-1]);
+            tr.push(Math.max(hl, hc, lc));
+        }
+        let atr = tr.slice(0, period).reduce((a,b)=>a+b,0) / period;
+        for (let i = period; i < tr.length; i++) {
+            atr = (atr * (period - 1) + tr[i]) / period;
+        }
+        return atr;
     }
 
-    // Custom ADX (simple, avoids library issues)
     calculateADX(highs, lows, closes, period = 14) {
         if (highs.length < period + 2) return 20;
-        try {
-            const adx = technicalIndicators.ADX({ high: highs, low: lows, close: closes, period });
-            return adx.slice(-1)[0] || 20;
-        } catch(e) {
-            // Fallback: compute using price range as proxy
-            const range = Math.max(...highs.slice(-20)) - Math.min(...lows.slice(-20));
-            const avgPrice = closes.slice(-20).reduce((a,b)=>a+b,0)/20;
-            return Math.min(50, Math.max(20, (range/avgPrice)*1000));
+        const tr = [];
+        const plusDM = [];
+        const minusDM = [];
+        for (let i = 1; i < highs.length; i++) {
+            const hl = highs[i] - lows[i];
+            const hc = Math.abs(highs[i] - closes[i-1]);
+            const lc = Math.abs(lows[i] - closes[i-1]);
+            tr.push(Math.max(hl, hc, lc));
+            const up = highs[i] - highs[i-1];
+            const down = lows[i-1] - lows[i];
+            if (up > down && up > 0) plusDM.push(up);
+            else plusDM.push(0);
+            if (down > up && down > 0) minusDM.push(down);
+            else minusDM.push(0);
         }
+        const smooth = (values) => {
+            let sum = values.slice(0, period).reduce((a,b)=>a+b,0);
+            let smoothed = sum / period;
+            for (let i = period; i < values.length; i++) {
+                smoothed = (smoothed * (period - 1) + values[i]) / period;
+            }
+            return smoothed;
+        };
+        const atr = smooth(tr);
+        const plusDI = 100 * smooth(plusDM) / atr;
+        const minusDI = 100 * smooth(minusDM) / atr;
+        const dx = 100 * Math.abs(plusDI - minusDI) / (plusDI + minusDI);
+        let adx = 20;
+        const dxArr = [];
+        for (let i = 0; i < dx.length; i++) {
+            if (i >= period-1) {
+                const sum = dxArr.slice(-period).reduce((a,b)=>a+b,0) / period;
+                adx = sum;
+            }
+            dxArr.push(dx[i]);
+        }
+        return Math.min(60, Math.max(10, adx));
     }
 
-    // HMA (zero lag) – custom implementation
     calculateHMA(data, period) {
         if (data.length < period * 2) return data.slice();
         const half = Math.floor(period / 2);
@@ -106,7 +167,68 @@ class SimpleAnalyzer {
         return hma;
     }
 
-    // ---------- MAIN SIGNAL (ALWAYS VARYING PROBABILITY) ----------
+    // ---------- DIVERGENCE DETECTION (SIMPLIFIED) ----------
+    detectDivergence(prices, oscillator) {
+        if (prices.length < 30 || oscillator.length < 30) return null;
+        // Find last two swing lows/highs
+        const findSwingLows = (arr) => {
+            const lows = [];
+            for (let i = 2; i < arr.length - 2; i++) {
+                if (arr[i] < arr[i-1] && arr[i] < arr[i-2] && arr[i] < arr[i+1] && arr[i] < arr[i+2]) {
+                    lows.push({ idx: i, val: arr[i] });
+                }
+            }
+            return lows;
+        };
+        const findSwingHighs = (arr) => {
+            const highs = [];
+            for (let i = 2; i < arr.length - 2; i++) {
+                if (arr[i] > arr[i-1] && arr[i] > arr[i-2] && arr[i] > arr[i+1] && arr[i] > arr[i+2]) {
+                    highs.push({ idx: i, val: arr[i] });
+                }
+            }
+            return highs;
+        };
+        const priceLows = findSwingLows(prices);
+        const oscLows = findSwingLows(oscillator);
+        const priceHighs = findSwingHighs(prices);
+        const oscHighs = findSwingHighs(oscillator);
+        // Bullish regular divergence
+        if (priceLows.length >= 2 && oscLows.length >= 2) {
+            const pLast = priceLows.slice(-2);
+            const oLast = oscLows.slice(-2);
+            if (pLast[1].val < pLast[0].val && oLast[1].val > oLast[0].val) {
+                return "BULLISH_REGULAR";
+            }
+        }
+        // Bearish regular divergence
+        if (priceHighs.length >= 2 && oscHighs.length >= 2) {
+            const pLast = priceHighs.slice(-2);
+            const oLast = oscHighs.slice(-2);
+            if (pLast[1].val > pLast[0].val && oLast[1].val < oLast[0].val) {
+                return "BEARISH_REGULAR";
+            }
+        }
+        // Bullish hidden divergence
+        if (priceLows.length >= 2 && oscLows.length >= 2) {
+            const pLast = priceLows.slice(-2);
+            const oLast = oscLows.slice(-2);
+            if (pLast[1].val > pLast[0].val && oLast[1].val < oLast[0].val) {
+                return "BULLISH_HIDDEN";
+            }
+        }
+        // Bearish hidden divergence
+        if (priceHighs.length >= 2 && oscHighs.length >= 2) {
+            const pLast = priceHighs.slice(-2);
+            const oLast = oscHighs.slice(-2);
+            if (pLast[1].val < pLast[0].val && oLast[1].val > oLast[0].val) {
+                return "BEARISH_HIDDEN";
+            }
+        }
+        return null;
+    }
+
+    // ---------- MAIN SIGNAL ENGINE ----------
     calculateProbability(candles, pair, timeframe, htCandles = null) {
         try {
             if (!candles || candles.length < 50) {
@@ -117,7 +239,7 @@ class SimpleAnalyzer {
             const lows = candles.map(c => c.low);
             const price = closes[closes.length - 1];
 
-            // Core indicators
+            // Core indicators (native)
             const rsi = this.calculateRSI(closes, 14);
             const atr = this.calculateATR(highs, lows, closes, 14);
             const adx = this.calculateADX(highs, lows, closes, 14);
@@ -128,11 +250,18 @@ class SimpleAnalyzer {
             const hmaSlope = hma.length >= 2 ? hma[hma.length-1] - hma[hma.length-2] : 0;
             const volatility = (atr / price) * 100;
 
-            // Determine trend direction and strength
+            // Divergence (RSI vs price)
+            const divergence = this.detectDivergence(closes, this.calculateRSIArray(closes));
+
+            // Trend direction
+            const majorTrend = price > ema50 ? "BULLISH" : "BEARISH";
+            const isWithTrend = false; // will set below
+
+            // Determine signal and raw score
             let signal = 'NEUTRAL';
             let rawScore = 50;
 
-            // 1. Use HMA slope for early momentum (lowered threshold)
+            // Primary momentum: HMA slope
             if (Math.abs(hmaSlope) > 0.0001) {
                 if (hmaSlope > 0) {
                     signal = 'CALL';
@@ -142,7 +271,7 @@ class SimpleAnalyzer {
                     rawScore = 60 - Math.min(25, Math.abs(hmaSlope) * 2000);
                 }
             }
-            // 2. Else use EMA cross (reliable)
+            // Secondary: EMA cross
             else if (ema9 > ema21) {
                 signal = 'CALL';
                 const strength = (ema9 - ema21) / price * 100;
@@ -153,51 +282,65 @@ class SimpleAnalyzer {
                 rawScore = 55 - Math.min(20, strength * 10);
             }
 
-            // 3. If still neutral, use RSI bias
+            // Fallback to RSI bias
             if (signal === 'NEUTRAL') {
-                if (rsi > 55) { signal = 'CALL'; rawScore = 55; }
-                else if (rsi < 45) { signal = 'PUT'; rawScore = 55; }
-                else { signal = 'CALL'; rawScore = 52; }
+                if (rsi > 55) signal = 'CALL';
+                else if (rsi < 45) signal = 'PUT';
+                else signal = 'CALL';
+                rawScore = 55;
             }
 
-            // Adjust score based on ADX (trend strength)
-            if (adx > 25) {
-                rawScore += 5;
-            } else if (adx < 20) {
-                rawScore -= 5;
-            }
+            // Adjust for ADX trend strength
+            if (adx > 30) rawScore += 8;
+            else if (adx > 25) rawScore += 4;
+            else if (adx < 20) rawScore -= 4;
 
-            // Adjust based on RSI extremes
-            if (signal === 'CALL' && rsi < 30) rawScore += 10;
-            if (signal === 'PUT' && rsi > 70) rawScore += 10;
+            // Adjust for RSI extremes
+            if (signal === 'CALL' && rsi < 30) rawScore += 12;
+            if (signal === 'PUT' && rsi > 70) rawScore += 12;
             if (signal === 'CALL' && rsi > 70) rawScore -= 10;
             if (signal === 'PUT' && rsi < 30) rawScore -= 10;
 
-            // Higher timeframe alignment (if available)
+            // Divergence adjustment
+            if (divergence) {
+                if ((signal === 'CALL' && divergence.includes('BULLISH')) ||
+                    (signal === 'PUT' && divergence.includes('BEARISH'))) {
+                    rawScore += 15;
+                } else {
+                    rawScore -= 10;
+                }
+            }
+
+            // Higher timeframe alignment
+            let htTrend = 'NEUTRAL';
             if (htCandles && htCandles.length >= 50) {
                 const htCloses = htCandles.map(c => c.close);
                 const htEMA50 = this.calculateEMA(htCloses, 50);
-                const htTrend = htCloses[htCloses.length-1] > htEMA50 ? 'BULLISH' : 'BEARISH';
+                htTrend = htCloses[htCloses.length-1] > htEMA50 ? 'BULLISH' : 'BEARISH';
                 if ((signal === 'CALL' && htTrend === 'BULLISH') ||
                     (signal === 'PUT' && htTrend === 'BEARISH')) {
                     rawScore += 10;
                 } else if ((signal === 'CALL' && htTrend === 'BEARISH') ||
                            (signal === 'PUT' && htTrend === 'BULLISH')) {
-                    rawScore -= 10;
+                    rawScore -= 15;
                 }
             }
 
-            // Clamp rawScore and convert to probability (50-85%)
+            // Clamp rawScore and compute probability (45% – 85%)
             rawScore = Math.min(100, Math.max(0, rawScore));
             let probability = Math.round(50 + rawScore * 0.35);
             probability = Math.min(85, Math.max(45, probability));
 
-            // Reduce probability slightly in very low volatility
-            if (volatility < 0.1) probability = Math.max(45, probability - 5);
+            // Reduce in dead markets
+            if (volatility < 0.1) probability = Math.max(45, probability - 8);
 
-            console.log(`[SIGNAL] ${pair} ${timeframe}: ${signal} prob=${probability}% raw=${rawScore} ADX=${adx.toFixed(0)} RSI=${rsi.toFixed(0)}`);
+            // Determine if signal is with or against major trend
+            const withTrend = (signal === 'CALL' && majorTrend === 'BULLISH') ||
+                              (signal === 'PUT' && majorTrend === 'BEARISH');
 
-            // Risk & Position Sizing (simple but robust)
+            console.log(`[SIGNAL] ${pair} ${timeframe}: ${signal} prob=${probability}% raw=${rawScore} ADX=${adx.toFixed(0)} RSI=${rsi.toFixed(0)} Div=${divergence || 'none'} WithTrend=${withTrend}`);
+
+            // Risk & position sizing
             const baseRisk = probability >= 75 ? 2.0 : (probability >= 65 ? 1.5 : (probability >= 55 ? 1.0 : 0.8));
             const kelly = this.calculateKellyFactor();
             const volFactor = Math.min(1.5, Math.max(0.5, 0.0025 / (atr/price)));
@@ -219,20 +362,34 @@ class SimpleAnalyzer {
                 marketRegime: adx >= 25 ? "TREND" : "RANGE",
                 volatility: volatility.toFixed(2),
                 currentPrice: price.toFixed(5),
-                divergence: "None",
-                majorTrend: ema50 > price ? "BEARISH" : "BULLISH",
+                divergence: divergence ? divergence : "None",
+                majorTrend: majorTrend,
                 hmaSlope: hmaSlope.toFixed(6),
-                activeFactors: [`HMA slope: ${hmaSlope.toFixed(6)}`, `EMA9/21: ${ema9 > ema21 ? 'CALL' : 'PUT'}`, `RSI: ${rsi.toFixed(0)}`],
+                activeFactors: [
+                    `HMA slope: ${hmaSlope.toFixed(6)}`,
+                    `EMA9/21: ${ema9 > ema21 ? 'CALL' : 'PUT'}`,
+                    `RSI: ${rsi.toFixed(0)}`,
+                    divergence ? `Divergence: ${divergence}` : '',
+                    withTrend ? '✅ With trend' : '⚠️ Against trend'
+                ].filter(f => f),
                 stopLoss: stopPips, takeProfit: tpPips, maxHoldBars: maxBars,
                 riskRewardRatio: (tpPips / stopPips).toFixed(2),
                 pair, timeframe, timestamp: new Date().toISOString(),
-                version: "SIMPLE-v9.0",
-                guidance: `${signal} signal generated`
+                version: "INSTITUTIONAL-v10.0",
+                guidance: `${signal} signal generated (${withTrend ? 'with' : 'against'} major trend)`
             };
         } catch (err) {
             console.error(`[ERROR] ${pair}: ${err.message}`);
             return this.fallbackSignal(pair, timeframe, err.message);
         }
+    }
+
+    calculateRSIArray(closes) {
+        const rsiValues = [];
+        for (let i = 30; i <= closes.length; i++) {
+            rsiValues.push(this.calculateRSI(closes.slice(0, i), 14));
+        }
+        return rsiValues;
     }
 
     fallbackSignal(pair, timeframe, reason) {
@@ -245,7 +402,7 @@ class SimpleAnalyzer {
             majorTrend: "NEUTRAL", hmaSlope: "0", activeFactors: ["Fallback"],
             stopLoss: 15, takeProfit: 27, maxHoldBars: 12,
             riskRewardRatio: "1.80", timestamp: new Date().toISOString(),
-            pair, timeframe, version: "SIMPLE-v9.0", guidance: `Fallback: ${reason}`
+            pair, timeframe, version: "INSTITUTIONAL-v10.0", guidance: `Fallback: ${reason}`
         };
     }
 
@@ -261,4 +418,4 @@ class SimpleAnalyzer {
     }
 }
 
-module.exports = { RobustAnalyzer: SimpleAnalyzer };
+module.exports = { RobustAnalyzer: InstitutionalAnalyzer };
