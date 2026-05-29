@@ -347,10 +347,12 @@ class WorldClassAnalyzer {
 
             // RSI extreme filter (hard skip)
             const rsi = this.calculateRSI(closes, 14);
-            if (rsi > this.thresholds.maxRSI_CALL || rsi < this.thresholds.minRSI_PUT) {
-                console.log(`[SKIP] ${pair} RSI extreme (${rsi.toFixed(0)})`);
-                return this.neutral(`RSI extreme (${rsi.toFixed(0)})`);
-            }
+            // Direction‑aware RSI extreme filter
+if ((signal === 'CALL' && rsi > this.thresholds.maxRSI_CALL) ||
+    (signal === 'PUT' && rsi < this.thresholds.minRSI_PUT)) {
+    console.log(`[SKIP] ${pair} RSI extreme for ${signal} (${rsi.toFixed(0)})`);
+    return this.neutral(`RSI extreme (${rsi.toFixed(0)}) for ${signal}`);
+}
 
             // Higher timeframe trend (if provided, also closed candles)
             let htTrend = null;
