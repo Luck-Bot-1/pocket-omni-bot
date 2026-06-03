@@ -1,13 +1,5 @@
 // ============================================================
-// INSTITUTIONAL GRADE ANALYZER v24.0 – PERMANENT SOLUTION
-// ============================================================
-// FEATURES:
-// - Adaptive ADX + rising requirement for divergences
-// - Pullback confirmation (price vs EMA21 + RSI zone)
-// - Dynamic stop based on ATR + recent high/low (trailing)
-// - Multi‑timeframe trend (15m, 1h, 4h)
-// - Divergence only trusted when higher timeframe aligns
-// - Realistic probability via multiplicative factor model
+// INSTITUTIONAL GRADE ANALYZER v24.1 – ALL FLAWS WEAPONIZED
 // ============================================================
 const fs = require('fs');
 
@@ -25,16 +17,15 @@ class WorldClassAnalyzer {
             minADX: 22,
             minADXForDivergence: 26,
             adxRisingRequiredForDivergence: true,
-            maxRSI_CALL: 68,
-            minRSI_PUT: 32,
-            minVolatilityPercent: 0.03,
-            minSwingDistance: 5,
-            divergenceRSILow: 42,
-            divergenceRSIHigh: 58,
+            maxRSI_CALL: 65,
+            minRSI_PUT: 35,
+            minVolatilityPercent: 0.15,
+            minSwingDistance: 8,
+            divergenceRSILow: 30,
+            divergenceRSIHigh: 70,
             minStopPips: 9,
             atrMultiplier: 1.5,
-            trailingActivationPips: 5,
-            pullbackEmaRatio: 0.98,
+            pullbackATRMultiplier: 1.2,
         };
         this.loadDynamicThresholds();
     }
@@ -109,6 +100,7 @@ class WorldClassAnalyzer {
         else this.riskMultiplier = 1;
     }
 
+    // ========== INDICATORS (WILDER CORRECT) ==========
     calculateEMA(data, period) {
         if (data.length < period) return data[data.length-1];
         const k = 2 / (period + 1);
@@ -125,7 +117,8 @@ class WorldClassAnalyzer {
             if (diff >= 0) gains += diff;
             else losses -= diff;
         }
-        let avgGain = gains / period, avgLoss = losses / period;
+        let avgGain = gains / period;
+        let avgLoss = losses / period;
         for (let i = period + 1; i < closes.length; i++) {
             const diff = closes[i] - closes[i-1];
             if (diff >= 0) {
@@ -167,20 +160,19 @@ class WorldClassAnalyzer {
             plusDM.push((up > down && up > 0) ? up : 0);
             minusDM.push((down > up && down > 0) ? down : 0);
         }
-        const wilderSmooth = (data) => {
-            const smoothed = [];
-            let sum = data.slice(0, period).reduce((a,b)=>a+b,0);
-            let val = sum / period;
-            smoothed.push(val);
+        const wilderSmooth = (data, period) => {
+            if (data.length < period) return data;
+            let prev = data.slice(0, period).reduce((a,b)=>a+b,0) / period;
+            const smoothed = [prev];
             for (let i = period; i < data.length; i++) {
-                val = (val * (period - 1) + data[i]) / period;
-                smoothed.push(val);
+                prev = (prev * (period - 1) + data[i]) / period;
+                smoothed.push(prev);
             }
             return smoothed;
         };
-        const smoothedTR = wilderSmooth(tr);
-        const smoothedPlus = wilderSmooth(plusDM);
-        const smoothedMinus = wilderSmooth(minusDM);
+        const smoothedTR = wilderSmooth(tr, period);
+        const smoothedPlus = wilderSmooth(plusDM, period);
+        const smoothedMinus = wilderSmooth(minusDM, period);
         const diPlus = [], diMinus = [], dx = [];
         for (let i = 0; i < smoothedTR.length; i++) {
             const trVal = smoothedTR[i];
@@ -201,11 +193,7 @@ class WorldClassAnalyzer {
             adxPrev = adx;
             adx = (adx * (period - 1) + dx[i]) / period;
         }
-        adx = Math.min(60, Math.max(0, adx));
-        adxPrev = Math.min(60, Math.max(0, adxPrev));
-        const lastPlus = diPlus.length ? diPlus[diPlus.length-1] : 25;
-        const lastMinus = diMinus.length ? diMinus[diMinus.length-1] : 25;
-        return { adx, plusDI: lastPlus, minusDI: lastMinus, adxPrev };
+        return { adx, plusDI: diPlus[diPlus.length-1], minusDI: diMinus[diMinus.length-1], adxPrev };
     }
 
     calculateSMA(data, period) {
@@ -215,21 +203,25 @@ class WorldClassAnalyzer {
     }
 
     calculateMACD(closes, fast=12, slow=26, signal=9) {
-        if (closes.length < slow+signal) return { histogram: 0, slope: 0 };
-        const macdValues = [];
-        for (let i = slow; i < closes.length; i++) {
-            const ef = this.calculateEMA(closes.slice(0, i+1), fast);
-            const es = this.calculateEMA(closes.slice(0, i+1), slow);
-            macdValues.push(ef - es);
+        if (closes.length < slow + signal) return { histogram: 0, slope: 0 };
+        let emaFast = closes[0], emaSlow = closes[0];
+        const kFast = 2/(fast+1), kSlow = 2/(slow+1);
+        const macdLine = [];
+        for (let i = 0; i < closes.length; i++) {
+            if (i > 0) {
+                emaFast = closes[i] * kFast + emaFast * (1 - kFast);
+                emaSlow = closes[i] * kSlow + emaSlow * (1 - kSlow);
+            }
+            macdLine.push(emaFast - emaSlow);
         }
-        const signalLine = this.calculateEMA(macdValues, signal);
-        const histogram = macdValues[macdValues.length-1] - signalLine;
-        const prevHist = macdValues.length>1 ? macdValues[macdValues.length-2] - this.calculateEMA(macdValues.slice(0,-1), signal) : histogram;
-        const slope = histogram - prevHist;
-        return { histogram, slope };
+        const signalLine = this.calculateEMA(macdLine, signal);
+        const histogram = macdLine[macdLine.length-1] - signalLine;
+        const prevHist = macdLine.length > 1 ? macdLine[macdLine.length-2] - this.calculateEMA(macdLine.slice(0,-1), signal) : histogram;
+        return { histogram, slope: histogram - prevHist };
     }
 
-    findSwings(arr, type = 'low', lookback = 3, minDistance = 5) {
+    // ========== PATTERN RECOGNITION ==========
+    findSwings(arr, type = 'low', lookback = 5, minDistance = 8) {
         const swings = [];
         for (let i = lookback; i < arr.length - lookback; i++) {
             let isSwing = true;
@@ -250,11 +242,11 @@ class WorldClassAnalyzer {
     }
 
     detectDivergence(prices, oscillator, adx = null) {
-        if (prices.length < 30 || oscillator.length < 30) return null;
-        const priceLows = this.findSwings(prices, 'low', 3, this.thresholds.minSwingDistance);
-        const oscLows = this.findSwings(oscillator, 'low', 3, this.thresholds.minSwingDistance);
-        const priceHighs = this.findSwings(prices, 'high', 3, this.thresholds.minSwingDistance);
-        const oscHighs = this.findSwings(oscillator, 'high', 3, this.thresholds.minSwingDistance);
+        if (prices.length < 40 || oscillator.length < 40) return null;
+        const priceLows = this.findSwings(prices, 'low');
+        const oscLows = this.findSwings(oscillator, 'low');
+        const priceHighs = this.findSwings(prices, 'high');
+        const oscHighs = this.findSwings(oscillator, 'high');
 
         if (priceLows.length >= 2 && oscLows.length >= 2) {
             const pLast = priceLows.slice(-2);
@@ -270,264 +262,71 @@ class WorldClassAnalyzer {
                 return "BEARISH_REGULAR";
             }
         }
-        if (priceLows.length >= 2 && oscLows.length >= 2 && adx !== null && adx >= this.thresholds.minADXForDivergence) {
-            const pLast = priceLows.slice(-2);
-            const oLast = oscLows.slice(-2);
-            if (pLast[1].val > pLast[0].val && oLast[1].val < oLast[0].val) {
-                return "BULLISH_HIDDEN";
+        if (adx !== null && adx >= this.thresholds.minADXForDivergence) {
+            if (priceLows.length >= 2 && oscLows.length >= 2) {
+                const pLast = priceLows.slice(-2);
+                const oLast = oscLows.slice(-2);
+                if (pLast[1].val > pLast[0].val && oLast[1].val < oLast[0].val) return "BULLISH_HIDDEN";
             }
-        }
-        if (priceHighs.length >= 2 && oscHighs.length >= 2 && adx !== null && adx >= this.thresholds.minADXForDivergence) {
-            const pLast = priceHighs.slice(-2);
-            const oLast = oscHighs.slice(-2);
-            if (pLast[1].val < pLast[0].val && oLast[1].val > oLast[0].val) {
-                return "BEARISH_HIDDEN";
+            if (priceHighs.length >= 2 && oscHighs.length >= 2) {
+                const pLast = priceHighs.slice(-2);
+                const oLast = oscHighs.slice(-2);
+                if (pLast[1].val < pLast[0].val && oLast[1].val > oLast[0].val) return "BEARISH_HIDDEN";
             }
         }
         return null;
     }
 
     getDivergenceRequiredDirection(divergence) {
-        const map = {
-            "BULLISH_REGULAR": "CALL",
-            "BULLISH_HIDDEN": "CALL",
-            "BEARISH_REGULAR": "PUT",
-            "BEARISH_HIDDEN": "PUT"
-        };
+        const map = { "BULLISH_REGULAR": "CALL", "BULLISH_HIDDEN": "CALL", "BEARISH_REGULAR": "PUT", "BEARISH_HIDDEN": "PUT" };
         return map[divergence] || null;
     }
 
-    computeProbability(signal, adx, rsi, divergence, pullbackOk, macdOk, htTrend, fifteenMinTrend) {
+    // ========== REGIME & RISK ==========
+    detectRegime(adx, atr, price) {
+        const atrPercent = (atr / price) * 100;
+        if (adx >= 30) return "TRENDING";
+        if (adx >= 20 && atrPercent > 0.2) return "CHOPPY";
+        return "RANGING";
+    }
+
+    isPullbackOk(signal, currentPrice, ema21, atr) {
+        const band = atr * this.thresholds.pullbackATRMultiplier;
+        if (signal === 'CALL') return currentPrice <= ema21 + band;
+        else return currentPrice >= ema21 - band;
+    }
+
+    computeProbability(signal, adx, rsi, divergence, pullbackOk, macdOk, htTrend, fifteenMinTrend, regime) {
         let p = 0.50;
-        let trendFactor = 1.0;
-        if (adx > 35) trendFactor = 1.2;
-        else if (adx > 28) trendFactor = 1.1;
-        else if (adx < 25) trendFactor = 0.9;
-        p *= trendFactor;
-        if (divergence) p *= 1.2;
-        else p *= 0.95;
-        if (signal === 'CALL' && rsi >= 40 && rsi <= 55) p *= 1.1;
-        else if (signal === 'CALL' && rsi > 55) p *= 0.9;
-        if (signal === 'PUT' && rsi >= 45 && rsi <= 60) p *= 1.1;
-        else if (signal === 'PUT' && rsi < 45) p *= 0.9;
+        if (regime === "TRENDING") p *= 1.2;
+        else if (regime === "CHOPPY") p *= 0.9;
+        if (adx > 35) p *= 1.15;
+        else if (adx > 28) p *= 1.07;
+        else if (adx < 25) p *= 0.92;
+        if (divergence) p *= 1.25;
+        else p *= 0.98;
+        if (signal === 'CALL' && rsi >= 35 && rsi <= 50) p *= 1.12;
+        else if (signal === 'CALL' && rsi > 55) p *= 0.94;
+        if (signal === 'PUT' && rsi >= 50 && rsi <= 65) p *= 1.12;
+        else if (signal === 'PUT' && rsi < 45) p *= 0.94;
         if (pullbackOk) p *= 1.1;
-        else p *= 0.85;
+        else p *= 0.88;
         if (macdOk) p *= 1.05;
-        else p *= 0.9;
-        if (htTrend === fifteenMinTrend) p *= 1.05;
+        else p *= 0.92;
+        if (htTrend === fifteenMinTrend) p *= 1.07;
         let prob = Math.round(p * 100);
-        prob = Math.min(88, Math.max(65, prob));
+        prob = Math.min(92, Math.max(68, prob));  // minimum 68%
         return prob;
     }
 
     computeStopLoss(signal, currentPrice, atr, highs, lows, period = 20) {
         const recentHigh = Math.max(...highs.slice(-period));
         const recentLow = Math.min(...lows.slice(-period));
-        let swingStop = null;
-        if (signal === 'CALL') {
-            swingStop = recentLow - (atr * 0.5);
-        } else {
-            swingStop = recentHigh + (atr * 0.5);
-        }
+        let swingStop = (signal === 'CALL') ? recentLow - (atr * 0.5) : recentHigh + (atr * 0.5);
         const atrStop = atr * this.thresholds.atrMultiplier;
         let stopDistance = Math.max(atrStop, Math.abs(currentPrice - swingStop) * 0.7);
         stopDistance = Math.max(stopDistance, this.thresholds.minStopPips / 10000);
         return Math.round(stopDistance / (currentPrice / 10000));
-    }
-
-    calculateProbability(candles, pair, timeframe, htCandles = null, fourHourCandles = null) {
-        try {
-            if (!candles || candles.length < 61) {
-                return this.neutral("Insufficient data (<61 candles)");
-            }
-
-            const closedCandles = candles.slice(0, -1);
-            const currentPrice = candles[candles.length-1].close;
-
-            const closes = closedCandles.map(c => c.close);
-            const highs = closedCandles.map(c => c.high);
-            const lows = closedCandles.map(c => c.low);
-
-            const atr = this.calculateATR(highs, lows, closes, 14);
-            const volatility = (atr / currentPrice) * 100;
-            if (volatility < this.thresholds.minVolatilityPercent) {
-                console.log(`[SKIP] ${pair} ultra-low volatility (${volatility.toFixed(2)}%)`);
-                return this.neutral("Ultra-low volatility");
-            }
-
-            const { adx, plusDI, minusDI, adxPrev } = this.calculateADX(highs, lows, closes, 14);
-            const adxRising = adx > adxPrev;
-
-            if (adx < this.thresholds.minADX) {
-                console.log(`[SKIP] ${pair} ADX=${adx.toFixed(0)} < ${this.thresholds.minADX}`);
-                return this.neutral(`ADX too low (${adx.toFixed(0)})`);
-            }
-
-            const rsi = this.calculateRSI(closes, 14);
-            if ((rsi > this.thresholds.maxRSI_CALL) || (rsi < this.thresholds.minRSI_PUT)) {
-                console.log(`[SKIP] ${pair} RSI extreme ${rsi.toFixed(0)}`);
-                return this.neutral(`RSI extreme (${rsi.toFixed(0)})`);
-            }
-
-            let htTrend = null;
-            let fourHourTrend = null;
-            if (htCandles && htCandles.length >= 51) {
-                const htClosed = htCandles.slice(0, -1);
-                const htCloses = htClosed.map(c => c.close);
-                const htEma21 = this.calculateEMA(htCloses, 21);
-                htTrend = htCloses[htCloses.length-1] > htEma21 ? "BULLISH" : "BEARISH";
-            } else {
-                console.log(`[SKIP] ${pair} missing 1h data`);
-                return this.neutral("Missing 1h data (required)");
-            }
-            if (fourHourCandles && fourHourCandles.length >= 51) {
-                const fhClosed = fourHourCandles.slice(0, -1);
-                const fhCloses = fhClosed.map(c => c.close);
-                const fhEma21 = this.calculateEMA(fhCloses, 21);
-                fourHourTrend = fhCloses[fhCloses.length-1] > fhEma21 ? "BULLISH" : "BEARISH";
-            }
-
-            const ema9 = this.calculateEMA(closes, 9);
-            const ema21 = this.calculateEMA(closes, 21);
-            let fifteenMinTrend = "NEUTRAL";
-            if (ema9 > ema21) fifteenMinTrend = "BULLISH";
-            else if (ema9 < ema21) fifteenMinTrend = "BEARISH";
-
-            let sustained = true;
-            if (closedCandles.length > 10) {
-                for (let shift = 1; shift <= 2; shift++) {
-                    const prevCloses = closes.slice(0, -shift);
-                    const prevEma9 = this.calculateEMA(prevCloses, 9);
-                    const prevEma21 = this.calculateEMA(prevCloses, 21);
-                    const prevTrend = prevEma9 > prevEma21 ? "BULLISH" : (prevEma9 < prevEma21 ? "BEARISH" : "NEUTRAL");
-                    if (prevTrend !== fifteenMinTrend) { sustained = false; break; }
-                }
-            }
-            if (!sustained) {
-                console.log(`[SKIP] ${pair} EMA cross not sustained`);
-                return this.neutral("EMA cross not sustained");
-            }
-
-            const diCall = plusDI > minusDI;
-            const diPut = minusDI > plusDI;
-
-            let signal = "NEUTRAL";
-            if (fifteenMinTrend === "BULLISH" && htTrend === "BULLISH" && diCall) signal = "CALL";
-            else if (fifteenMinTrend === "BEARISH" && htTrend === "BEARISH" && diPut) signal = "PUT";
-            else {
-                console.log(`[SKIP] ${pair} trend mismatch`);
-                return this.neutral("Trend alignment failure");
-            }
-
-            const sma20 = this.calculateSMA(closes, 20);
-            if ((signal === 'CALL' && currentPrice < sma20) || (signal === 'PUT' && currentPrice > sma20)) {
-                console.log(`[SKIP] ${pair} price on wrong side of SMA20`);
-                return this.neutral("Price vs SMA20 mismatch");
-            }
-
-            const macd = this.calculateMACD(closes);
-            const macdSlopePositive = macd.slope > 0;
-            if ((signal === 'CALL' && !macdSlopePositive) || (signal === 'PUT' && macdSlopePositive)) {
-                console.log(`[SKIP] ${pair} MACD slope opposes signal`);
-                return this.neutral("MACD slope mismatch");
-            }
-
-            const pullbackOk = (signal === 'CALL' && currentPrice <= ema21 * 1.005) ||
-                               (signal === 'PUT' && currentPrice >= ema21 * 0.995);
-            if (!pullbackOk) {
-                console.log(`[SKIP] ${pair} no pullback: price ${currentPrice} vs EMA21 ${ema21}`);
-                return this.neutral("No pullback – price too extended");
-            }
-
-            const rsiArray = [];
-            for (let i = 30; i <= closes.length; i++) {
-                rsiArray.push(this.calculateRSI(closes.slice(0, i), 14));
-            }
-            const divergence = this.detectDivergence(closes, rsiArray, adx);
-            const requiredDir = divergence ? this.getDivergenceRequiredDirection(divergence) : null;
-            if (requiredDir && requiredDir !== signal) {
-                console.log(`[SKIP] ${pair} divergence mismatch: ${divergence} requires ${requiredDir}, got ${signal}`);
-                return this.neutral(`Divergence mismatch (${divergence})`);
-            }
-
-            if (divergence && this.thresholds.adxRisingRequiredForDivergence && !adxRising) {
-                console.log(`[SKIP] ${pair} divergence but ADX falling (${adxPrev.toFixed(0)} → ${adx.toFixed(0)})`);
-                return this.neutral("Divergence with falling ADX");
-            }
-
-            let probability = this.computeProbability(
-                signal, adx, rsi, divergence, pullbackOk,
-                (signal === 'CALL' && macdSlopePositive) || (signal === 'PUT' && !macdSlopePositive),
-                htTrend, fifteenMinTrend
-            );
-            if (fourHourTrend !== null && fourHourTrend !== htTrend) {
-                probability = Math.round(probability * 0.88);
-            }
-            probability = Math.min(85, Math.max(65, probability));
-
-            const stopPips = this.computeStopLoss(signal, currentPrice, atr, highs, lows);
-            const tpPips = Math.round(stopPips * (adx > 30 ? 2.1 : 1.7));
-            const maxBars = (timeframe === '1m' ? 60 : 12);
-
-            const baseRisk = probability >= 80 ? 1.6 : (probability >= 70 ? 1.2 : 0.8);
-            const kelly = this.calculateKellyFactor();
-            const volFactor = Math.min(1.2, Math.max(0.6, 0.002 / (atr/currentPrice)));
-            let finalRisk = baseRisk * kelly * volFactor * this.riskMultiplier;
-            finalRisk = Math.min(2.0, Math.max(0.4, finalRisk));
-
-            console.log(`[SIGNAL] ${pair} ${timeframe}: ${signal} prob=${probability}% ADX=${adx.toFixed(0)} RSI=${rsi.toFixed(0)} Div=${divergence || 'none'} Stop=${stopPips}pips`);
-
-            return {
-                signal, probability, rawScore: probability,
-                recommendedAction: probability >= 80 ? "STRONG_TRADE" : (probability >= 70 ? "CONFIDENT_TRADE" : "NORMAL_TRADE"),
-                suggestedRisk: `${finalRisk.toFixed(2)}%`,
-                rsi: rsi.toFixed(1),
-                adx: adx.toFixed(1),
-                trendRegime: adx >= 25 ? "TRENDING" : "RANGING",
-                marketRegime: adx >= 25 ? "TREND" : "RANGE",
-                volatility: volatility.toFixed(2),
-                currentPrice: currentPrice.toFixed(5),
-                divergence: divergence ? divergence : "None",
-                majorTrend: htTrend,
-                hmaSlope: "0",
-                activeFactors: [
-                    `EMA9/21: ${ema9 > ema21 ? 'CALL' : 'PUT'}`,
-                    `RSI: ${rsi.toFixed(0)}`,
-                    divergence ? `Divergence: ${divergence}` : '',
-                    `ADX=${adx.toFixed(0)} ${adxRising ? 'rising' : 'falling'}`,
-                    `1h trend: ${htTrend}`,
-                    fourHourTrend ? `4h trend: ${fourHourTrend}` : '',
-                    `Pullback: ${pullbackOk ? 'yes' : 'no'}`,
-                    `MACD slope: ${macd.slope > 0 ? 'positive' : 'negative'}`
-                ].filter(f => f),
-                stopLoss: stopPips, takeProfit: tpPips, maxHoldBars: maxBars,
-                riskRewardRatio: (tpPips / stopPips).toFixed(2),
-                pair, timeframe, timestamp: new Date().toISOString(),
-                version: "WORLDCLASS-v24.0",
-                guidance: `${signal} | ADX ${adx.toFixed(0)} | RSI ${rsi.toFixed(0)} | ${divergence || 'no divergence'}`
-            };
-        } catch (err) {
-            console.error(`[ERROR] ${pair}: ${err.message}`);
-            return this.fallbackSignal(pair, timeframe, err.message);
-        }
-    }
-
-    neutral(reason) {
-        return {
-            signal: "NEUTRAL", probability: 0, rawScore: 50,
-            recommendedAction: "NO_TRADE", suggestedRisk: "0%",
-            rsi: "50", adx: "20", trendRegime: "UNKNOWN", marketRegime: "unknown",
-            volatility: "0", currentPrice: "0", divergence: "None",
-            majorTrend: "NEUTRAL", hmaSlope: "0", activeFactors: [],
-            stopLoss: 15, takeProfit: 27, maxHoldBars: 12,
-            riskRewardRatio: "1.80", timestamp: new Date().toISOString(),
-            pair: "UNKNOWN", timeframe: "UNKNOWN", version: "WORLDCLASS-v24.0", guidance: reason
-        };
-    }
-
-    fallbackSignal(pair, timeframe, reason) {
-        console.log(`[FALLBACK] ${pair}: ${reason} -> no trade`);
-        return this.neutral(`Fallback: ${reason}`);
     }
 
     calculateKellyFactor() {
@@ -539,6 +338,144 @@ class WorldClassAnalyzer {
         const avgLoss = Math.abs(trades.filter(t => !t.win).reduce((a,b)=>a+b.pnlPercent,0) / (trades.length - wins || 1));
         const kelly = (winRate * (avgWin/avgLoss) - (1-winRate)) / (avgWin/avgLoss);
         return Math.min(0.25, Math.max(0.05, kelly * 0.5));
+    }
+
+    // ========== MAIN ENTRY ==========
+    calculateProbability(candles, pair, timeframe, htCandles = null, fourHourCandles = null, correlationPrice = null) {
+        try {
+            // Session filter (London/NY overlap 13-17 UTC)
+            const hourUTC = new Date().getUTCHours();
+            if (hourUTC < 13 || hourUTC >= 17) {
+                console.log(`[SKIP] ${pair} – outside active session (${hourUTC} UTC)`);
+                return this.neutral("Outside active trading session");
+            }
+
+            if (!candles || candles.length < 61) return this.neutral("Insufficient data");
+            const closedCandles = candles.slice(0, -1);
+            const currentPrice = candles[candles.length-1].close;
+            const closes = closedCandles.map(c => c.close);
+            const highs = closedCandles.map(c => c.high);
+            const lows = closedCandles.map(c => c.low);
+
+            const atr = this.calculateATR(highs, lows, closes, 14);
+            const volatility = (atr / currentPrice) * 100;
+            if (volatility < this.thresholds.minVolatilityPercent) {
+                console.log(`[SKIP] ${pair} low volatility (${volatility.toFixed(2)}%)`);
+                return this.neutral("Low volatility");
+            }
+
+            const { adx, plusDI, minusDI, adxPrev } = this.calculateADX(highs, lows, closes, 14);
+            const adxRising = adx > adxPrev;
+            if (adx < this.thresholds.minADX) {
+                console.log(`[SKIP] ${pair} ADX=${adx.toFixed(0)} < ${this.thresholds.minADX}`);
+                return this.neutral(`ADX too low (${adx.toFixed(0)})`);
+            }
+
+            const rsi = this.calculateRSI(closes, 14);
+            if (rsi > this.thresholds.maxRSI_CALL || rsi < this.thresholds.minRSI_PUT) {
+                console.log(`[SKIP] ${pair} RSI extreme ${rsi.toFixed(0)}`);
+                return this.neutral(`RSI extreme (${rsi.toFixed(0)})`);
+            }
+
+            // Higher timeframe trends
+            let htTrend = null;
+            if (htCandles && htCandles.length >= 51) {
+                const htCloses = htCandles.slice(0, -1).map(c => c.close);
+                const htEma21 = this.calculateEMA(htCloses, 21);
+                htTrend = htCloses[htCloses.length-1] > htEma21 ? "BULLISH" : "BEARISH";
+            } else return this.neutral("Missing 1h data");
+
+            let fourHourTrend = null;
+            if (fourHourCandles && fourHourCandles.length >= 51) {
+                const fhCloses = fourHourCandles.slice(0, -1).map(c => c.close);
+                const fhEma21 = this.calculateEMA(fhCloses, 21);
+                fourHourTrend = fhCloses[fhCloses.length-1] > fhEma21 ? "BULLISH" : "BEARISH";
+            }
+
+            const ema9 = this.calculateEMA(closes, 9);
+            const ema21 = this.calculateEMA(closes, 21);
+            let fifteenMinTrend = ema9 > ema21 ? "BULLISH" : (ema9 < ema21 ? "BEARISH" : "NEUTRAL");
+
+            const diCall = plusDI > minusDI;
+            const diPut = minusDI > plusDI;
+
+            // Divergence detection (first)
+            const rsiArray = [];
+            for (let i = 30; i <= closes.length; i++) rsiArray.push(this.calculateRSI(closes.slice(0, i), 14));
+            const divergence = this.detectDivergence(closes, rsiArray, adx);
+            const divergDir = divergence ? this.getDivergenceRequiredDirection(divergence) : null;
+
+            let signal = "NEUTRAL";
+            if (fifteenMinTrend === "BULLISH" && htTrend === "BULLISH" && diCall) signal = "CALL";
+            else if (fifteenMinTrend === "BEARISH" && htTrend === "BEARISH" && diPut) signal = "PUT";
+            if (divergDir && divergDir !== signal && signal !== "NEUTRAL") signal = divergDir;
+            else if (divergDir && signal === "NEUTRAL") signal = divergDir;
+
+            if (signal === "NEUTRAL") return this.neutral("Trend/divergence mismatch");
+
+            // Correlation filter
+            if (pair === 'EUR/USD' && correlationPrice) {
+                if (Math.abs(currentPrice - correlationPrice) > 0.02) {
+                    console.log(`[SKIP] ${pair} correlation divergence`);
+                    return this.neutral("Correlation filter");
+                }
+            }
+
+            const macd = this.calculateMACD(closes);
+            const macdSlopePositive = macd.slope > 0;
+            if ((signal === 'CALL' && !macdSlopePositive) || (signal === 'PUT' && macdSlopePositive))
+                return this.neutral("MACD slope mismatch");
+
+            const pullbackOk = this.isPullbackOk(signal, currentPrice, ema21, atr);
+            if (!pullbackOk) return this.neutral("No pullback");
+
+            if (divergence && this.thresholds.adxRisingRequiredForDivergence && !adxRising)
+                return this.neutral("Divergence with falling ADX");
+
+            const regime = this.detectRegime(adx, atr, currentPrice);
+            let probability = this.computeProbability(signal, adx, rsi, divergence, pullbackOk,
+                (signal === 'CALL' && macdSlopePositive) || (signal === 'PUT' && !macdSlopePositive),
+                htTrend, fifteenMinTrend, regime);
+            if (fourHourTrend !== null && fourHourTrend !== htTrend) probability = Math.round(probability * 0.9);
+            probability = Math.min(92, Math.max(68, probability));
+
+            const stopPips = this.computeStopLoss(signal, currentPrice, atr, highs, lows);
+            const tpPips = Math.round(stopPips * (adx > 30 ? 2.1 : 1.7));
+            let finalRisk = this.calculateKellyFactor() * 1.2;
+            finalRisk = Math.min(2.0, Math.max(0.5, finalRisk));
+
+            console.log(`[SIGNAL] ${pair} ${timeframe}: ${signal} prob=${probability}% ADX=${adx.toFixed(0)} RSI=${rsi.toFixed(0)} Div=${divergence || 'none'} Regime=${regime}`);
+
+            return {
+                signal, probability, rawScore: probability,
+                recommendedAction: probability >= 85 ? "STRONG_TRADE" : (probability >= 75 ? "CONFIDENT_TRADE" : "NORMAL_TRADE"),
+                suggestedRisk: `${finalRisk.toFixed(2)}%`,
+                rsi: rsi.toFixed(1), adx: adx.toFixed(1),
+                trendRegime: regime, marketRegime: regime,
+                volatility: volatility.toFixed(2), currentPrice: currentPrice.toFixed(5),
+                divergence: divergence || "None", majorTrend: htTrend,
+                activeFactors: [`Regime: ${regime}`, `EMA9/21: ${ema9>ema21?'CALL':'PUT'}`, `RSI: ${rsi.toFixed(0)}`,
+                    divergence ? `Div:${divergence}` : '', `ADX=${adx.toFixed(0)} ${adxRising?'rising':'falling'}`,
+                    `1h:${htTrend}`, fourHourTrend ? `4h:${fourHourTrend}` : '', `Pullback:${pullbackOk?'yes':'no'}`,
+                    `MACD:${macd.slope>0?'pos':'neg'}`].filter(f=>f),
+                stopLoss: stopPips, takeProfit: tpPips, maxHoldBars: (timeframe==='1m'?60:12),
+                riskRewardRatio: (tpPips/stopPips).toFixed(2), pair, timeframe,
+                timestamp: new Date().toISOString(), version: "INSTITUTIONAL-v24.1",
+                guidance: `${signal} | ADX ${adx.toFixed(0)} | RSI ${rsi.toFixed(0)} | ${divergence||'no div'}`
+            };
+        } catch (err) {
+            console.error(`[ERROR] ${pair}: ${err.message}`);
+            return this.fallbackSignal(pair, timeframe, err.message);
+        }
+    }
+
+    neutral(reason) {
+        return { signal: "NEUTRAL", probability: 0, rawScore: 50, recommendedAction: "NO_TRADE", suggestedRisk: "0%", rsi: "50", adx: "20", trendRegime: "UNKNOWN", marketRegime: "unknown", volatility: "0", currentPrice: "0", divergence: "None", majorTrend: "NEUTRAL", activeFactors: [], stopLoss: 15, takeProfit: 27, maxHoldBars: 12, riskRewardRatio: "1.80", timestamp: new Date().toISOString(), pair: "UNKNOWN", timeframe: "UNKNOWN", version: "INSTITUTIONAL-v24.1", guidance: reason };
+    }
+
+    fallbackSignal(pair, timeframe, reason) {
+        console.log(`[FALLBACK] ${pair}: ${reason} -> no trade`);
+        return this.neutral(`Fallback: ${reason}`);
     }
 }
 
