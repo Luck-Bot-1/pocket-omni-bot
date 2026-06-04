@@ -1,5 +1,5 @@
 // ============================================================
-// LEGENDARY BOT v9.0 – INSTITUTIONAL TERMINAL
+// LEGENDARY BOT v9.1 – MARKDOWNV2 ESCAPE FIXED
 // ============================================================
 // RATING: 4.9/5 ★ – PRODUCTION READY
 // ============================================================
@@ -127,10 +127,11 @@ async function fetchCandles(symbol, interval) {
     return null;
 }
 
-// ========== TELEGRAM HELPERS (full MarkdownV2 escape) ==========
+// ========== TELEGRAM HELPERS (FULL MARKDOWNV2 ESCAPE) ==========
 function escapeMarkdown(text) {
     if (!text) return '';
-    return text.replace(/([_*[\]()~`>#+\-=|{}.!&<])/g, '\\$1');
+    // Escape all MarkdownV2 special characters: _ * [ ] ( ) ~ ` > # + - = | { } . ! \
+    return text.replace(/([_*\[\]\(\)~`>#\+\-=|{}.!\\])/g, '\\$1');
 }
 
 async function sendMessage(text, replyMarkup = null) {
@@ -264,7 +265,7 @@ function getMainKeyboard() {
 }
 
 async function showMainMenu(messageId = null) {
-    const menu = `🏆 *LEGENDARY BOT v9.0* – 4.9/5\n━━━━━━━━━━━━━━━━━━━━━━\n📊 Timeframes: ${TIMEFRAMES.join(', ')}\n⏰ Primary: ${PRIMARY_TF}\n🤖 Auto‑scan: ${autoScanInterval ? 'ON' : 'OFF'}\n✅ Min probability: 68% | Dynamic volatility (floor 0.05%)`;
+    const menu = `🏆 *LEGENDARY BOT v9.1* – 4.9/5\n━━━━━━━━━━━━━━━━━━━━━━\n📊 Timeframes: ${TIMEFRAMES.join(', ')}\n⏰ Primary: ${PRIMARY_TF}\n🤖 Auto‑scan: ${autoScanInterval ? 'ON' : 'OFF'}\n✅ Min probability: 68% | Dynamic volatility (floor 0.05%)`;
     const kb = getMainKeyboard();
     if (messageId) await editMessageText(messageId, menu, kb);
     else await sendMessage(menu, kb);
@@ -371,7 +372,7 @@ async function showStats(messageId = null) {
     else await sendMessage(msg, keyboard);
 }
 
-async function pingTest() { await sendMessage("🏓 Pong! Bot is alive (v9.0)."); }
+async function pingTest() { await sendMessage("🏓 Pong! Bot is alive (v9.1)."); }
 
 // ========== COMMAND & CALLBACK HANDLERS ==========
 async function handleCommand(text, chatId) {
@@ -531,7 +532,7 @@ async function startPolling() {
 function startHealthServer() {
     const server = http.createServer((req, res) => {
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ status: "alive", uptime: process.uptime(), version: "9.0" }));
+        res.end(JSON.stringify({ status: "alive", uptime: process.uptime(), version: "9.1" }));
     });
     server.listen(PORT, () => log(`🩺 Health server on port ${PORT}`));
 }
@@ -549,7 +550,7 @@ process.on('uncaughtException', (e) => { log("Uncaught exception:", e); graceful
 process.on('unhandledRejection', (reason) => { log("Unhandled rejection:", reason); gracefulShutdown('unhandledRejection'); });
 
 global.botStartTime = Date.now();
-log("🏆 LEGENDARY TRADING BOT v9.0 – INSTITUTIONAL GRADE");
+log("🏆 LEGENDARY TRADING BOT v9.1 – INSTITUTIONAL GRADE");
 log(`Pairs: ${PAIRS.length} | Telegram: ✅ | Port: ${PORT} | Dynamic volatility: 0.05% floor`);
 startHealthServer();
 startPolling();
