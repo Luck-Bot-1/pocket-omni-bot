@@ -1,5 +1,5 @@
 // ============================================================
-// INSTITUTIONAL GRADE ANALYZER v25.0 – DYNAMIC VOLATILITY
+// INSTITUTIONAL GRADE ANALYZER v25.1 – DYNAMIC VOLATILITY
 // ============================================================
 // RATING: 4.9/5 ★ – PRODUCTION READY
 // ============================================================
@@ -350,7 +350,7 @@ class WorldClassAnalyzer {
         return Math.min(0.25, Math.max(0.05, kelly * 0.5));
     }
 
-    // ========== MAIN ENTRY POINT (with dynamic volatility) ==========
+    // ========== MAIN ENTRY POINT ==========
     calculateProbability(candles, pair, timeframe, htCandles = null, fourHourCandles = null, correlationPrice = null) {
         try {
             const hourUTC = new Date().getUTCHours();
@@ -369,7 +369,6 @@ class WorldClassAnalyzer {
             const atr = this.calculateATR(highs, lows, closes, 14);
             let volatility = (atr / currentPrice) * 100;
 
-            // Dynamic volatility threshold
             this.volatilityHistory.push(volatility);
             if (this.volatilityHistory.length > 100) this.volatilityHistory.shift();
             let dynamicMinVol = this.thresholds.minVolatilityPercent;
@@ -476,7 +475,7 @@ class WorldClassAnalyzer {
                     `MACD:${macd.slope>0?'pos':'neg'}`, `Vol:${volatility.toFixed(2)}%`].filter(f=>f),
                 stopLoss: stopPips, takeProfit: tpPips, maxHoldBars: (timeframe==='1m'?60:12),
                 riskRewardRatio: (tpPips/stopPips).toFixed(2), pair, timeframe,
-                timestamp: new Date().toISOString(), version: "INSTITUTIONAL-v25.0",
+                timestamp: new Date().toISOString(), version: "INSTITUTIONAL-v25.1",
                 guidance: `${signal} | ADX ${adx.toFixed(0)} | RSI ${rsi.toFixed(0)} | ${divergence||'no div'}`
             };
         } catch (err) {
@@ -486,7 +485,7 @@ class WorldClassAnalyzer {
     }
 
     neutral(reason) {
-        return { signal: "NEUTRAL", probability: 0, rawScore: 50, recommendedAction: "NO_TRADE", suggestedRisk: "0%", rsi: "50", adx: "20", trendRegime: "UNKNOWN", marketRegime: "unknown", volatility: "0", currentPrice: "0", divergence: "None", majorTrend: "NEUTRAL", activeFactors: [], stopLoss: 15, takeProfit: 27, maxHoldBars: 12, riskRewardRatio: "1.80", timestamp: new Date().toISOString(), pair: "UNKNOWN", timeframe: "UNKNOWN", version: "INSTITUTIONAL-v25.0", guidance: reason };
+        return { signal: "NEUTRAL", probability: 0, rawScore: 50, recommendedAction: "NO_TRADE", suggestedRisk: "0%", rsi: "50", adx: "20", trendRegime: "UNKNOWN", marketRegime: "unknown", volatility: "0", currentPrice: "0", divergence: "None", majorTrend: "NEUTRAL", activeFactors: [], stopLoss: 15, takeProfit: 27, maxHoldBars: 12, riskRewardRatio: "1.80", timestamp: new Date().toISOString(), pair: "UNKNOWN", timeframe: "UNKNOWN", version: "INSTITUTIONAL-v25.1", guidance: reason };
     }
 
     fallbackSignal(pair, timeframe, reason) {
