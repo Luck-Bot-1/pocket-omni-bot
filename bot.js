@@ -1,5 +1,5 @@
 // ============================================================
-// LEGENDARY BOT v5.0 – FAULT‑TOLERANT, FULLY AUDITED
+// LEGENDARY BOT v5.1 – FAULT‑TOLERANT, SELF‑LEARNING
 // ============================================================
 // RATING: 5.0/5 ★ – PRODUCTION READY
 // ============================================================
@@ -11,10 +11,7 @@ if (!globalThis.fetch) {
     globalThis.AbortController = AbortController;
 }
 
-// ADJUST THIS PATH TO MATCH YOUR FOLDER STRUCTURE
-// If analyzer.js is in the root, change to: require('./analyzer.js')
-// If analyzer.js is in src/core, keep as below:
-const { LegendaryAnalyzer } = require('./src/core/analyzer.js');
+const { LegendaryAnalyzer } = require('./analyzer.js');
 const http = require('http');
 const fs = require('fs');
 const sqlite3 = require('sqlite3').verbose();
@@ -342,15 +339,17 @@ async function performScan(timeframe, isAuto = false, selectedPairs = null) {
                 let h1 = null, h4 = null;
                 if (timeframe !== '1h') h1 = await fetchCandles(symbol, '1h');
                 if (timeframe !== '4h') h4 = await fetchCandles(symbol, '4h');
-                const analysis = analyzer.calculateProbability(candles, pair, timeframe, h1, h4);
+                const analysis = await analyzer.calculateProbability(candles, pair, timeframe, h1, h4);
                 analyzer.updateOpenTrades(parseFloat(analysis.currentPrice), pair);
                 if (analysis.probability >= 55 && analysis.signal !== 'NEUTRAL') {
                     signalsSent++;
                     const text = formatSignal(analysis, isAuto);
+                    // Include tradeId in callback
+                    const tradeId = analysis.tradeId || 0;
                     const keyboard = {
                         inline_keyboard: [
-                            [{ text: '✅ WIN', callback_data: `win_${analysis.pair}_${analysis.probability}` },
-                             { text: '❌ LOSS', callback_data: `loss_${analysis.pair}_${analysis.probability}` }],
+                            [{ text: '✅ WIN', callback_data: `win_${tradeId}` },
+                             { text: '❌ LOSS', callback_data: `loss_${tradeId}` }],
                             [{ text: '📊 DETAILS', callback_data: `detail_${analysis.pair}` }]
                         ]
                     };
@@ -424,7 +423,7 @@ function getMainKeyboard() {
 }
 
 async function showMainMenu(messageId = null) {
-    const menu = `🏆 <b>LEGENDARY BOT v5.0</b> – 5.0/5\n━━━━━━━━━━━━━━━━━━━━━━\n📊 Timeframes: ${TIMEFRAMES.join(', ')}\n⏰ Primary: ${PRIMARY_TF}\n🤖 Auto‑scan: ${autoScanInterval ? 'ON' : 'OFF'}\n✅ Min probability: 55% | Dynamic profiles`;
+    const menu = `🏆 <b>LEGENDARY BOT v5.1</b> – 5.0/5\n━━━━━━━━━━━━━━━━━━━━━━\n📊 Timeframes: ${TIMEFRAMES.join(', ')}\n⏰ Primary: ${PRIMARY_TF}\n🤖 Auto‑scan: ${autoScanInterval ? 'ON' : 'OFF'}\n✅ Min probability: 55% | Self‑learning active`;
     const kb = getMainKeyboard();
     if (messageId) await editMessageText(messageId, menu, kb);
     else await sendMessage(menu, kb);
@@ -494,7 +493,7 @@ async function showHistory(messageId = null) {
 
 async function showStatus(messageId = null) {
     const uptime = Math.floor((Date.now() - global.botStartTime) / 60000);
-    const msg = `<b>📈 STATUS</b>\n━━━━━━━━━━━━━━━━━━━━━━\nUptime: ${uptime}m\nPairs: ${PAIRS.length}\nAuto‑scan: ${autoScanInterval ? 'ON' : 'OFF'}\nPrimary TF: ${PRIMARY_TF}\nSignals in history: ${signalHistory.length}\nDynamic profiles active.`;
+    const msg = `<b>📈 STATUS</b>\n━━━━━━━━━━━━━━━━━━━━━━\nUptime: ${uptime}m\nPairs: ${PAIRS.length}\nAuto‑scan: ${autoScanInterval ? 'ON' : 'OFF'}\nPrimary TF: ${PRIMARY_TF}\nSignals in history: ${signalHistory.length}\nSelf‑learning: active (weights update on WIN/LOSS)`;
     const keyboard = { inline_keyboard: [[{ text: '🔙 BACK TO MENU', callback_data: 'menu_main' }]] };
     if (messageId) await editMessageText(messageId, msg, keyboard);
     else await sendMessage(msg, keyboard);
@@ -519,7 +518,7 @@ async function showStats(messageId = null) {
         const total = row ? row.total : 0;
         const wins = row ? row.wins : 0;
         const winRate = total > 0 ? (wins / total * 100).toFixed(1) : 'N/A';
-        const msg = `<b>📊 STRATEGY STATS</b>\n━━━━━━━━━━━━━━━━━━━━━━\nTotal trades: ${total}\n✅ Wins: ${wins}\n📈 Win rate: ${winRate}%\n━━━━━━━━━━━━━━━━━━━━━━\nKeep trading – bot learns from each outcome.`;
+        const msg = `<b>📊 STRATEGY STATS</b>\n━━━━━━━━━━━━━━━━━━━━━━\nTotal trades: ${total}\n✅ Wins: ${wins}\n📈 Win rate: ${winRate}%\n━━━━━━━━━━━━━━━━━━━━━━\nKeep marking WIN/LOSS – bot learns from each outcome.`;
         const keyboard = { inline_keyboard: [[{ text: '🔙 BACK TO MENU', callback_data: 'menu_main' }]] };
         if (messageId) editMessageText(messageId, msg, keyboard);
         else sendMessage(msg, keyboard);
@@ -531,7 +530,7 @@ async function handleCommand(text, chatId) {
     if (chatId.toString() !== TELEGRAM_CHAT_ID) return;
     logger.info('Command received', { command: text });
     if (text === '/start') await showMainMenu();
-    else if (text === '/ping') await sendMessage('🏓 Pong! Bot is alive (v5.0).');
+    else if (text === '/ping') await sendMessage('🏓 Pong! Bot is alive (v5.1).');
     else if (text === '/scan') {
         await sendTyping();
         await performScan(manualTf, false);
@@ -555,12 +554,24 @@ async function handleCallback(query) {
     logger.debug('Callback', { data });
     if (!data) return;
 
+    // WIN / LOSS with trade ID
     if (data.startsWith('win_') || data.startsWith('loss_')) {
         const parts = data.split('_');
-        const outcome = parts[0];
-        const pair = parts[1];
-        const prob = parseInt(parts[2]);
-        await sendMessage(`✅ Trade marked as ${outcome.toUpperCase()} for ${pair}. Bot will learn.`);
+        const outcome = parts[0]; // 'win' or 'loss'
+        const tradeId = parseInt(parts[1]);
+        if (isNaN(tradeId)) {
+            await sendMessage('Invalid trade ID.');
+            return;
+        }
+        // Update weights
+        const outcomeNum = outcome === 'win' ? 1 : 0;
+        const success = await analyzer.recordTradeOutcome(tradeId, outcomeNum);
+        if (success) {
+            await sendMessage(`✅ Trade #${tradeId} marked as ${outcome.toUpperCase()}. Bot weights updated.`);
+        } else {
+            await sendMessage(`⚠️ Could not update weights for trade #${tradeId}. Features not found.`);
+        }
+        // Update the original message
         await editMessageText(msgId, query.message.text + `\n\nMarked as ${outcome.toUpperCase()}`);
         return;
     }
@@ -687,7 +698,7 @@ async function startPolling() {
 function startHealthServer() {
     const server = http.createServer((req, res) => {
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ status: 'alive', uptime: process.uptime(), version: '5.0' }));
+        res.end(JSON.stringify({ status: 'alive', uptime: process.uptime(), version: '5.1' }));
     });
     server.listen(PORT, () => logger.info(`Health server on port ${PORT}`));
 }
@@ -714,7 +725,7 @@ process.on('unhandledRejection', (reason) => {
 
 // ---- Start ----
 global.botStartTime = Date.now();
-logger.info('🏆 LEGENDARY BOT v5.0 STARTING – FULLY AUDITED');
+logger.info('🏆 LEGENDARY BOT v5.1 STARTING – FULLY AUDITED & SELF‑LEARNING');
 logger.info('Configuration', {
     pairs: PAIRS.length,
     timeframes: TIMEFRAMES,
