@@ -12,8 +12,9 @@
   "dependencies": {
     "technicalindicators": "^3.1.0",
     "winston": "^3.13.0",
-    "node-fetch": "^3.3.2",
-    "node-abort-controller": "^3.1.1"
+    "node-fetch": "^2.6.7",
+    "node-abort-controller": "^3.1.1",
+    "sqlite3": "^5.1.6"
   },
   "engines": {
     "node": ">=18.0.0"
