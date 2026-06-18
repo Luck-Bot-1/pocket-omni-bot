@@ -1,5 +1,5 @@
 // ============================================================
-// LEGENDARY ANALYZER v5.0 – TF‑ADAPTIVE, ML‑ENABLED, AUDITED
+// LEGENDARY ANALYZER v5.1 – TF‑ADAPTIVE, SELF‑LEARNING
 // ============================================================
 // RATING: 5.0/5 ★ – INSTITUTIONAL GRADE
 // ============================================================
@@ -77,6 +77,7 @@ class LegendaryAnalyzer {
 
     loadWeights() {
         this.db.all("SELECT feature, weight FROM model_weights", (err, rows) => {
+            if (err) return;
             if (rows && rows.length > 0) {
                 for (const row of rows) {
                     if (row.feature === 'intercept') this.weights.intercept = row.weight;
@@ -137,7 +138,7 @@ class LegendaryAnalyzer {
         this.saveWeights();
     }
 
-    // ---- Indicators ----
+    // ---- Indicators (same as before) ----
     calculateEMA(data, period) {
         if (data.length < period) return data[data.length-1];
         const k = 2 / (period + 1);
@@ -459,12 +460,16 @@ class LegendaryAnalyzer {
                 riskRewardRatio: (tpPips/stopPips).toFixed(2),
                 pair, timeframe,
                 timestamp: new Date().toISOString(),
-                version: "LEGENDARY-v5.0",
+                version: "LEGENDARY-v5.1",
                 guidance: `${direction} | ADX ${adx.toFixed(0)} | RSI ${rsi.toFixed(0)}`,
                 trailing: profile.trailing,
+                features: features,  // include features in result
             };
 
-            this.openSimulatedTrade(result);
+            // Open trade with features
+            const tradeId = this.openSimulatedTrade(result, features);
+            result.tradeId = tradeId;  // return tradeId to bot
+
             return result;
         } catch (err) {
             console.error(err);
@@ -472,7 +477,8 @@ class LegendaryAnalyzer {
         }
     }
 
-    openSimulatedTrade(analysis) {
+    // ---- Open trade with features ----
+    openSimulatedTrade(analysis, features) {
         const pipSize = this.getPipSize(analysis.pair);
         const entry = parseFloat(analysis.currentPrice);
         const slPips = analysis.stopLoss;
@@ -491,11 +497,20 @@ class LegendaryAnalyzer {
             trailing: analysis.trailing || false,
         };
         this.openTrades.push(trade);
-        this.db.run(`INSERT INTO trades (pair, timeframe, direction, entry, sl, tp, open_time, status, probability)
-                     VALUES (?,?,?,?,?,?,?,?,?)`,
-                     [trade.pair, trade.timeframe, trade.direction, trade.entry, trade.sl, trade.tp, trade.open_time, 'open', trade.probability]);
+
+        // Insert into DB and get the ID
+        return new Promise((resolve) => {
+            this.db.run(`INSERT INTO trades (pair, timeframe, direction, entry, sl, tp, open_time, status, probability, features)
+                         VALUES (?,?,?,?,?,?,?,?,?,?)`,
+                         [trade.pair, trade.timeframe, trade.direction, trade.entry, trade.sl, trade.tp, trade.open_time, 'open', trade.probability, JSON.stringify(features)],
+                         function(err) {
+                            if (err) console.error('Insert trade error', err);
+                            resolve(this.lastID);
+                         });
+        });
     }
 
+    // ---- Update open trades (called during scan) ----
     updateOpenTrades(currentPrice, pair) {
         for (const trade of this.openTrades) {
             if (trade.pair !== pair || trade.status !== 'open') continue;
@@ -517,12 +532,39 @@ class LegendaryAnalyzer {
                 this.db.run(`UPDATE trades SET status=?, pnl=?, close_time=? WHERE id=?`,
                              [trade.status, trade.pnl, Date.now(), trade.id]);
                 console.log(`Trade closed: ${trade.pair} ${trade.direction} ${trade.status} PnL ${trade.pnl.toFixed(2)}%`);
+                // Optionally update weights automatically? We'll keep manual for now.
             }
         }
     }
 
+    // ---- Get trade features by ID ----
+    getTradeFeatures(tradeId) {
+        return new Promise((resolve) => {
+            this.db.get("SELECT features FROM trades WHERE id = ?", [tradeId], (err, row) => {
+                if (err || !row) resolve(null);
+                else resolve(JSON.parse(row.features));
+            });
+        });
+    }
+
+    // ---- Record trade outcome (manual feedback) ----
+    async recordTradeOutcome(tradeId, outcome) {
+        // outcome: 1 for win, 0 for loss
+        const features = await this.getTradeFeatures(tradeId);
+        if (!features) return false;
+        // Get the profile from the trade's timeframe (we stored it in the trade, but we don't have it here)
+        // We can retrieve the timeframe from the trade as well.
+        const tradeRow = await new Promise((resolve) => {
+            this.db.get("SELECT timeframe FROM trades WHERE id = ?", [tradeId], (err, row) => resolve(row));
+        });
+        if (!tradeRow) return false;
+        const profile = this.getProfile(tradeRow.timeframe);
+        this.updateWeights(features, outcome, profile);
+        return true;
+    }
+
     neutral(reason) {
-        return { signal: "NEUTRAL", probability: 0, rawScore: 50, recommendedAction: "NO_TRADE", suggestedRisk: "0%", rsi: "50", adx: "20", trendRegime: "UNKNOWN", marketRegime: "unknown", volatility: "0", currentPrice: "0", divergence: "None", majorTrend: "NEUTRAL", activeFactors: [], stopLoss: 15, takeProfit: 27, riskRewardRatio: "1.80", timestamp: new Date().toISOString(), pair: "UNKNOWN", timeframe: "UNKNOWN", version: "LEGENDARY-v5.0", guidance: reason };
+        return { signal: "NEUTRAL", probability: 0, rawScore: 50, recommendedAction: "NO_TRADE", suggestedRisk: "0%", rsi: "50", adx: "20", trendRegime: "UNKNOWN", marketRegime: "unknown", volatility: "0", currentPrice: "0", divergence: "None", majorTrend: "NEUTRAL", activeFactors: [], stopLoss: 15, takeProfit: 27, riskRewardRatio: "1.80", timestamp: new Date().toISOString(), pair: "UNKNOWN", timeframe: "UNKNOWN", version: "LEGENDARY-v5.1", guidance: reason };
     }
 
     getPipSize(pair) {
@@ -531,7 +573,6 @@ class LegendaryAnalyzer {
     }
 
     // ---- Backward compatibility stubs ----
-    recordTradeOutcome(win, rawScore, pnl) {}
     saveCalibration() {}
     loadCalibration() {}
     loadOpenTrades() {}
