@@ -1,5 +1,5 @@
 // ============================================================
-// LEGENDARY ANALYZER v5.1 – TF‑ADAPTIVE, SELF‑LEARNING
+// LEGENDARY ANALYZER v6.0 – DIRECTIONAL BIAS FIXED
 // ============================================================
 // RATING: 5.0/5 ★ – INSTITUTIONAL GRADE
 // ============================================================
@@ -34,21 +34,29 @@ class LegendaryAnalyzer {
     loadProfiles() {
         return {
             '1m':  { minADX: 22, maxRSI: 72, minRSI: 28, atrSL: 1.2, atrTP: 1.8, divLookback: 3, divMinDist: 4,
-                     noiseThreshold: 0.03, volatilityPercentile: 0.15, pullbackFib: 0.4, mlLR: 0.02, trailing: false, maxProb: 85 },
+                     noiseThreshold: 0.03, volatilityPercentile: 0.15, pullbackFib: 0.4, mlLR: 0.02, trailing: false, maxProb: 85,
+                     divRSILow: 30, divRSIHigh: 70 },
             '5m':  { minADX: 20, maxRSI: 70, minRSI: 30, atrSL: 1.3, atrTP: 2.0, divLookback: 4, divMinDist: 5,
-                     noiseThreshold: 0.02, volatilityPercentile: 0.12, pullbackFib: 0.45, mlLR: 0.015, trailing: false, maxProb: 87 },
+                     noiseThreshold: 0.02, volatilityPercentile: 0.12, pullbackFib: 0.45, mlLR: 0.015, trailing: false, maxProb: 87,
+                     divRSILow: 30, divRSIHigh: 70 },
             '15m': { minADX: 18, maxRSI: 68, minRSI: 32, atrSL: 1.4, atrTP: 2.2, divLookback: 5, divMinDist: 8,
-                     noiseThreshold: 0.01, volatilityPercentile: 0.10, pullbackFib: 0.5, mlLR: 0.01, trailing: false, maxProb: 90 },
+                     noiseThreshold: 0.01, volatilityPercentile: 0.10, pullbackFib: 0.5, mlLR: 0.01, trailing: false, maxProb: 90,
+                     divRSILow: 32, divRSIHigh: 68 },
             '30m': { minADX: 18, maxRSI: 68, minRSI: 32, atrSL: 1.5, atrTP: 2.4, divLookback: 6, divMinDist: 9,
-                     noiseThreshold: 0.01, volatilityPercentile: 0.10, pullbackFib: 0.55, mlLR: 0.01, trailing: false, maxProb: 90 },
+                     noiseThreshold: 0.01, volatilityPercentile: 0.10, pullbackFib: 0.55, mlLR: 0.01, trailing: false, maxProb: 90,
+                     divRSILow: 32, divRSIHigh: 68 },
             '1h':  { minADX: 20, maxRSI: 65, minRSI: 35, atrSL: 1.6, atrTP: 2.6, divLookback: 7, divMinDist: 12,
-                     noiseThreshold: 0.005, volatilityPercentile: 0.08, pullbackFib: 0.6, mlLR: 0.008, trailing: true, maxProb: 92 },
+                     noiseThreshold: 0.005, volatilityPercentile: 0.08, pullbackFib: 0.6, mlLR: 0.008, trailing: true, maxProb: 92,
+                     divRSILow: 35, divRSIHigh: 65 },
             '2h':  { minADX: 20, maxRSI: 65, minRSI: 35, atrSL: 1.7, atrTP: 2.8, divLookback: 8, divMinDist: 14,
-                     noiseThreshold: 0.005, volatilityPercentile: 0.08, pullbackFib: 0.6, mlLR: 0.007, trailing: true, maxProb: 92 },
+                     noiseThreshold: 0.005, volatilityPercentile: 0.08, pullbackFib: 0.6, mlLR: 0.007, trailing: true, maxProb: 92,
+                     divRSILow: 35, divRSIHigh: 65 },
             '4h':  { minADX: 22, maxRSI: 62, minRSI: 38, atrSL: 1.8, atrTP: 3.0, divLookback: 10, divMinDist: 18,
-                     noiseThreshold: 0.003, volatilityPercentile: 0.06, pullbackFib: 0.65, mlLR: 0.005, trailing: true, maxProb: 90 },
+                     noiseThreshold: 0.003, volatilityPercentile: 0.06, pullbackFib: 0.65, mlLR: 0.005, trailing: true, maxProb: 90,
+                     divRSILow: 38, divRSIHigh: 62 },
             '1d':  { minADX: 25, maxRSI: 60, minRSI: 40, atrSL: 2.0, atrTP: 3.5, divLookback: 14, divMinDist: 24,
-                     noiseThreshold: 0.002, volatilityPercentile: 0.05, pullbackFib: 0.7, mlLR: 0.003, trailing: true, maxProb: 88 },
+                     noiseThreshold: 0.002, volatilityPercentile: 0.05, pullbackFib: 0.7, mlLR: 0.003, trailing: true, maxProb: 88,
+                     divRSILow: 40, divRSIHigh: 60 },
         };
     }
 
@@ -77,7 +85,10 @@ class LegendaryAnalyzer {
 
     loadWeights() {
         this.db.all("SELECT feature, weight FROM model_weights", (err, rows) => {
-            if (err) return;
+            if (err) {
+                console.error('DB error loading weights:', err);
+                return;
+            }
             if (rows && rows.length > 0) {
                 for (const row of rows) {
                     if (row.feature === 'intercept') this.weights.intercept = row.weight;
@@ -95,11 +106,20 @@ class LegendaryAnalyzer {
     }
 
     saveWeights() {
-        const stmt = this.db.prepare("REPLACE INTO model_weights (feature, weight) VALUES (?, ?)");
-        for (const [key, val] of Object.entries(this.weights)) {
-            stmt.run(key, val);
-        }
-        stmt.finalize();
+        this.db.serialize(() => {
+            this.db.exec('BEGIN TRANSACTION');
+            const stmt = this.db.prepare("REPLACE INTO model_weights (feature, weight) VALUES (?, ?)");
+            try {
+                for (const [key, val] of Object.entries(this.weights)) {
+                    stmt.run(key, val);
+                }
+                stmt.finalize();
+                this.db.exec('COMMIT');
+            } catch (err) {
+                console.error('Error saving weights, rolling back:', err);
+                this.db.exec('ROLLBACK');
+            }
+        });
     }
 
     predictProbability(features, profile) {
@@ -138,7 +158,7 @@ class LegendaryAnalyzer {
         this.saveWeights();
     }
 
-    // ---- Indicators (same as before) ----
+    // ---- Indicators ----
     calculateEMA(data, period) {
         if (data.length < period) return data[data.length-1];
         const k = 2 / (period + 1);
@@ -169,6 +189,35 @@ class LegendaryAnalyzer {
         }
         if (avgLoss === 0) return 100;
         return 100 - (100 / (1 + avgGain / avgLoss));
+    }
+
+    // ---- Rolling RSI array ----
+    calculateRSIArray(closes, period = 14) {
+        if (closes.length < period + 1) return [];
+        const rsiValues = [];
+        let gain = 0, loss = 0;
+        for (let i = 1; i <= period; i++) {
+            const diff = closes[i] - closes[i-1];
+            if (diff >= 0) gain += diff;
+            else loss -= diff;
+        }
+        let avgGain = gain / period;
+        let avgLoss = loss / period;
+        let rs = avgLoss === 0 ? 100 : 100 - (100 / (1 + avgGain / avgLoss));
+        rsiValues.push(rs);
+        for (let i = period + 1; i < closes.length; i++) {
+            const diff = closes[i] - closes[i-1];
+            if (diff >= 0) {
+                avgGain = (avgGain * (period - 1) + diff) / period;
+                avgLoss = (avgLoss * (period - 1)) / period;
+            } else {
+                avgGain = (avgGain * (period - 1)) / period;
+                avgLoss = (avgLoss * (period - 1) - diff) / period;
+            }
+            rs = avgLoss === 0 ? 100 : 100 - (100 / (1 + avgGain / avgLoss));
+            rsiValues.push(rs);
+        }
+        return rsiValues;
     }
 
     calculateATR(highs, lows, closes, period = 14) {
@@ -273,7 +322,7 @@ class LegendaryAnalyzer {
         return swings;
     }
 
-    // ---- Divergence detection ----
+    // ---- Divergence detection with profile thresholds ----
     detectDivergence(prices, rsiArray, macdHistArray, stochArray, adx, profile) {
         const lb = profile.divLookback;
         const md = profile.divMinDist;
@@ -283,18 +332,20 @@ class LegendaryAnalyzer {
         const oscHighs = this.findSwings(rsiArray, 'high', lb, md);
 
         let bullishRegular = 0, bearishRegular = 0, bullishHidden = 0, bearishHidden = 0;
+        const lowRsi = profile.divRSILow || 35;
+        const highRsi = profile.divRSIHigh || 65;
 
         if (priceLows.length >= 2 && oscLows.length >= 2) {
             const p1 = priceLows[priceLows.length-2], p2 = priceLows[priceLows.length-1];
             const o1 = oscLows[oscLows.length-2], o2 = oscLows[oscLows.length-1];
-            if (p2.val < p1.val && o2.val > o1.val && o2.val < 35) bullishRegular++;
-            if (p2.val > p1.val && o2.val < o1.val && adx >= 22) bullishHidden++;
+            if (p2.val < p1.val && o2.val > o1.val && o2.val < lowRsi) bullishRegular++;
+            if (p2.val > p1.val && o2.val < o1.val && adx >= profile.minADX) bullishHidden++;
         }
         if (priceHighs.length >= 2 && oscHighs.length >= 2) {
             const p1 = priceHighs[priceHighs.length-2], p2 = priceHighs[priceHighs.length-1];
             const o1 = oscHighs[oscHighs.length-2], o2 = oscHighs[oscHighs.length-1];
-            if (p2.val > p1.val && o2.val < o1.val && o2.val > 65) bearishRegular++;
-            if (p2.val < p1.val && o2.val > o1.val && adx >= 22) bearishHidden++;
+            if (p2.val > p1.val && o2.val < o1.val && o2.val > highRsi) bearishRegular++;
+            if (p2.val < p1.val && o2.val > o1.val && adx >= profile.minADX) bearishHidden++;
         }
 
         let type = null, dir = null;
@@ -318,8 +369,8 @@ class LegendaryAnalyzer {
 
     isNewsBlackout() { return false; }
 
-    // ---- Main calculation ----
-    calculateProbability(candles, pair, timeframe, htCandles = null, fourHourCandles = null) {
+    // ---- Main calculation (async, with fixes) ----
+    async calculateProbability(candles, pair, timeframe, htCandles = null, fourHourCandles = null) {
         try {
             const profile = this.getProfile(timeframe);
             this.currentProfile = profile;
@@ -336,10 +387,12 @@ class LegendaryAnalyzer {
 
             const atr = this.calculateATR(highs, lows, closes, 14);
             const vol = (atr / currentPrice) * 100;
+            if (this.volatilityHistory.length >= 100) this.volatilityHistory.shift();
             this.volatilityHistory.push(vol);
-            if (this.volatilityHistory.length > 100) this.volatilityHistory.shift();
             const sorted = [...this.volatilityHistory].sort((a,b)=>a-b);
-            const percentile = this.volatilityHistory.length > 0 ? sorted.indexOf(vol) / sorted.length : 0.5;
+            // Proper percentile with ties
+            const percentile = this.volatilityHistory.length > 0 ?
+                sorted.filter(v => v <= vol).length / sorted.length : 0.5;
             if (percentile < profile.volatilityPercentile) {
                 return this.neutral("Volatility too low for this TF");
             }
@@ -368,8 +421,11 @@ class LegendaryAnalyzer {
 
             const diBull = plusDI > minusDI;
 
-            const rsiArray = [];
-            for (let i = 30; i <= closes.length; i++) rsiArray.push(this.calculateRSI(closes.slice(0,i), 14));
+            // ---- Rolling RSI array ----
+            const rsiRolling = this.calculateRSIArray(closes, 14);
+            const rsiArray = Array(14).fill(50).concat(rsiRolling);
+            while (rsiArray.length < closes.length) rsiArray.push(50);
+
             const macd = this.calculateMACD(closes);
             const macdHistArray = [];
             const stochArray = [];
@@ -380,23 +436,41 @@ class LegendaryAnalyzer {
                 divDir = divergence.direction === 'bullish' ? 'CALL' : 'PUT';
             }
 
+            // ---- FIXED: Directional score (sign always matches trend) ----
             let score = 0;
             const w = { '1': 1, '1h': 1.5, '4h': 2 };
-            if (trendTF === 'BULLISH' && diBull) score += w['1'];
-            else if (trendTF === 'BEARISH' && !diBull) score += w['1'];
-            if (trend1h === 'BULLISH' && diBull) score += w['1h'];
-            else if (trend1h === 'BEARISH' && !diBull) score += w['1h'];
-            if (trend4h === 'BULLISH' && diBull) score += w['4h'];
-            else if (trend4h === 'BEARISH' && !diBull) score += w['4h'];
+
+            const addDirectional = (trend, diBullish, weight) => {
+                if (trend === 'BULLISH' && diBullish) {
+                    score += weight;
+                } else if (trend === 'BULLISH' && !diBullish) {
+                    score += weight * 0.5;   // still positive
+                } else if (trend === 'BEARISH' && !diBullish) {
+                    score -= weight;
+                } else if (trend === 'BEARISH' && diBullish) {
+                    score -= weight * 0.5;   // still negative
+                }
+                // if NEUTRAL, no change
+            };
+
+            addDirectional(trendTF, diBull, w['1']);
+            addDirectional(trend1h, diBull, w['1h']);
+            if (trend4h) addDirectional(trend4h, diBull, w['4h']);
 
             // Divergence adjustment
-            if (divType === 1) { // Regular divergence – can override
+            if (divType === 1) { // Regular divergence
                 if (divDir === 'CALL') score += 2.0;
-                else score -= 2.0;
-            } else if (divType === 2) { // Hidden divergence – only if aligns
-                if ((divDir === 'CALL' && trend1h === 'BULLISH' && trend4h !== 'BEARISH') ||
-                    (divDir === 'PUT' && trend1h === 'BEARISH' && trend4h !== 'BULLISH')) {
-                    score += 1.0;
+                else if (divDir === 'PUT') score -= 2.0;
+            } else if (divType === 2) { // Hidden – only if aligns
+                let hiddenAligned = false;
+                if (divDir === 'CALL' && trend1h === 'BULLISH' && (trend4h === null || trend4h !== 'BEARISH')) {
+                    hiddenAligned = true;
+                } else if (divDir === 'PUT' && trend1h === 'BEARISH' && (trend4h === null || trend4h !== 'BULLISH')) {
+                    hiddenAligned = true;
+                }
+                if (hiddenAligned) {
+                    if (divDir === 'CALL') score += 1.0;
+                    else score -= 1.0;
                 } else {
                     return this.neutral("Hidden divergence conflicts with higher timeframe");
                 }
@@ -407,6 +481,7 @@ class LegendaryAnalyzer {
             else if (score < -1.5) direction = 'PUT';
             else return this.neutral("Insufficient confluence");
 
+            // ---- Pullback check ----
             const swingLow = Math.min(...lows.slice(-20));
             const swingHigh = Math.max(...highs.slice(-20));
             const range = swingHigh - swingLow;
@@ -437,7 +512,10 @@ class LegendaryAnalyzer {
             const pipSize = this.getPipSize(pair);
             const stopPips = Math.max(6, Math.round(atr * profile.atrSL / pipSize));
             const tpPips = Math.round(stopPips * profile.atrTP / profile.atrSL);
-            const risk = Math.min(2.0, Math.max(0.5, 1.0 + (probability - 55) / 35));
+            // Risk scaling – fractional Kelly adjusted for volatility
+            const baseRisk = 0.01 * (probability - 50) / 10;
+            const volFactor = 1 + (vol - 0.1) * 0.5;
+            let risk = Math.min(2.0, Math.max(0.5, baseRisk * volFactor));
 
             const result = {
                 signal: direction,
@@ -460,15 +538,15 @@ class LegendaryAnalyzer {
                 riskRewardRatio: (tpPips/stopPips).toFixed(2),
                 pair, timeframe,
                 timestamp: new Date().toISOString(),
-                version: "LEGENDARY-v5.1",
+                version: "LEGENDARY-v6.0",
                 guidance: `${direction} | ADX ${adx.toFixed(0)} | RSI ${rsi.toFixed(0)}`,
                 trailing: profile.trailing,
-                features: features,  // include features in result
+                features: features,
             };
 
-            // Open trade with features
-            const tradeId = this.openSimulatedTrade(result, features);
-            result.tradeId = tradeId;  // return tradeId to bot
+            // ---- AWAIT trade insertion ----
+            const tradeId = await this.openSimulatedTrade(result, features);
+            result.tradeId = tradeId;
 
             return result;
         } catch (err) {
@@ -477,40 +555,43 @@ class LegendaryAnalyzer {
         }
     }
 
-    // ---- Open trade with features ----
+    // ---- Open trade with features (returns Promise) ----
     openSimulatedTrade(analysis, features) {
-        const pipSize = this.getPipSize(analysis.pair);
-        const entry = parseFloat(analysis.currentPrice);
-        const slPips = analysis.stopLoss;
-        const tpPips = analysis.takeProfit;
-        const sl = analysis.signal === 'CALL' ? entry - slPips * pipSize : entry + slPips * pipSize;
-        const tp = analysis.signal === 'CALL' ? entry + tpPips * pipSize : entry - tpPips * pipSize;
-        const trade = {
-            pair: analysis.pair,
-            timeframe: analysis.timeframe,
-            direction: analysis.signal,
-            entry, sl, tp,
-            open_time: Date.now(),
-            status: 'open',
-            pnl: 0,
-            probability: analysis.probability,
-            trailing: analysis.trailing || false,
-        };
-        this.openTrades.push(trade);
+        return new Promise((resolve, reject) => {
+            const pipSize = this.getPipSize(analysis.pair);
+            const entry = parseFloat(analysis.currentPrice);
+            const slPips = analysis.stopLoss;
+            const tpPips = analysis.takeProfit;
+            const sl = analysis.signal === 'CALL' ? entry - slPips * pipSize : entry + slPips * pipSize;
+            const tp = analysis.signal === 'CALL' ? entry + tpPips * pipSize : entry - tpPips * pipSize;
+            const trade = {
+                pair: analysis.pair,
+                timeframe: analysis.timeframe,
+                direction: analysis.signal,
+                entry, sl, tp,
+                open_time: Date.now(),
+                status: 'open',
+                pnl: 0,
+                probability: analysis.probability,
+                trailing: analysis.trailing || false,
+            };
+            this.openTrades.push(trade);
 
-        // Insert into DB and get the ID
-        return new Promise((resolve) => {
             this.db.run(`INSERT INTO trades (pair, timeframe, direction, entry, sl, tp, open_time, status, probability, features)
                          VALUES (?,?,?,?,?,?,?,?,?,?)`,
                          [trade.pair, trade.timeframe, trade.direction, trade.entry, trade.sl, trade.tp, trade.open_time, 'open', trade.probability, JSON.stringify(features)],
                          function(err) {
-                            if (err) console.error('Insert trade error', err);
-                            resolve(this.lastID);
+                            if (err) {
+                                console.error('Insert trade error', err);
+                                reject(err);
+                            } else {
+                                resolve(this.lastID);
+                            }
                          });
         });
     }
 
-    // ---- Update open trades (called during scan) ----
+    // ---- Update open trades ----
     updateOpenTrades(currentPrice, pair) {
         for (const trade of this.openTrades) {
             if (trade.pair !== pair || trade.status !== 'open') continue;
@@ -532,7 +613,6 @@ class LegendaryAnalyzer {
                 this.db.run(`UPDATE trades SET status=?, pnl=?, close_time=? WHERE id=?`,
                              [trade.status, trade.pnl, Date.now(), trade.id]);
                 console.log(`Trade closed: ${trade.pair} ${trade.direction} ${trade.status} PnL ${trade.pnl.toFixed(2)}%`);
-                // Optionally update weights automatically? We'll keep manual for now.
             }
         }
     }
@@ -549,11 +629,8 @@ class LegendaryAnalyzer {
 
     // ---- Record trade outcome (manual feedback) ----
     async recordTradeOutcome(tradeId, outcome) {
-        // outcome: 1 for win, 0 for loss
         const features = await this.getTradeFeatures(tradeId);
         if (!features) return false;
-        // Get the profile from the trade's timeframe (we stored it in the trade, but we don't have it here)
-        // We can retrieve the timeframe from the trade as well.
         const tradeRow = await new Promise((resolve) => {
             this.db.get("SELECT timeframe FROM trades WHERE id = ?", [tradeId], (err, row) => resolve(row));
         });
@@ -564,7 +641,7 @@ class LegendaryAnalyzer {
     }
 
     neutral(reason) {
-        return { signal: "NEUTRAL", probability: 0, rawScore: 50, recommendedAction: "NO_TRADE", suggestedRisk: "0%", rsi: "50", adx: "20", trendRegime: "UNKNOWN", marketRegime: "unknown", volatility: "0", currentPrice: "0", divergence: "None", majorTrend: "NEUTRAL", activeFactors: [], stopLoss: 15, takeProfit: 27, riskRewardRatio: "1.80", timestamp: new Date().toISOString(), pair: "UNKNOWN", timeframe: "UNKNOWN", version: "LEGENDARY-v5.1", guidance: reason };
+        return { signal: "NEUTRAL", probability: 0, rawScore: 50, recommendedAction: "NO_TRADE", suggestedRisk: "0%", rsi: "50", adx: "20", trendRegime: "UNKNOWN", marketRegime: "unknown", volatility: "0", currentPrice: "0", divergence: "None", majorTrend: "NEUTRAL", activeFactors: [], stopLoss: 15, takeProfit: 27, riskRewardRatio: "1.80", timestamp: new Date().toISOString(), pair: "UNKNOWN", timeframe: "UNKNOWN", version: "LEGENDARY-v6.0", guidance: reason };
     }
 
     getPipSize(pair) {
